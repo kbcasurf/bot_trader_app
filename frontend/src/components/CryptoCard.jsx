@@ -38,9 +38,18 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
 
   const handleFirstPurchase = async () => {
     try {
+      // Input validation
+      if (!pair.symbol || !investment || investment < 50 || investment > 200) {
+        throw new Error('Invalid input parameters')
+      }
+
       const response = await fetch('/api/trade', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        credentials: 'same-origin',
         body: JSON.stringify({
           symbol: pair.symbol,
           amount: investment,
@@ -48,11 +57,15 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
         })
       })
       
-      if (response.ok) {
-        setIsFirstPurchase(false)
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Trade execution failed')
       }
+
+      setIsFirstPurchase(false)
     } catch (error) {
-      console.error('Failed to execute trade:', error)
+      console.error('Failed to execute trade:', error.message)
+      // Here you might want to show an error message to the user
     }
   }
 
@@ -107,7 +120,7 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 2.5 }}>
           <Box
             component="img"
-            src={`/images/${pair.symbol.toLowerCase()}.svg`}
+            src={pair.image}
             alt={pair.name}
             sx={{
               width: 64,

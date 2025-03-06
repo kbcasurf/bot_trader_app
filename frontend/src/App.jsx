@@ -4,12 +4,12 @@ import CryptoCard from './components/CryptoCard'
 import { io } from 'socket.io-client'
 
 const CRYPTO_PAIRS = [
-  { symbol: 'BTC/USDT', name: 'Bitcoin', image: '/images/btc.png' },
-  { symbol: 'SOL/USDT', name: 'Solana', image: '/images/sol.png' },
-  { symbol: 'XRP/USDT', name: 'Ripple', image: '/images/xrp.png' },
-  { symbol: 'PENDLE/USDT', name: 'Pendle', image: '/images/pendle.png' },
-  { symbol: 'DOGE/USDT', name: 'Dogecoin', image: '/images/doge.png' },
-  { symbol: 'NEAR/USDT', name: 'NEAR Protocol', image: '/images/near.png' }
+  { symbol: 'BTC/USDT', name: 'Bitcoin', image: '/images/btc.svg' },
+  { symbol: 'SOL/USDT', name: 'Solana', image: '/images/sol.svg' },
+  { symbol: 'XRP/USDT', name: 'Ripple', image: '/images/xrp.svg' },
+  { symbol: 'PENDLE/USDT', name: 'Pendle', image: '/images/pendle.svg' },
+  { symbol: 'DOGE/USDT', name: 'Dogecoin', image: '/images/doge.svg' },
+  { symbol: 'NEAR/USDT', name: 'NEAR Protocol', image: '/images/near.svg' }
 ]
 
 function App() {

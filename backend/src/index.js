@@ -31,13 +31,26 @@ const io = new Server(httpServer, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     methods: ['GET', 'POST']
-  }
+  },
+  connectionTimeout: 10000,
+  pingTimeout: 5000
 })
 
 // Middleware
-app.use(cors())
-app.use(helmet())
-app.use(express.json())
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  methods: ['GET', 'POST'],
+  credentials: true
+}))
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      connectSrc: ["'self'", 'wss:', 'ws:']
+    }
+  }
+}))
+app.use(express.json({ limit: '10kb' }))
 
 // Initialize Binance API
 const binance = new Binance().options({
@@ -74,9 +87,23 @@ const sendTelegramMessage = async (message) => {
   }
 }
 
-// Helper function to save trade to database
+// Helper function to save trade to database with input validation
 const saveTrade = async (symbol, type, price, amount) => {
   try {
+    // Validate inputs
+    if (!TRADING_PAIRS.includes(symbol.replace('/', ''))) {
+      throw new Error('Invalid trading pair')
+    }
+    if (!['buy', 'sell'].includes(type)) {
+      throw new Error('Invalid trade type')
+    }
+    if (isNaN(price) || price <= 0) {
+      throw new Error('Invalid price')
+    }
+    if (isNaN(amount) || amount <= 0) {
+      throw new Error('Invalid amount')
+    }
+
     const [result] = await pool.execute(
       'INSERT INTO trades (symbol, type, price, amount) VALUES (?, ?, ?, ?)',
       [symbol, type, price, amount]
