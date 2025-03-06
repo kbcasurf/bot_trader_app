@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_URL=http://backend:4000
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_USER=bottrader
+      - DB_PASSWORD=secret
+      - DB_NAME=bottrader
+      - BINANCE_API_KEY=your_binance_api_key
+      - BINANCE_API_SECRET=your_binance_api_secret
+      - TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+      - TELEGRAM_CHAT_ID=your_telegram_chat_id
+
+  db:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootsecret
+      - MYSQL_DATABASE=bottrader
+      - MYSQL_USER=bottrader
+      - MYSQL_PASSWORD=secret
+    volumes:
+      - db_data:/var/lib/mysql
+
+volumes:
+  db_data:
