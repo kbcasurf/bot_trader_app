@@ -34,12 +34,24 @@ function App() {
   }, [])
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Typography variant="h4" component="h1" gutterBottom align="center">
+    <Container maxWidth="lg" sx={{ py: 6 }}>
+      <Typography 
+        variant="h4" 
+        component="h1" 
+        gutterBottom 
+        align="center"
+        sx={{
+          fontSize: '2rem',
+          fontWeight: 500,
+          color: 'text.primary',
+          mb: 4,
+          letterSpacing: '0.02em'
+        }}
+      >
         Crypto Trading Dashboard
       </Typography>
       <Box sx={{ flexGrow: 1 }}>
-        <Grid container spacing={3}>
+        <Grid container spacing={4}>
           {CRYPTO_PAIRS.map((pair) => (
             <Grid item xs={12} sm={6} md={4} key={pair.symbol}>
               <CryptoCard

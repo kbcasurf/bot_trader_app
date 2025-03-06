@@ -57,12 +57,25 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
   }
 
   return (
-    <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <CardContent>
-        <Box sx={{ mb: 2 }}>
+    <Card sx={{
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      borderRadius: 3,
+      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+      bgcolor: 'background.paper',
+      transition: 'transform 0.2s ease-in-out',
+      '&:hover': {
+        transform: 'translateY(-4px)'
+      }
+    }}>
+      <CardContent sx={{ p: 3 }}>
+        <Box sx={{ mb: 3 }}>
           {isFirstPurchase && (
             <>
-              <Typography gutterBottom>Select Investment Amount</Typography>
+              <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 500, fontSize: '0.95rem' }}>
+                Select Investment Amount
+              </Typography>
               <InvestmentSlider
                 value={investment}
                 onChange={(_, value) => setInvestment(value)}
@@ -70,13 +83,20 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
                 marks={marks}
                 min={50}
                 max={200}
-                sx={{ mb: 2 }}
+                sx={{ mb: 2.5 }}
               />
               <Button
                 variant="contained"
                 fullWidth
                 onClick={handleFirstPurchase}
-                sx={{ mb: 2 }}
+                sx={{
+                  mb: 2,
+                  borderRadius: 2,
+                  textTransform: 'none',
+                  py: 1,
+                  fontSize: '0.9rem',
+                  fontWeight: 500
+                }}
               >
                 First Purchase
               </Button>
@@ -84,18 +104,24 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
           )}
         </Box>
 
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2.5 }}>
           <Box
             component="img"
             src={pair.image}
             alt={pair.name}
-            sx={{ width: 40, height: 40, mr: 2 }}
+            sx={{
+              width: 36,
+              height: 36,
+              mr: 2,
+              borderRadius: '50%',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+            }}
           />
           <Box>
-            <Typography variant="h6" component="div">
+            <Typography variant="h6" component="div" sx={{ fontSize: '1.1rem', fontWeight: 600, mb: 0.5 }}>
               {pair.symbol}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.85rem' }}>
               ${currentPrice?.toFixed(2) || '---'}
             </Typography>
           </Box>
