@@ -107,11 +107,11 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 2.5 }}>
           <Box
             component="img"
-            src={pair.image}
+            src={`/images/${pair.symbol.toLowerCase()}.svg`}
             alt={pair.name}
             sx={{
-              width: 36,
-              height: 36,
+              width: 64,
+              height: 64,
               mr: 2,
               borderRadius: '50%',
               boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
