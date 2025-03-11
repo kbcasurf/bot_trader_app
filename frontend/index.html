@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Trading Bot</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <!-- Vue.js from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <!-- Axios for HTTP requests -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>Crypto Trading Bot</h1>
+            <div class="status-indicator" :class="{ online: isConnected, offline: !isConnected }">
+                {{ isConnected ? 'Connected' : 'Disconnected' }}
+            </div>
+        </header>
+
+        <main>
+            <div class="crypto-grid">
+                <div v-for="crypto in cryptocurrencies" :key="crypto.symbol" class="crypto-card">
+                    <div class="investment-slider">
+                        <input type="range" 
+                               v-model="crypto.investmentAmount" 
+                               min="50" max="200" step="50"
+                               :disabled="crypto.hasFirstPurchase">
+                        <div class="slider-labels">
+                            <span>$50</span>
+                            <span>$100</span>
+                            <span>$150</span>
+                            <span>$200</span>
+                        </div>
+                        <div class="selected-amount">${{ crypto.investmentAmount }}</div>
+                    </div>
+                    
+                    <button class="purchase-btn" 
+                            @click="makeFirstPurchase(crypto)"
+                            :disabled="crypto.hasFirstPurchase">
+                        First Purchase
+                    </button>
+                    
+                    <div class="crypto-info">
+                        <div class="crypto-logo">
+                            <img :src="crypto.logoUrl" :alt="crypto.name">
+                        </div>
+                        <div class="crypto-name">{{ crypto.symbol }}</div>
+                        <div class="crypto-price">${{ crypto.price.toFixed(2) }}</div>
+                        
+                        <div v-if="crypto.hasFirstPurchase" class="crypto-holdings">
+                            <div class="holdings-label">Holdings:</div>
+                            <div class="holdings-value">{{ crypto.quantity.toFixed(6) }} {{ crypto.baseAsset }}</div>
+                            <div class="holdings-value-usd">${{ (crypto.quantity * crypto.price).toFixed(2) }}</div>
+                        </div>
+                        
+                        <div v-if="crypto.hasFirstPurchase" class="profit-loss-bar">
+                            <div class="profit-loss-label">
+                                Profit/Loss: 
+                                <span :class="{ 'profit': crypto.profitLoss > 0, 'loss': crypto.profitLoss < 0 }">
+                                    ${{ crypto.profitLoss.toFixed(2) }} 
+                                    ({{ crypto.profitLossPercentage.toFixed(2) }}%)
+                                </span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress" 
+                                     :style="{ width: Math.abs(crypto.profitLossPercentage) + '%', 
+                                              backgroundColor: getProfitLossColor(crypto.profitLossPercentage) }">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div v-if="crypto.hasFirstPurchase" class="order-history">
+                            <h4>Order History</h4>
+                            <div class="order-list">
+                                <div v-for="order in crypto.orders" :key="order.id" class="order-item">
+                                    <span class="order-time">{{ formatTime(order.timestamp) }}</span>
+                                    <span class="order-side" :class="{ 'buy': order.side === 'BUY', 'sell': order.side === 'SELL' }">
+                                        {{ order.side }}
+                                    </span>
+                                    <span class="order-price">${{ order.price.toFixed(2) }}</span>
+                                    <span class="order-quantity">{{ order.quantity.toFixed(6) }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Crypto Trading Bot &copy; 2023</p>
+        </footer>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

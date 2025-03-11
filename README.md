@@ -1,49 +1,34 @@
 # Crypto Trading Bot
 
-An automated cryptocurrency trading bot with real-time price monitoring, automated trading strategies, and Telegram notifications.
+A cryptocurrency trading bot that automates trading strategies on Binance.
 
 ## Features
 
-- Real-time price monitoring for multiple trading pairs
-- Automated trading strategy execution
-- Telegram notifications for trade alerts
-- Web-based dashboard interface
-- Database storage for trade history
-- Secure API integration with Binance
+- Dashboard with 6 cryptocurrencies (BTC, SOL, XRP, PENDLE, DOGE, NEAR)
+- Automated trading based on price movements
+- Real-time price updates via WebSockets
+- Telegram notifications for trade executions
+- Profit/loss visualization
 
-## Trading Pairs
+## Architecture
 
-The bot currently supports the following trading pairs:
-- BTC/USDT
-- SOL/USDT
-- XRP/USDT
-- PENDLE/USDT
-- DOGE/USDT
-- NEAR/USDT
+- **Frontend**: HTML, CSS, JavaScript with Vue.js
+- **Backend**: Node.js with Express
+- **Database**: MariaDB
+- **Containerization**: Docker
 
-## Trading Strategy
+## Setup Instructions
 
-The bot implements a simple trading strategy:
-- Sells when price increases by 5% from the initial buy price
-- Buys more when price drops by 5% (dollar-cost averaging)
-- Automatically tracks and manages positions
-
-## Prerequisites
+### Prerequisites
 
 - Docker and Docker Compose
-- Binance API credentials
-- Telegram Bot Token and Chat ID
-- Node.js (for local development)
+- Binance API key and secret
+- Telegram Bot token and chat ID
 
-## Installation
+### Configuration
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd bot_trader_app
-```
-
-2. Create a `.env` file in the root directory with the following variables:
+1. Clone the repository
+2. Create a `.env` file in the root directory with your credentials:
 ```env
 # Database Configuration
 DB_HOST=db

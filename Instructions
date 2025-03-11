@@ -1,0 +1,101 @@
+I want your help to develop a bot which can automate crypto tradings on the binance platform.
+
+The tradind bot must be formed by an user interface (with HTML, CSS and Javascript), a database embed in mariadb, a backend in Node.js to connect to Binance API Testnet which will manipulate the tradings and also connects with telegram API to inform user about transactions executed.
+
+All this pieces will be embeded separatelly in a container.
+
+The architecture must be something like this:
+
+Frontend -
+
+- HTML files;
+
+- CSS Files;
+
+- Javascript scripts;
+
+- Dockerfile for frontend.
+
+Backend -
+
+- Node.JS files;
+
+- Dockerfile for backend.
+
+Database -
+
+- Scripts to automate the db construction process;
+
+- Dockerfile with mariadb image.
+
+The frontend must present a dashboard with 6 cryptocurrencies paired with USDT and features to deal with it:
+
+- BTC/USDT;
+
+- SOL/USDT;
+
+- XRP/USDT;
+
+- PENDLE/USDT;
+
+- DOGE/USDT;
+
+- NEAR/USDT.
+
+The dashboard must present all the cryptocurrencies available for trading, but doesn't need to be a trading platform. The dashboard must be simple, clean, designed with clear colors and a few options to manage the portfolio.
+
+1 - The dashboard must present all 6 cryptocurrencies options available in 2 rows and 3 collums;
+
+2 - Each cryptocurrency needs a space for an image to represent it, folowed by the pair name. For example. BTC/USDT;
+
+3 - The algorithm must not make the first purchase. Supposing that the user already have some USDT available on his Binance account, the frontend interface must have a "drag and select" bar above each cryptocurrency image. With this bar, the user will select how much money he will invest in the first purchase;
+
+4 - This "drag and select" bar must have 4 points of selection, divided in $USD50, $USD100, $USD150 and $USD200. The start point of the arrow which selets the value to invest must be $USD50. If the user drags the arrow for other investment option, the value for trading must change accordingly;
+
+5 - After user selection for the first purchase, the interface must have a button bellow the bar with "First Purchase" text;
+
+6 - Once clicked, the button must connect to the Binance API Testnet and book an order by market of the cryptocurrency selected using USDT as pair and save the price of the purchase on database;
+
+7 - After the first purchase, the bot must acts automatically under some conditions:
+
+a. If the price of cryptocurrency is 5% above than the purchase price, the bot sells the amount of crypto purchased using the market price and saving the sell price on the db
+
+b. If the price fall 5%, the bot purchase automatically more $USD50 of the cryptocurrency and save it on db
+
+c. If the price fall more, the bot must purchase more and more, always on 5% interval between each purchase and using $USD50, always saving the operation data on db
+
+d. When the market price rises at 5% above the fisrt purchase done by the user, the bot must sell all amount of the cryptocurrency purchased
+
+IMPORTANT: All operations must be saved on db for comparison, and must be communicated to the user via telegram, usin the telegram API.
+
+So, in summary, each cryptocurrency space on dashboard must have this arragement:
+
+1 - On the top, the "drag and select" bar;
+
+2 - Below the bar, the button "First Purchase" which will book the market order for the fisrt purchase;
+
+3 - The image space for the crypocurrency logo;
+
+4 - The amount of crypto already purchased;
+
+5 - A coloured graphic bar showing the profit and loss for that cryptocurrency. When profit is higher, the bar must be greener. When losses is higher, the bar must be red. You can use different scales of color to show how high or how low are the profits and losses;
+
+6 - Above this graphic "profit and loss" bar, you can put a list of orders sent to the Binance API Testnet, containing the time and price of each operation.
+
+Some key improvements:
+
+1 - Use Vue.js/React for reactive frontend (included in CDN for simplicity);
+
+2 - Implement WebSocket connections for real-time price updates;
+
+3 - Add proper error handling for API calls;
+
+4 - Implement rate limiting for Binance API Testnet;
+
+5 - Use HTTPS for all communications;
+
+6 - Store sensitive information in environment variables;
+
+7 - Implement proper security headers;
+
+For now, it's enough.
