@@ -10,25 +10,26 @@ services:
     depends_on:
       - backend
     environment:
-      - VITE_API_URL=http://backend:4000
+      - VITE_API_URL=${VITE_API_URL}
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "4000:4000"
+      - "${PORT:-4000}:${PORT:-4000}"
     depends_on:
       - db
     environment:
-      - DB_HOST=db
-      - DB_USER=bottrader
-      - DB_PASSWORD=secret
-      - DB_NAME=bottrader
-      - BINANCE_API_KEY=your_binance_api_key
-      - BINANCE_API_SECRET=your_binance_api_secret
-      - TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-      - TELEGRAM_CHAT_ID=your_telegram_chat_id
+      - DB_HOST=${DB_HOST}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - PORT=${PORT:-4000}
 
   db:
     build:
@@ -37,10 +38,10 @@ services:
     ports:
       - "3306:3306"
     environment:
-      - MYSQL_ROOT_PASSWORD=rootsecret
-      - MYSQL_DATABASE=bottrader
-      - MYSQL_USER=bottrader
-      - MYSQL_PASSWORD=secret
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
     volumes:
       - db_data:/var/lib/mysql
 

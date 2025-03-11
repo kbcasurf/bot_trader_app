@@ -45,15 +45,11 @@ cd bot_trader_app
 
 2. Create a `.env` file in the root directory with the following variables:
 ```env
-# Backend Configuration
-PORT=4000
-FRONTEND_URL=http://localhost:3000
-
 # Database Configuration
-DB_HOST=database
+DB_HOST=db
 DB_USER=your_db_user
-DB_PASSWORD=your_db_password
-DB_NAME=bot_trader
+DB_PASSWORD=your_secure_password
+DB_NAME=bottrader
 
 # Binance API Configuration
 BINANCE_API_KEY=your_binance_api_key
@@ -62,6 +58,15 @@ BINANCE_API_SECRET=your_binance_api_secret
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
+
+# MySQL Root Password
+MYSQL_ROOT_PASSWORD=your_secure_root_password
+
+# Frontend Configuration
+VITE_API_URL=http://backend:4000
+
+# Backend Port
+PORT=4000
 ```
 
 3. Start the application using Docker Compose:
