@@ -1,5 +1,8 @@
-// API base URL
-const API_BASE_URL = 'http://localhost:3000/api';
+// Set Vue to production mode
+Vue.config.productionTip = false;
+
+// API base URL - Update to use relative URL for Docker networking
+const API_BASE_URL = '/api';
 
 // Cryptocurrency data
 const cryptoData = [
@@ -161,15 +164,13 @@ const app = new Vue({
             try {
                 const response = await axios.get(`${API_BASE_URL}/binance/sessions/${crypto.symbol}`);
                 
-                if (response.data) {
-                    const session = response.data;
+                if (response.data && response.data.active) {
+                    // Update crypto with session data
                     crypto.hasFirstPurchase = true;
-                    crypto.quantity = parseFloat(session.total_quantity);
-                    crypto.initialPrice = parseFloat(session.initial_price);
-                    crypto.initialAmount = parseFloat(session.initial_amount);
-                    crypto.totalInvested = parseFloat(session.total_invested);
-                    
-                    this.updateProfitLoss(crypto);
+                    crypto.quantity = response.data.total_quantity;
+                    crypto.totalInvested = response.data.total_invested;
+                    crypto.profitLoss = response.data.profit_loss;
+                    crypto.profitLossPercentage = (crypto.profitLoss / crypto.totalInvested) * 100;
                 }
             } catch (error) {
                 console.error(`Error loading session data for ${crypto.symbol}:`, error);

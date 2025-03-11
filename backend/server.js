@@ -13,7 +13,16 @@ const PORT = process.env.PORT || 3000;
 
 // Security middleware
 app.use(helmet());
-app.use(cors());
+
+// Enable CORS for all routes
+app.use(cors({
+  origin: ['http://localhost', 'http://localhost:80', 'http://frontend', 'http://frontend:80'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
+// Parse JSON request body
 app.use(express.json());
 
 // Rate limiting
