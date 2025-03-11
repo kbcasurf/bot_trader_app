@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Box, Card, CardContent, Typography, Button, Slider, LinearProgress } from '@mui/material'
+import { Box, Card, CardContent, Typography, Button, Slider, LinearProgress, Alert, CircularProgress } from '@mui/material'
 import { styled } from '@mui/material/styles'
 
 const InvestmentSlider = styled(Slider)(({ theme }) => ({
@@ -23,6 +23,8 @@ const marks = [
 const CryptoCard = ({ pair, currentPrice, trades }) => {
   const [investment, setInvestment] = useState(50)
   const [isFirstPurchase, setIsFirstPurchase] = useState(true)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
 
   const totalInvestment = trades.reduce((sum, trade) => 
     sum + (trade.type === 'buy' ? trade.amount : -trade.amount), 0)
@@ -38,12 +40,16 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
 
   const handleFirstPurchase = async () => {
     try {
+      setLoading(true)
+      setError(null)
+      
       // Input validation
       if (!pair.symbol || !investment || investment < 50 || investment > 200) {
         throw new Error('Invalid input parameters')
       }
 
-      const response = await fetch('/api/trade', {
+      const apiUrl = import.meta.env.VITE_API_URL || ''
+      const response = await fetch(`${apiUrl}/api/trade`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -57,15 +63,18 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
         })
       })
       
+      const data = await response.json()
+      
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Trade execution failed')
+        throw new Error(data.error || 'Trade execution failed')
       }
 
       setIsFirstPurchase(false)
     } catch (error) {
       console.error('Failed to execute trade:', error.message)
-      // Here you might want to show an error message to the user
+      setError(error.message || 'Failed to execute trade')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -97,11 +106,18 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
                 min={50}
                 max={200}
                 sx={{ mb: 2.5 }}
+                disabled={loading}
               />
+              {error && (
+                <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+                  {error}
+                </Alert>
+              )}
               <Button
                 variant="contained"
                 fullWidth
                 onClick={handleFirstPurchase}
+                disabled={loading}
                 sx={{
                   mb: 2,
                   borderRadius: 2,
@@ -111,7 +127,7 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
                   fontWeight: 500
                 }}
               >
-                First Purchase
+                {loading ? <CircularProgress size={24} color="inherit" /> : 'First Purchase'}
               </Button>
             </>
           )}

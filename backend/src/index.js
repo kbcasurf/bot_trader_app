@@ -8,6 +8,7 @@ import Binance from 'node-binance-api'
 import TelegramBot from 'node-telegram-bot-api'
 import mysql from 'mysql2/promise'
 import winston from 'winston'
+import rateLimit from 'express-rate-limit'
 
 dotenv.config()
 
@@ -46,11 +47,26 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      connectSrc: ["'self'", 'wss:', 'ws:']
+      connectSrc: ["'self'", 'wss:', 'ws:'],
+      imgSrc: ["'self'", 'data:'],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"]
     }
   }
 }))
 app.use(express.json({ limit: '10kb' }))
+
+// Rate limiting middleware
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many requests from this IP, please try again after 15 minutes'
+})
+
+// Apply rate limiting to all API routes
+app.use('/api', apiLimiter)
 
 // Initialize Binance API
 const binance = new Binance().options({
@@ -160,16 +176,47 @@ const checkAndExecuteTrades = async (symbol, currentPrice) => {
 io.on('connection', (socket) => {
   logger.info('Client connected')
 
+  // Track active websocket connections
+  const activeConnections = new Set()
+
+  // Setup error handling for socket
+  socket.on('error', (error) => {
+    logger.error('Socket error:', error)
+    socket.emit('error', { message: 'Connection error occurred' })
+  })
+
   TRADING_PAIRS.forEach(symbol => {
-    binance.websockets.trades(symbol, async (trades) => {
-      const { s: sym, p: price } = trades
-      socket.emit('priceUpdate', { symbol: sym, price: parseFloat(price) })
-      await checkAndExecuteTrades(sym, parseFloat(price))
-    })
+    try {
+      const endpoint = binance.websockets.trades(symbol, async (trades) => {
+        try {
+          const { s: sym, p: price } = trades
+          socket.emit('priceUpdate', { symbol: sym, price: parseFloat(price) })
+          await checkAndExecuteTrades(sym, parseFloat(price))
+        } catch (error) {
+          logger.error(`Error processing ${symbol} trade data:`, error)
+        }
+      })
+      
+      if (endpoint) {
+        activeConnections.add(endpoint)
+      }
+    } catch (error) {
+      logger.error(`Failed to establish WebSocket for ${symbol}:`, error)
+      socket.emit('connectionStatus', { symbol, status: 'failed', message: 'Failed to connect to exchange' })
+    }
   })
 
   socket.on('disconnect', () => {
     logger.info('Client disconnected')
+    // Clean up connections when client disconnects
+    activeConnections.forEach(endpoint => {
+      try {
+        binance.websockets.terminate(endpoint)
+      } catch (error) {
+        logger.error('Error terminating WebSocket connection:', error)
+      }
+    })
+    activeConnections.clear()
   })
 })
 
@@ -178,19 +225,42 @@ app.post('/api/trade', async (req, res) => {
   try {
     const { symbol, amount, type } = req.body
 
+    // Enhanced input validation
+    if (!symbol || !amount || !type) {
+      return res.status(400).json({ error: 'Missing required parameters' })
+    }
+
+    if (!TRADING_PAIRS.includes(symbol.replace('/', ''))) {
+      return res.status(400).json({ error: 'Invalid trading pair' })
+    }
+
+    if (isNaN(amount) || amount < 50 || amount > 1000) {
+      return res.status(400).json({ error: 'Invalid amount (must be between 50 and 1000)' })
+    }
+
     if (type === 'buy') {
-      const order = await binance.marketBuy(symbol.replace('/', ''), amount)
-      await saveTrade(symbol, 'buy', order.price, amount)
-      await sendTelegramMessage(
-        `🔔 Initial purchase: Bought $${amount} of ${symbol} at $${order.price}`
-      )
-      res.json({ success: true, order })
+      try {
+        const order = await binance.marketBuy(symbol.replace('/', ''), amount)
+        await saveTrade(symbol, 'buy', order.price, amount)
+        await sendTelegramMessage(
+          `🔔 Initial purchase: Bought $${amount} of ${symbol} at $${order.price}`
+        )
+        res.json({ success: true, order })
+      } catch (binanceError) {
+        logger.error('Binance API error:', binanceError)
+        if (binanceError.message && binanceError.message.includes('API-key format invalid')) {
+          return res.status(401).json({ error: 'API authentication failed' })
+        } else if (binanceError.message && binanceError.message.includes('Insufficient balance')) {
+          return res.status(400).json({ error: 'Insufficient balance for this trade' })
+        }
+        throw binanceError // Re-throw for the outer catch block
+      }
     } else {
       res.status(400).json({ error: 'Invalid trade type' })
     }
   } catch (error) {
     logger.error('Trade execution failed:', error)
-    res.status(500).json({ error: 'Failed to execute trade' })
+    res.status(500).json({ error: 'Failed to execute trade', message: error.message })
   }
 })
 

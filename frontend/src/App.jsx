@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Box, Container, Grid, Typography } from '@mui/material'
+import React, { useState, useEffect, useCallback } from 'react'
+import { Box, Container, Grid, Typography, Alert, Snackbar } from '@mui/material'
 import CryptoCard from './components/CryptoCard'
 import { io } from 'socket.io-client'
 
@@ -15,9 +15,27 @@ const CRYPTO_PAIRS = [
 function App() {
   const [prices, setPrices] = useState({})
   const [trades, setTrades] = useState({})
+  const [connectionStatus, setConnectionStatus] = useState('connecting')
+  const [error, setError] = useState(null)
+  const [reconnectAttempts, setReconnectAttempts] = useState(0)
+  const maxReconnectAttempts = 5
 
-  useEffect(() => {
-    const socket = io('/ws')
+  const connectToSocket = useCallback(() => {
+    setConnectionStatus('connecting')
+    
+    // Get API URL from environment or use default
+    const apiUrl = import.meta.env.VITE_API_URL || ''
+    const socket = io(apiUrl, {
+      reconnectionAttempts: maxReconnectAttempts,
+      reconnectionDelay: 1000,
+      timeout: 10000
+    })
+
+    socket.on('connect', () => {
+      setConnectionStatus('connected')
+      setError(null)
+      setReconnectAttempts(0)
+    })
 
     socket.on('priceUpdate', (data) => {
       setPrices(prev => ({ ...prev, [data.symbol]: data.price }))
@@ -30,8 +48,32 @@ function App() {
       }))
     })
 
-    return () => socket.disconnect()
+    socket.on('error', (err) => {
+      setError(`Connection error: ${err.message || 'Unknown error'}`)
+      setConnectionStatus('error')
+    })
+
+    socket.on('disconnect', () => {
+      setConnectionStatus('disconnected')
+    })
+
+    socket.on('reconnect_attempt', (attempt) => {
+      setReconnectAttempts(attempt)
+      setConnectionStatus('reconnecting')
+    })
+
+    socket.on('reconnect_failed', () => {
+      setConnectionStatus('failed')
+      setError('Failed to connect to server after multiple attempts')
+    })
+
+    return socket
   }, [])
+
+  useEffect(() => {
+    const socket = connectToSocket()
+    return () => socket.disconnect()
+  }, [connectToSocket])
 
   return (
     <Container maxWidth="lg" sx={{ py: 6 }}>
