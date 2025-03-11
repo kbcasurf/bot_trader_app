@@ -57,22 +57,6 @@
                             <div class="holdings-value-usd">${{ (crypto.quantity * crypto.price).toFixed(2) }}</div>
                         </div>
                         
-                        <div v-if="crypto.hasFirstPurchase" class="profit-loss-bar">
-                            <div class="profit-loss-label">
-                                Profit/Loss: 
-                                <span :class="{ 'profit': crypto.profitLoss > 0, 'loss': crypto.profitLoss < 0 }">
-                                    ${{ crypto.profitLoss.toFixed(2) }} 
-                                    ({{ crypto.profitLossPercentage.toFixed(2) }}%)
-                                </span>
-                            </div>
-                            <div class="progress-bar">
-                                <div class="progress" 
-                                     :style="{ width: Math.abs(crypto.profitLossPercentage) + '%', 
-                                              backgroundColor: getProfitLossColor(crypto.profitLossPercentage) }">
-                                </div>
-                            </div>
-                        </div>
-                        
                         <div v-if="crypto.hasFirstPurchase" class="order-history">
                             <h4>Order History</h4>
                             <div class="order-list">
@@ -83,6 +67,22 @@
                                     </span>
                                     <span class="order-price">${{ order.price.toFixed(2) }}</span>
                                     <span class="order-quantity">{{ order.quantity.toFixed(6) }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div v-if="crypto.hasFirstPurchase" class="profit-loss-bar">
+                            <div class="profit-loss-label">
+                                Profit/Loss: 
+                                <span :class="{ 'profit': crypto.profitLoss > 0, 'loss': crypto.profitLoss < 0 }">
+                                    ${{ crypto.profitLoss.toFixed(2) }} 
+                                    ({{ crypto.profitLossPercentage.toFixed(2) }}%)
+                                </span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress" 
+                                     :style="{ width: Math.min(Math.abs(crypto.profitLossPercentage), 100) + '%', 
+                                              backgroundColor: getProfitLossColor(crypto.profitLossPercentage) }">
                                 </div>
                             </div>
                         </div>
