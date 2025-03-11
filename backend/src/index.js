@@ -71,7 +71,8 @@ app.use('/api', apiLimiter)
 // Initialize Binance API
 const binance = new Binance().options({
   APIKEY: process.env.BINANCE_API_KEY,
-  APISECRET: process.env.BINANCE_API_SECRET
+  APISECRET: process.env.BINANCE_API_SECRET,
+  test: true // Enable testnet mode
 })
 
 // Initialize Telegram Bot

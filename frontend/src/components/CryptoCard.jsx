@@ -57,11 +57,16 @@ const CryptoCard = ({ pair, currentPrice, trades }) => {
         },
         credentials: 'same-origin',
         body: JSON.stringify({
-          symbol: pair.symbol,
+          symbol: pair.symbol.replace('/', ''),
           amount: investment,
           type: 'buy'
         })
       })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Trade execution failed')
+      }
       
       const data = await response.json()
       
