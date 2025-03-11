@@ -1,3 +1,20 @@
+const axios = require('axios');
+const crypto = require('crypto');
+require('dotenv').config();
+
+// Binance API credentials from environment variables
+const API_KEY = process.env.BINANCE_API_KEY;
+const API_SECRET = process.env.BINANCE_API_SECRET;
+const BASE_URL = 'https://testnet.binance.vision/api';
+
+// Generate signature for authenticated requests
+const generateSignature = (queryString) => {
+  return crypto
+    .createHmac('sha256', API_SECRET)
+    .update(queryString)
+    .digest('hex');
+};
+
 const Binance = require('binance-api-node').default;
 const telegramService = require('./telegramService');
 const db = require('../db/connection');

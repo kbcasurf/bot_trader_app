@@ -1,33 +1,29 @@
-const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
+require('dotenv').config();
 
-// Create a bot instance
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
+// Telegram credentials from environment variables
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const telegramService = {
-  // Send a message to the configured chat ID
+  // Send message to Telegram chat
   async sendMessage(message) {
     try {
-      await bot.sendMessage(CHAT_ID, message);
-      console.log('Telegram message sent successfully');
-      return true;
-    } catch (error) {
-      console.error('Error sending Telegram message:', error);
-      return false;
-    }
-  },
-
-  // Send a message with a chart image
-  async sendChart(symbol, imageBuffer) {
-    try {
-      await bot.sendPhoto(CHAT_ID, imageBuffer, {
-        caption: `Chart for ${symbol}`
+      if (!BOT_TOKEN || !CHAT_ID) {
+        console.warn('Telegram credentials not configured. Message not sent.');
+        return;
+      }
+      
+      const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+      await axios.post(url, {
+        chat_id: CHAT_ID,
+        text: message,
+        parse_mode: 'HTML'
       });
-      console.log('Telegram chart sent successfully');
-      return true;
+      
+      console.log('Telegram notification sent successfully');
     } catch (error) {
-      console.error('Error sending Telegram chart:', error);
-      return false;
+      console.error('Error sending Telegram notification:', error.message);
     }
   }
 };
