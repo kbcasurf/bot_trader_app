@@ -1,6 +1,10 @@
-// API base URL
-const API_BASE_URL = 'http://localhost:3000/api';
+// Set Vue to production mode
+Vue.config.productionTip = false;
 
+// API base URL - Use relative URL for Docker networking
+const API_BASE_URL = process.env.BINANCE_API_SERVER;
+
+ap
 // Cryptocurrency data
 const cryptoData = [
     {
@@ -90,7 +94,8 @@ const app = new Vue({
         cryptocurrencies: cryptoData,
         isConnected: false,
         websockets: {},
-        error: null
+        error: null,
+        loading: true
     },
     methods: {
         // Initialize WebSocket connections for real-time price updates
@@ -133,12 +138,22 @@ const app = new Vue({
         // Make the first purchase
         async makeFirstPurchase(crypto) {
             try {
+                console.log(`Attempting to make first purchase for ${crypto.symbol}`);
+                
                 const response = await axios.post(`${API_BASE_URL}/binance/start-session`, {
                     symbol: crypto.symbol,
                     amount: crypto.investmentAmount
+                }, {
+                    timeout: 15000, // Increase timeout to 15 seconds
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
                 });
                 
-                if (response.data.success) {
+                console.log('Response received:', response);
+                
+                if (response.data && response.data.success) {
                     crypto.hasFirstPurchase = true;
                     
                     // Get the session data
@@ -149,9 +164,27 @@ const app = new Vue({
                     
                     // Show success message
                     alert(`First purchase of ${crypto.name} successful!`);
+                } else {
+                    throw new Error(response.data?.error || 'Unknown error occurred');
                 }
             } catch (error) {
                 console.error('Error making first purchase:', error);
+                
+                // More detailed error logging
+                if (error.response) {
+                    // The request was made and the server responded with a status code
+                    // that falls out of the range of 2xx
+                    console.error('Error response data:', error.response.data);
+                    console.error('Error response status:', error.response.status);
+                    console.error('Error response headers:', error.response.headers);
+                } else if (error.request) {
+                    // The request was made but no response was received
+                    console.error('Error request:', error.request);
+                } else {
+                    // Something happened in setting up the request that triggered an Error
+                    console.error('Error message:', error.message);
+                }
+                
                 alert(`Error making first purchase: ${error.response?.data?.error || error.message}`);
             }
         },
@@ -161,15 +194,13 @@ const app = new Vue({
             try {
                 const response = await axios.get(`${API_BASE_URL}/binance/sessions/${crypto.symbol}`);
                 
-                if (response.data) {
-                    const session = response.data;
+                if (response.data && response.data.active) {
+                    // Update crypto with session data
                     crypto.hasFirstPurchase = true;
-                    crypto.quantity = parseFloat(session.total_quantity);
-                    crypto.initialPrice = parseFloat(session.initial_price);
-                    crypto.initialAmount = parseFloat(session.initial_amount);
-                    crypto.totalInvested = parseFloat(session.total_invested);
-                    
-                    this.updateProfitLoss(crypto);
+                    crypto.quantity = response.data.total_quantity;
+                    crypto.totalInvested = response.data.total_invested;
+                    crypto.profitLoss = response.data.profit_loss;
+                    crypto.profitLossPercentage = (crypto.profitLoss / crypto.totalInvested) * 100;
                 }
             } catch (error) {
                 console.error(`Error loading session data for ${crypto.symbol}:`, error);
