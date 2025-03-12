@@ -2,8 +2,9 @@
 Vue.config.productionTip = false;
 
 // API base URL - Use relative URL for Docker networking
-const API_BASE_URL = '/api';
+const API_BASE_URL = process.env.BINANCE_API_SERVER;
 
+ap
 // Cryptocurrency data
 const cryptoData = [
     {
