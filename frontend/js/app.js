@@ -93,7 +93,8 @@ const app = new Vue({
         cryptocurrencies: cryptoData,
         isConnected: false,
         websockets: {},
-        error: null
+        error: null,
+        loading: true
     },
     methods: {
         // Initialize WebSocket connections for real-time price updates
@@ -136,12 +137,22 @@ const app = new Vue({
         // Make the first purchase
         async makeFirstPurchase(crypto) {
             try {
+                console.log(`Attempting to make first purchase for ${crypto.symbol}`);
+                
                 const response = await axios.post(`${API_BASE_URL}/binance/start-session`, {
                     symbol: crypto.symbol,
                     amount: crypto.investmentAmount
+                }, {
+                    timeout: 15000, // Increase timeout to 15 seconds
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
                 });
                 
-                if (response.data.success) {
+                console.log('Response received:', response);
+                
+                if (response.data && response.data.success) {
                     crypto.hasFirstPurchase = true;
                     
                     // Get the session data
@@ -152,9 +163,27 @@ const app = new Vue({
                     
                     // Show success message
                     alert(`First purchase of ${crypto.name} successful!`);
+                } else {
+                    throw new Error(response.data?.error || 'Unknown error occurred');
                 }
             } catch (error) {
                 console.error('Error making first purchase:', error);
+                
+                // More detailed error logging
+                if (error.response) {
+                    // The request was made and the server responded with a status code
+                    // that falls out of the range of 2xx
+                    console.error('Error response data:', error.response.data);
+                    console.error('Error response status:', error.response.status);
+                    console.error('Error response headers:', error.response.headers);
+                } else if (error.request) {
+                    // The request was made but no response was received
+                    console.error('Error request:', error.request);
+                } else {
+                    // Something happened in setting up the request that triggered an Error
+                    console.error('Error message:', error.message);
+                }
+                
                 alert(`Error making first purchase: ${error.response?.data?.error || error.message}`);
             }
         },

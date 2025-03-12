@@ -16,7 +16,7 @@ services:
     build:
       context: ./backend
     ports:
-      - "4000:4000"  # Updated to match PORT in .env
+      - "4000:4000"
     depends_on:
       - database
     environment:
@@ -40,10 +40,10 @@ services:
     ports:
       - "3306:3306"
     environment:
-      - MARIADB_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-      - MARIADB_DATABASE=${DB_NAME}
-      - MARIADB_USER=${DB_USER}
-      - MARIADB_PASSWORD=${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
+      MARIADB_DATABASE: "${MARIADB_DATABASE}"
+      MARIADB_USER: "${MARIADB_USER}"
+      MARIADB_PASSWORD: "${MARIADB_PASSWORD}"
     volumes:
       - db-data:/var/lib/mysql
     networks:
