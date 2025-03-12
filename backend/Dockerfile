@@ -7,7 +7,7 @@ COPY package*.json ./
 
 # Install dependencies
 RUN npm install
-RUN npm install mysql2 cors helmet express-rate-limit --save
+RUN npm install mysql2 cors helmet express-rate-limit dotenv --save
 
 # Copy the rest of the application
 COPY . .

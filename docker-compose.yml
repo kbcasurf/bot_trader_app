@@ -36,7 +36,8 @@ services:
     restart: unless-stopped
 
   database:
-    image: mariadb:lts
+    build:
+      context: ./database
     ports:
       - "3306:3306"
     environment:
