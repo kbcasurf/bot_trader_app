@@ -9,10 +9,12 @@ const telegramRoutes = require('./routes/telegram');
 const tradingBot = require('./services/tradingBot');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000;  // Use PORT from .env
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false  // Disable CSP for development
+}));
 
 // Enable CORS for all routes
 app.use(cors({
@@ -54,7 +56,7 @@ async function startServer() {
     tradingBot.initialize();
     
     // Start the server
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server running on port ${PORT}`);
     });
   } catch (error) {

@@ -1,7 +1,7 @@
 // Set Vue to production mode
 Vue.config.productionTip = false;
 
-// API base URL - Update to use relative URL for Docker networking
+// API base URL - Use relative URL for Docker networking
 const API_BASE_URL = '/api';
 
 // Cryptocurrency data
