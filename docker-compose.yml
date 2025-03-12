@@ -10,6 +10,7 @@ services:
       - backend
     networks:
       - app-network
+    restart: unless-stopped
 
   backend:
     build:
@@ -32,21 +33,22 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     networks:
       - app-network
+    restart: unless-stopped
 
   database:
-    build:
-      context: ./database
+    image: mariadb:10.6
     ports:
       - "3306:3306"
     environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-      - MYSQL_DATABASE=${DB_NAME}
-      - MYSQL_USER=${DB_USER}
-      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MARIADB_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MARIADB_DATABASE=${DB_NAME}
+      - MARIADB_USER=${DB_USER}
+      - MARIADB_PASSWORD=${DB_PASSWORD}
     volumes:
       - db-data:/var/lib/mysql
     networks:
       - app-network
+    restart: unless-stopped
 
 networks:
   app-network:
