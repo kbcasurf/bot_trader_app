@@ -1,13 +1,14 @@
 const mysql = require('mysql2/promise');
 const path = require('path');
+// Update the path to point to the root .env file
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 // Database configuration from environment variables
 const dbConfig = {
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+  host: process.env.DB_HOST || 'database',
+  user: process.env.DB_USER || 'bot_trader_user',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'bot_trader',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0

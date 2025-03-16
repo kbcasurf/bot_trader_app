@@ -23,6 +23,17 @@ services:
     depends_on:
       database:
         condition: service_healthy
+    environment:
+      - DB_HOST=database
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - BINANCE_API_SERVER=${BINANCE_API_SERVER}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - PORT=${PORT}
     volumes:
       - ./.env:/app/.env
     networks:
@@ -41,6 +52,7 @@ services:
     volumes:
       - db-data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./.env:/app/.env
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MARIADB_ROOT_PASSWORD}"]
       interval: 5s
