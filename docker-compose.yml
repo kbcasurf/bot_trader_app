@@ -32,7 +32,7 @@ services:
 
   # Update the database service section
   database:
-    image: mariadb:lts
+    build: ./database
     ports:
       - "3306:3306"
     env_file:
