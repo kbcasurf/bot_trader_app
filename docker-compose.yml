@@ -9,12 +9,11 @@ services:
       - backend
     networks:
       - app-network
-    environment:
-      - VITE_API_URL=${VITE_API_URL}
-      - VITE_PROFIT_THRESHOLD=${VITE_PROFIT_THRESHOLD}
-      - VITE_LOSS_THRESHOLD=${VITE_LOSS_THRESHOLD}
+    env_file:
+      - ./.env
     volumes:
-      - ./.env:/app/.env
+      - ./frontend:/app
+      - /app/node_modules
 
   backend:
     build: ./backend
@@ -23,19 +22,11 @@ services:
     depends_on:
       database:
         condition: service_healthy
-    environment:
-      - DB_HOST=database
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
-      - BINANCE_API_SERVER=${BINANCE_API_SERVER}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-      - PORT=${PORT}
+    env_file:
+      - ./.env
     volumes:
-      - ./.env:/app/.env
+      - ./backend:/app
+      - /app/node_modules
     networks:
       - app-network
     restart: unless-stopped
@@ -44,15 +35,11 @@ services:
     build: ./database
     ports:
       - "3306:3306"
-    environment:
-      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
-      - MARIADB_DATABASE=${DB_NAME}
-      - MARIADB_USER=${DB_USER}
-      - MARIADB_PASSWORD=${DB_PASSWORD}
+    env_file:
+      - ./.env
     volumes:
       - db-data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./.env:/app/.env
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MARIADB_ROOT_PASSWORD}"]
       interval: 5s
