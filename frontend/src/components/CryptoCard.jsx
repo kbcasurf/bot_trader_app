@@ -22,6 +22,9 @@ const CryptoCard = ({ symbol }) => {
 
   useEffect(() => {
     let isMounted = true;
+    let retryCount = 0;
+    const maxRetries = 3;
+    
     const fetchData = async () => {
       try {
         console.log(`Fetching data for ${symbol}...`);
@@ -33,25 +36,35 @@ const CryptoCard = ({ symbol }) => {
             symbol: symbol,
             price: formatPrice(data.price, symbol),
             loading: false,
-            error: null
+            error: null,
+            fallback: data.fallback
           });
+          
+          // Reset retry count on success
+          retryCount = 0;
         }
       } catch (error) {
         console.error(`Error fetching ${symbol} data:`, error);
         if (isMounted) {
-          setCrypto(prev => ({
-            ...prev,
-            loading: false,
-            error: 'Failed to load price data'
-          }));
+          // If we've exceeded max retries, show error
+          if (retryCount >= maxRetries) {
+            setCrypto(prev => ({
+              ...prev,
+              loading: false,
+              error: 'Failed to load price data'
+            }));
+          } else {
+            // Otherwise, increment retry count but don't show error yet
+            retryCount++;
+          }
         }
       }
     };
 
     fetchData();
     
-    // Set up interval to fetch data every 5 seconds
-    const intervalId = setInterval(fetchData, 5000);
+    // Set up interval to fetch data every 10 seconds (increased from 5)
+    const intervalId = setInterval(fetchData, 10000);
     
     return () => {
       isMounted = false;
@@ -96,11 +109,15 @@ const CryptoCard = ({ symbol }) => {
     );
   }
 
+  // Update the render method to show when using fallback data
   return (
     <div className="crypto-card">
       <div className="crypto-header">
         <h3>{crypto.symbol}</h3>
-        <p className="price">{crypto.price} USDT</p>
+        <p className="price">
+          {crypto.price} USDT
+          {crypto.fallback && <span className="fallback-indicator"> (cached)</span>}
+        </p>
       </div>
       
       <div className="investment-controls">

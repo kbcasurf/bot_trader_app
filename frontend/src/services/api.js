@@ -10,6 +10,8 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  // Add timeout configuration
+  timeout: 10000, // 10 seconds
 });
 
 // Add request interceptor for logging
@@ -31,19 +33,47 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    console.error('API Response Error:', error.response?.status, error.response?.data || error.message);
+    // Don't log aborted requests as errors - they're often just timeouts
+    if (error.code === 'ECONNABORTED') {
+      console.warn(`Request timeout for ${error.config?.url}`);
+    } else {
+      console.error('API Response Error:', error.response?.status, error.response?.data || error.message);
+    }
     return Promise.reject(error);
   }
 );
 
-export const fetchCryptoData = async (symbol) => {
+// Helper function to retry failed requests
+const retryRequest = async (fn, retries = 3, delay = 1000) => {
   try {
-    const response = await api.get(`/api/binance/price/${symbol}`);
-    return response.data;
+    return await fn();
   } catch (error) {
-    console.error(`Error fetching data for ${symbol}:`, error);
+    if (retries <= 0) throw error;
+    
+    // Only retry on timeout or network errors
+    if (error.code === 'ECONNABORTED' || error.message.includes('Network Error')) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryRequest(fn, retries - 1, delay);
+    }
+    
     throw error;
   }
+};
+
+export const fetchCryptoData = async (symbol) => {
+  return retryRequest(async () => {
+    try {
+      const response = await api.get(`/api/binance/price/${symbol}`);
+      return response.data;
+    } catch (error) {
+      // If we still get an error after retries, provide a fallback
+      if (error.code === 'ECONNABORTED') {
+        console.warn(`Using cached/fallback data for ${symbol} due to timeout`);
+        return { symbol, price: '0.00', fallback: true };
+      }
+      throw error;
+    }
+  });
 };
 
 export const startTrading = async (symbol, amount) => {
