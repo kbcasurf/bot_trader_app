@@ -68,10 +68,18 @@ router.get('/orders/:symbol', async (req, res, next) => {
 router.get('/settings', async (req, res) => {
   try {
     const [settings] = await db.query('SELECT setting_key, value FROM settings');
+    
+    // Ensure we're returning an array
+    if (!Array.isArray(settings)) {
+      console.warn('Settings query did not return an array, returning empty array');
+      return res.json([]);
+    }
+    
     res.json(settings);
   } catch (error) {
     console.error('Error fetching settings:', error);
-    res.status(500).json({ error: 'Failed to fetch settings' });
+    // Return empty array on error
+    res.status(500).json([]);
   }
 });
 

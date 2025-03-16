@@ -361,7 +361,7 @@ async function checkTradingConditions(symbol, price) {
 }
 
 // Setup WebSocket connections for real-time price updates
-function setupBinanceWebsocket() {
+function setupBinanceWebsocket(broadcastCallback) {
   // Symbols to monitor
   const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'PENDLEUSDT', 'DOGEUSDT', 'NEARUSDT'];
   
@@ -374,6 +374,7 @@ function setupBinanceWebsocket() {
         console.log(`WebSocket connection established for ${symbol}`);
       });
       
+      // In your WebSocket message handler:
       ws.on('message', (data) => {
         try {
           const tickerData = JSON.parse(data);
@@ -381,6 +382,11 @@ function setupBinanceWebsocket() {
           
           // Store current price
           currentPrices[symbol] = price;
+          
+          // Broadcast price update to clients
+          if (global.broadcastPriceUpdate) {
+            global.broadcastPriceUpdate(symbol, price);
+          }
           
           // Check if we should buy or sell based on price changes
           checkTradingConditions(symbol, price);

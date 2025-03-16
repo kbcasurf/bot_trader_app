@@ -2,16 +2,70 @@ import axios from 'axios';
 
 // Get API URL from environment variables or use default
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-
 console.log('Using API URL:', API_URL);
+
+// WebSocket connection
+let socket = null;
+let isConnected = false;
+let reconnectTimeout = null;
+
+// Initialize WebSocket connection
+export const initWebSocket = () => {
+  if (socket) {
+    socket.close();
+  }
+  
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.hostname}:4000/ws`;
+  console.log('Connecting to WebSocket:', wsUrl);
+  
+  socket = new WebSocket(wsUrl);
+  
+  socket.onopen = () => {
+    console.log('WebSocket connection established');
+    isConnected = true;
+  };
+  
+  socket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      
+      if (data.type === 'price') {
+        // Dispatch custom event for components to listen to
+        window.dispatchEvent(new CustomEvent('PRICE_UPDATE', {
+          detail: {
+            symbol: data.symbol,
+            price: data.price
+          }
+        }));
+      }
+    } catch (error) {
+      console.error('Error parsing WebSocket message:', error);
+    }
+  };
+  
+  socket.onclose = () => {
+    console.log('WebSocket connection closed');
+    isConnected = false;
+    
+    // Attempt to reconnect after delay
+    reconnectTimeout = setTimeout(() => {
+      console.log('Attempting to reconnect WebSocket...');
+      initWebSocket();
+    }, 3000);
+  };
+  
+  socket.onerror = (error) => {
+    console.error('WebSocket error:', error);
+  };
+};
 
 const api = axios.create({
   baseURL: API_URL,
   headers: {
     'Content-Type': 'application/json',
   },
-  // Add timeout configuration
-  timeout: 10000, // 10 seconds
+  timeout: 10000,
 });
 
 // Add request interceptor for logging
@@ -89,10 +143,11 @@ export const startTrading = async (symbol, amount) => {
 export const getSettings = async () => {
   try {
     const response = await api.get('/api/binance/settings');
-    return response.data;
+    // Ensure we return an array
+    return Array.isArray(response.data) ? response.data : [];
   } catch (error) {
     console.error('Error fetching settings:', error);
-    // Return default settings if the endpoint doesn't exist yet
+    // Return default settings as an array
     return [
       { setting_key: 'profit_threshold', value: '5' },
       { setting_key: 'loss_threshold', value: '5' },

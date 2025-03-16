@@ -19,14 +19,34 @@ function App() {
       try {
         const data = await getSettings();
         console.log('Settings data received:', data);
-        setSettings({
-          profitThreshold: parseInt(data.find(s => s.setting_key === 'profit_threshold')?.value || '5', 10),
-          lossThreshold: parseInt(data.find(s => s.setting_key === 'loss_threshold')?.value || '5', 10),
-          additionalPurchaseAmount: parseInt(data.find(s => s.setting_key === 'additional_purchase_amount')?.value || '50', 10),
-          maxInvestmentPerSymbol: parseInt(data.find(s => s.setting_key === 'max_investment_per_symbol')?.value || '200', 10)
-        });
+        
+        // Check if data is an array before using find
+        if (Array.isArray(data)) {
+          setSettings({
+            profitThreshold: parseInt(data.find(s => s.setting_key === 'profit_threshold')?.value || '5', 10),
+            lossThreshold: parseInt(data.find(s => s.setting_key === 'loss_threshold')?.value || '5', 10),
+            additionalPurchaseAmount: parseInt(data.find(s => s.setting_key === 'additional_purchase_amount')?.value || '50', 10),
+            maxInvestmentPerSymbol: parseInt(data.find(s => s.setting_key === 'max_investment_per_symbol')?.value || '200', 10)
+          });
+        } else {
+          // If data is not an array, use default values
+          console.warn('Settings data is not an array, using defaults');
+          setSettings({
+            profitThreshold: 5,
+            lossThreshold: 5,
+            additionalPurchaseAmount: 50,
+            maxInvestmentPerSymbol: 200
+          });
+        }
       } catch (error) {
         console.error('Failed to fetch settings:', error);
+        // Use default values on error
+        setSettings({
+          profitThreshold: 5,
+          lossThreshold: 5,
+          additionalPurchaseAmount: 50,
+          maxInvestmentPerSymbol: 200
+        });
       } finally {
         setSettingsLoading(false);
       }

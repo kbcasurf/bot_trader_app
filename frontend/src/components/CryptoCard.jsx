@@ -22,53 +22,54 @@ const CryptoCard = ({ symbol }) => {
 
   useEffect(() => {
     let isMounted = true;
-    let retryCount = 0;
-    const maxRetries = 3;
     
-    const fetchData = async () => {
+    // Initial data fetch (one-time only)
+    const fetchInitialData = async () => {
       try {
-        console.log(`Fetching data for ${symbol}...`);
+        console.log(`Fetching initial data for ${symbol}...`);
         const data = await fetchCryptoData(symbol);
-        console.log(`Received data for ${symbol}:`, data);
         
         if (isMounted) {
           setCrypto({
             symbol: symbol,
             price: formatPrice(data.price, symbol),
             loading: false,
-            error: null,
-            fallback: data.fallback
+            error: null
           });
-          
-          // Reset retry count on success
-          retryCount = 0;
         }
       } catch (error) {
         console.error(`Error fetching ${symbol} data:`, error);
         if (isMounted) {
-          // If we've exceeded max retries, show error
-          if (retryCount >= maxRetries) {
-            setCrypto(prev => ({
-              ...prev,
-              loading: false,
-              error: 'Failed to load price data'
-            }));
-          } else {
-            // Otherwise, increment retry count but don't show error yet
-            retryCount++;
-          }
+          setCrypto(prev => ({
+            ...prev,
+            loading: false,
+            error: 'Failed to load price data'
+          }));
         }
       }
     };
 
-    fetchData();
+    fetchInitialData();
     
-    // Set up interval to fetch data every 10 seconds (increased from 5)
-    const intervalId = setInterval(fetchData, 10000);
+    // Listen for WebSocket price updates
+    const handlePriceUpdate = (event) => {
+      if (event.detail.symbol === symbol && isMounted) {
+        setCrypto(prev => ({
+          ...prev,
+          price: formatPrice(event.detail.price, symbol),
+          loading: false,
+          error: null
+        }));
+      }
+    };
+    
+    // Add event listener for price updates
+    window.addEventListener('PRICE_UPDATE', handlePriceUpdate);
     
     return () => {
       isMounted = false;
-      clearInterval(intervalId);
+      // Remove event listener
+      window.removeEventListener('PRICE_UPDATE', handlePriceUpdate);
     };
   }, [symbol]);
 

@@ -7,12 +7,52 @@ const rateLimit = require('express-rate-limit');
 const binanceRoutes = require('./routes/binance');
 const telegramRoutes = require('./routes/telegram');
 const db = require('./db/connection');
-const { setupBinanceWebsocket } = require('./services/binanceService.js');
+const { setupBinanceWebsocket, loadActiveSessions } = require('./services/binanceService.js');
 const { setupTradingBot } = require('./services/tradingBotService.js');
+const http = require('http');
+const WebSocket = require('ws');
 
 // Initialize express app
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// Create HTTP server
+const server = http.createServer(app);
+
+// Create WebSocket server
+const wss = new WebSocket.Server({ 
+  server,
+  path: '/ws'
+});
+
+// Store connected clients
+const clients = new Set();
+
+// WebSocket connection handler
+wss.on('connection', (ws) => {
+  console.log('Client connected to WebSocket');
+  clients.add(ws);
+  
+  ws.on('close', () => {
+    console.log('Client disconnected from WebSocket');
+    clients.delete(ws);
+  });
+});
+
+// Function to broadcast price updates to all connected clients
+global.broadcastPriceUpdate = (symbol, price) => {
+  const message = JSON.stringify({
+    type: 'price',
+    symbol,
+    price
+  });
+  
+  clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+};
 
 // Middleware
 app.use(helmet());
