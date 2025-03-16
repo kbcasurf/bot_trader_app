@@ -31,6 +31,7 @@ services:
       - app-network
     restart: unless-stopped
 
+  # Update the database service section
   database:
     build: ./database
     ports:
@@ -41,10 +42,11 @@ services:
       - db-data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MARIADB_ROOT_PASSWORD}"]
-      interval: 5s
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     networks:
       - app-network
     restart: unless-stopped
