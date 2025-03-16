@@ -9,7 +9,7 @@ require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 // Binance API configuration
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
-const BINANCE_API_URL = 'https://testnet.binance.vision/api'; // Testnet URL
+const BINANCE_API_URL = process.env.BINANCE_API_SERVER; // Testnet URL
 const BINANCE_WS_URL = 'wss://stream.binance.com:9443/ws';
 
 // Profit/Loss thresholds

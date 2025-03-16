@@ -2,3 +2,5 @@
 *.env
 ./.env
 *./.env
+./package.json
+*./package.json

@@ -10,7 +10,7 @@ services:
     networks:
       - app-network
     environment:
-      - VITE_API_URL=http://backend:4000/api
+      - VITE_API_URL=${VITE_API_URL}
       - VITE_PROFIT_THRESHOLD=${VITE_PROFIT_THRESHOLD}
       - VITE_LOSS_THRESHOLD=${VITE_LOSS_THRESHOLD}
     volumes:
