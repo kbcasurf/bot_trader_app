@@ -150,21 +150,19 @@ async function checkTablesExist() {
 // Ensure default settings exist
 async function ensureDefaultSettings() {
   try {
-    // Insert default settings if they don't exist
+    // Insert default settings with ON DUPLICATE KEY UPDATE
     await db.query(`
         INSERT INTO settings (setting_key, value) VALUES
           ('profit_threshold', '5'),
           ('loss_threshold', '5'),
           ('additional_purchase_amount', '50'),
           ('max_investment_per_symbol', '200')
+        ON DUPLICATE KEY UPDATE value = VALUES(value)
       `);
-    console.log('Default settings inserted');
+    console.log('Default settings inserted or updated');
   } catch (error) {
-    // If error is not duplicate entry, rethrow it
-    if (!error.message.includes('Duplicate entry')) {
-      throw error;
-    }
-    console.log('Default settings already exist');
+    console.error('Error ensuring default settings:', error);
+    throw error;
   }
 }
 
