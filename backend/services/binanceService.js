@@ -1,165 +1,450 @@
 const axios = require('axios');
 const crypto = require('crypto');
-require('dotenv').config();
+const WebSocket = require('ws');
+const path = require('path');
+const db = require('../db/connection');
+const telegramService = require('./telegramService');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
-// Binance API credentials from environment variables
-const API_KEY = process.env.BINANCE_API_KEY;
-const API_SECRET = process.env.BINANCE_API_SECRET;
-const BASE_URL = 'https://testnet.binance.vision/api';
+// Binance API configuration
+const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
+const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
+const BINANCE_API_URL = process.env.BINANCE_API_SERVER; // Testnet URL
+const BINANCE_WS_URL = 'wss://stream.binance.com:9443/ws';
 
-// Generate signature for authenticated requests
-const generateSignature = (queryString) => {
+// Profit/Loss thresholds
+const PROFIT_THRESHOLD = parseFloat(process.env.VITE_PROFIT_THRESHOLD) || 5; // 5%
+const LOSS_THRESHOLD = parseFloat(process.env.VITE_LOSS_THRESHOLD) || 5; // 5%
+const ADDITIONAL_PURCHASE_AMOUNT = 50; // $50 USD
+
+// Store current prices
+const currentPrices = {};
+// Store active trading sessions
+const activeSessions = {};
+// Store WebSocket connections
+const websockets = {};
+
+// Generate signature for Binance API
+function generateSignature(queryString) {
   return crypto
-    .createHmac('sha256', API_SECRET)
+    .createHmac('sha256', BINANCE_API_SECRET)
     .update(queryString)
     .digest('hex');
-};
+}
 
-const Binance = require('binance-api-node').default;
-const telegramService = require('./telegramService');
-const db = require('../db/connection');
+// Make a request to Binance API
+async function makeRequest(endpoint, method = 'GET', params = {}) {
+  try {
+    const timestamp = Date.now();
+    const queryParams = new URLSearchParams({
+      ...params,
+      timestamp,
+    }).toString();
 
-// Initialize Binance client
-const client = Binance({
-  apiKey: process.env.BINANCE_API_KEY,
-  apiSecret: process.env.BINANCE_API_SECRET,
-  // Use test: true for testnet
-  // test: true
-});
+    const signature = generateSignature(queryParams);
+    const url = `${BINANCE_API_URL}${endpoint}?${queryParams}&signature=${signature}`;
 
-const binanceService = {
-  // Get current price for a symbol
-  async getPrice(symbol) {
-    try {
-      const ticker = await client.prices({ symbol });
-      return parseFloat(ticker[symbol]);
-    } catch (error) {
-      console.error(`Error getting price for ${symbol}:`, error);
-      throw error;
-    }
-  },
+    const response = await axios({
+      method,
+      url,
+      headers: {
+        'X-MBX-APIKEY': BINANCE_API_KEY,
+      },
+    });
 
-  // Place a market buy order
-  async marketBuy(symbol, quoteAmount) {
-    try {
-      // Get current price to calculate quantity
-      const price = await this.getPrice(symbol);
-      const quantity = (quoteAmount / price).toFixed(5); // Adjust precision as needed
-      
-      const order = await client.order({
-        symbol: symbol,
-        side: 'BUY',
-        type: 'MARKET',
-        quantity: quantity
-      });
-      
-      // Save order to database
-      await this.saveOrder({
-        symbol,
-        side: 'BUY',
-        price: parseFloat(order.fills[0].price),
-        quantity: parseFloat(quantity),
-        total: quoteAmount,
-        orderId: order.orderId,
-        status: order.status,
-        timestamp: new Date()
-      });
-      
-      // Notify via Telegram
-      await telegramService.sendMessage(
-        `🟢 BUY Order Executed\nSymbol: ${symbol}\nPrice: $${order.fills[0].price}\nQuantity: ${quantity}\nTotal: $${quoteAmount}`
-      );
-      
-      return order;
-    } catch (error) {
-      console.error(`Error placing market buy for ${symbol}:`, error);
-      throw error;
-    }
-  },
-
-  // Place a market sell order
-  async marketSell(symbol, quantity) {
-    try {
-      const order = await client.order({
-        symbol: symbol,
-        side: 'SELL',
-        type: 'MARKET',
-        quantity: quantity.toFixed(5) // Adjust precision as needed
-      });
-      
-      // Calculate total
-      const total = parseFloat(order.fills[0].price) * parseFloat(quantity);
-      
-      // Save order to database
-      await this.saveOrder({
-        symbol,
-        side: 'SELL',
-        price: parseFloat(order.fills[0].price),
-        quantity: parseFloat(quantity),
-        total: total,
-        orderId: order.orderId,
-        status: order.status,
-        timestamp: new Date()
-      });
-      
-      // Notify via Telegram
-      await telegramService.sendMessage(
-        `🔴 SELL Order Executed\nSymbol: ${symbol}\nPrice: $${order.fills[0].price}\nQuantity: ${quantity}\nTotal: $${total.toFixed(2)}`
-      );
-      
-      return order;
-    } catch (error) {
-      console.error(`Error placing market sell for ${symbol}:`, error);
-      throw error;
-    }
-  },
-
-  // Save order to database
-  async saveOrder(orderData) {
-    try {
-      await db.query(
-        `INSERT INTO orders 
-        (symbol, side, price, quantity, total, order_id, status, timestamp) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          orderData.symbol,
-          orderData.side,
-          orderData.price,
-          orderData.quantity,
-          orderData.total,
-          orderData.orderId,
-          orderData.status,
-          orderData.timestamp
-        ]
-      );
-    } catch (error) {
-      console.error('Error saving order to database:', error);
-      throw error;
-    }
-  },
-
-  // Get account information
-  async getAccountInfo() {
-    try {
-      return await client.accountInfo();
-    } catch (error) {
-      console.error('Error getting account info:', error);
-      throw error;
-    }
-  },
-
-  // Get order history for a symbol
-  async getOrderHistory(symbol) {
-    try {
-      return await db.query(
-        'SELECT * FROM orders WHERE symbol = ? ORDER BY timestamp DESC',
-        [symbol]
-      );
-    } catch (error) {
-      console.error(`Error getting order history for ${symbol}:`, error);
-      throw error;
-    }
+    return response.data;
+  } catch (error) {
+    console.error('Binance API error:', error.response?.data || error.message);
+    throw error;
   }
-};
+}
 
-module.exports = binanceService;
+// Get account information
+async function getAccountInfo() {
+  return makeRequest('/v3/account');
+}
+
+// Get current price for a symbol
+async function getCurrentPrice(symbol) {
+  try {
+    const response = await axios.get(`${BINANCE_API_URL}/v3/ticker/price`, {
+      params: { symbol },
+    });
+    return parseFloat(response.data.price);
+  } catch (error) {
+    console.error(`Error getting price for ${symbol}:`, error.message);
+    throw error;
+  }
+}
+
+// Place a market order
+async function placeMarketOrder(symbol, side, quantity) {
+  const params = {
+    symbol,
+    side: side.toUpperCase(),
+    type: 'MARKET',
+    quantity,
+  };
+
+  return makeRequest('/v3/order', 'POST', params);
+}
+
+// Start a new trading session
+async function startSession(symbol, amount) {
+  try {
+    // Remove the slash from the symbol
+    const formattedSymbol = symbol.replace('/', '');
+    
+    // Get current price
+    const price = await getCurrentPrice(formattedSymbol);
+    
+    // Calculate quantity based on investment amount
+    const quantity = (amount / price).toFixed(8);
+    
+    // Place buy order
+    const order = await placeMarketOrder(formattedSymbol, 'buy', quantity);
+    
+    // Save session to database
+    const result = await db.query(
+      'INSERT INTO sessions (symbol, initial_investment, total_invested, total_quantity) VALUES (?, ?, ?, ?)',
+      [formattedSymbol, amount, amount, quantity]
+    );
+    
+    const sessionId = result.insertId;
+    
+    // Save order to database
+    await db.query(
+      'INSERT INTO orders (session_id, symbol, side, price, quantity, total) VALUES (?, ?, ?, ?, ?, ?)',
+      [sessionId, formattedSymbol, 'buy', price, quantity, amount]
+    );
+    
+    // Send notification
+    await telegramService.sendMessage(
+      `🚀 Started trading session for ${symbol}\n` +
+      `💰 Initial investment: $${amount}\n` +
+      `🔢 Quantity: ${quantity}\n` +
+      `💵 Price: $${price}`
+    );
+    
+    // Add to active sessions
+    activeSessions[formattedSymbol] = {
+      id: sessionId,
+      initialPrice: price,
+      lastBuyPrice: price,
+      totalInvested: amount,
+      totalQuantity: parseFloat(quantity),
+    };
+    
+    return {
+      success: true,
+      session: {
+        id: sessionId,
+        symbol: formattedSymbol,
+        initialInvestment: amount,
+        totalInvested: amount,
+        totalQuantity: quantity,
+        price,
+      },
+    };
+  } catch (error) {
+    console.error('Error starting session:', error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+}
+
+// Get session data
+// Add a utility function for formatting symbols consistently
+function formatSymbol(symbol) {
+// Remove any slashes if present
+return symbol.replace('/', '');
+}
+
+// Add a utility function for formatting display values
+function formatDisplayValue(value, decimals = 3) {
+return parseFloat(value).toFixed(decimals);
+}
+
+// Update the getSession function to include formatted display values
+async function getSession(symbol) {
+try {
+const formattedSymbol = formatSymbol(symbol);
+
+const sessions = await db.query(
+'SELECT * FROM sessions WHERE symbol = ? AND active = TRUE',
+[formattedSymbol]
+);
+
+if (sessions.length === 0) {
+return {
+active: false,
+};
+}
+
+const session = sessions[0];
+const currentPrice = currentPrices[formattedSymbol] || await getCurrentPrice(formattedSymbol);
+const currentValue = session.total_quantity * currentPrice;
+const profitLoss = currentValue - session.total_invested;
+
+return {
+active: true,
+id: session.id,
+symbol: formattedSymbol,
+initial_investment: session.initial_investment,
+total_invested: session.total_invested,
+total_quantity: session.total_quantity,
+// Add formatted display values
+display_quantity: formatDisplayValue(session.total_quantity),
+current_price: currentPrice,
+display_price: formatDisplayValue(currentPrice),
+current_value: currentValue,
+display_value: formatDisplayValue(currentValue),
+profit_loss: profitLoss,
+display_profit_loss: formatDisplayValue(profitLoss),
+profit_loss_percentage: (profitLoss / session.total_invested) * 100,
+display_percentage: formatDisplayValue((profitLoss / session.total_invested) * 100),
+created_at: session.created_at,
+updated_at: session.updated_at,
+};
+} catch (error) {
+console.error('Error getting session:', error);
+throw error;
+}
+}
+
+// Get orders for a session
+async function getOrders(symbol) {
+  try {
+    const formattedSymbol = symbol.replace('/', '');
+    
+    const sessions = await db.query(
+      'SELECT * FROM sessions WHERE symbol = ? AND active = TRUE',
+      [formattedSymbol]
+    );
+    
+    if (sessions.length === 0) {
+      return [];
+    }
+    
+    const session = sessions[0];
+    
+    const orders = await db.query(
+      'SELECT * FROM orders WHERE session_id = ? ORDER BY timestamp DESC',
+      [session.id]
+    );
+    
+    return orders;
+  } catch (error) {
+    console.error('Error getting orders:', error);
+    throw error;
+  }
+}
+
+// Buy more of a cryptocurrency when price drops
+async function buyMore(symbol, price) {
+  try {
+    const session = activeSessions[symbol];
+    
+    if (!session) return;
+    
+    // Calculate quantity based on additional purchase amount
+    const quantity = (ADDITIONAL_PURCHASE_AMOUNT / price).toFixed(8);
+    
+    // Place buy order
+    const order = await placeMarketOrder(symbol, 'buy', quantity);
+    
+    // Update session in memory
+    session.totalInvested += ADDITIONAL_PURCHASE_AMOUNT;
+    session.totalQuantity += parseFloat(quantity);
+    session.lastBuyPrice = price;
+    
+    // Update session in database
+    await db.query(
+      'UPDATE sessions SET total_invested = ?, total_quantity = ?, updated_at = NOW() WHERE id = ?',
+      [session.totalInvested, session.totalQuantity, session.id]
+    );
+    
+    // Save order to database
+    await db.query(
+      'INSERT INTO orders (session_id, symbol, side, price, quantity, total) VALUES (?, ?, ?, ?, ?, ?)',
+      [session.id, symbol, 'buy', price, quantity, ADDITIONAL_PURCHASE_AMOUNT]
+    );
+    
+    // Send notification
+    await telegramService.sendMessage(
+      `🔄 BOUGHT MORE ${symbol}\n` +
+      `🔢 Quantity: ${quantity}\n` +
+      `💵 Price: $${price}\n` +
+      `💸 Total: $${ADDITIONAL_PURCHASE_AMOUNT}`
+    );
+    
+    console.log(`Bought more ${symbol} at $${price}: ${quantity} units for $${ADDITIONAL_PURCHASE_AMOUNT}`);
+  } catch (error) {
+    console.error(`Error buying more ${symbol}:`, error);
+    await telegramService.sendMessage(`❌ Error buying more ${symbol}: ${error.message}`);
+  }
+}
+
+// Sell all holdings
+async function sellAll(symbol, price) {
+  try {
+    const session = activeSessions[symbol];
+    
+    if (!session || session.totalQuantity <= 0) return;
+    
+    // Place sell order
+    const order = await placeMarketOrder(symbol, 'sell', session.totalQuantity);
+    
+    // Calculate total
+    const total = session.totalQuantity * price;
+    
+    // Save order to database
+    await db.query(
+      'INSERT INTO orders (session_id, symbol, side, price, quantity, total) VALUES (?, ?, ?, ?, ?, ?)',
+      [session.id, symbol, 'sell', price, session.totalQuantity, total]
+    );
+    
+    // Update session
+    await db.query(
+      'UPDATE sessions SET active = FALSE, updated_at = NOW() WHERE id = ?',
+      [session.id]
+    );
+    
+    // Calculate profit/loss
+    const profitLoss = total - session.totalInvested;
+    const profitLossPercentage = (profitLoss / session.totalInvested) * 100;
+    
+    // Send notification
+    await telegramService.sendMessage(
+      `💰 SOLD ALL ${symbol}\n` +
+      `🔢 Quantity: ${session.totalQuantity}\n` +
+      `💵 Price: $${price}\n` +
+      `💸 Total: $${total.toFixed(2)}\n` +
+      `${profitLoss >= 0 ? '✅ Profit' : '❌ Loss'}: $${profitLoss.toFixed(2)} (${profitLossPercentage.toFixed(2)}%)`
+    );
+    
+    // Remove from active sessions
+    delete activeSessions[symbol];
+  } catch (error) {
+    console.error(`Error selling all ${symbol}:`, error);
+  }
+}
+
+// Check if we should buy or sell based on price changes
+async function checkTradingConditions(symbol, price) {
+  try {
+    const session = activeSessions[symbol];
+    
+    if (!session) return;
+    
+    // Calculate price change percentage from initial price
+    const priceChangeFromInitial = ((price - session.initialPrice) / session.initialPrice) * 100;
+    
+    // Calculate price change percentage from last buy price
+    const priceChangeFromLastBuy = ((price - session.lastBuyPrice) / session.lastBuyPrice) * 100;
+    
+    // If price increased by PROFIT_THRESHOLD% from initial price, sell everything
+    if (priceChangeFromInitial >= PROFIT_THRESHOLD) {
+      await sellAll(symbol, price);
+      return;
+    }
+    
+    // If price decreased by LOSS_THRESHOLD% from last buy, buy more
+    if (priceChangeFromLastBuy <= -LOSS_THRESHOLD) {
+      await buyMore(symbol, price);
+    }
+  } catch (error) {
+    console.error(`Error checking trading conditions for ${symbol}:`, error);
+  }
+}
+
+// Setup WebSocket connections for real-time price updates
+function setupBinanceWebsocket() {
+  // Symbols to monitor
+  const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'PENDLEUSDT', 'DOGEUSDT', 'NEARUSDT'];
+  
+  // Create a WebSocket connection for each symbol
+  symbols.forEach(symbol => {
+    try {
+      const ws = new WebSocket(`${BINANCE_WS_URL}/${symbol.toLowerCase()}@ticker`);
+      
+      ws.on('open', () => {
+        console.log(`WebSocket connection established for ${symbol}`);
+      });
+      
+      ws.on('message', (data) => {
+        try {
+          const tickerData = JSON.parse(data);
+          const price = parseFloat(tickerData.c); // Current price
+          
+          // Store current price
+          currentPrices[symbol] = price;
+          
+          // Check if we should buy or sell based on price changes
+          checkTradingConditions(symbol, price);
+        } catch (error) {
+          console.error(`Error processing WebSocket data for ${symbol}:`, error);
+        }
+      });
+      
+      ws.on('error', (error) => {
+        console.error(`WebSocket error for ${symbol}:`, error);
+      });
+      
+      ws.on('close', () => {
+        console.log(`WebSocket connection closed for ${symbol}`);
+        
+        // Attempt to reconnect after 5 seconds
+        setTimeout(() => {
+          setupBinanceWebsocket();
+        }, 5000);
+      });
+      
+      websockets[symbol] = ws;
+    } catch (error) {
+      console.error(`Error setting up WebSocket for ${symbol}:`, error);
+    }
+  });
+}
+
+// Load active sessions from database
+async function loadActiveSessions() {
+  try {
+    const sessions = await db.query('SELECT * FROM sessions WHERE active = TRUE');
+    
+    for (const session of sessions) {
+      const orders = await db.query(
+        'SELECT * FROM orders WHERE session_id = ? ORDER BY timestamp ASC',
+        [session.id]
+      );
+      
+      if (orders.length > 0) {
+        const lastBuyOrder = orders.filter(order => order.side === 'buy').pop();
+        
+        activeSessions[session.symbol] = {
+          id: session.id,
+          initialPrice: orders[0].price,
+          lastBuyPrice: lastBuyOrder ? lastBuyOrder.price : orders[0].price,
+          totalInvested: session.total_invested,
+          totalQuantity: session.total_quantity,
+        };
+      }
+    }
+    
+    console.log(`Loaded ${Object.keys(activeSessions).length} active sessions`);
+  } catch (error) {
+    console.error('Error loading active sessions:', error);
+  }
+}
+
+module.exports = {
+  getAccountInfo,
+  getCurrentPrice,
+  startSession,
+  getSession,
+  getOrders,
+  setupBinanceWebsocket,
+  loadActiveSessions,
+};

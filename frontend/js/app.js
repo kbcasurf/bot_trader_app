@@ -1,85 +1,104 @@
-// API base URL
-const API_BASE_URL = 'http://localhost:3000/api';
+// Set Vue to production mode
+Vue.config.productionTip = false;
+
+// API base URL - Use environment variable or fallback
+const API_BASE_URL = process.env.VITE_API_URL || '/api';
+const WEBSOCKET_URL = process.env.VITE_WEBSOCKET_URL || 'wss://stream.binance.com:9443/ws';
+const DEFAULT_INVESTMENT = parseInt(process.env.VITE_DEFAULT_INVESTMENT || 50);
+const INVESTMENT_STEPS = parseInt(process.env.VITE_INVESTMENT_STEPS || 50);
+const MAX_INVESTMENT = parseInt(process.env.VITE_MAX_INVESTMENT || 200);
 
 // Cryptocurrency data
 const cryptoData = [
     {
-        symbol: 'BTCUSDT',
-        baseAsset: 'BTC',
         name: 'Bitcoin',
-        logoUrl: './public/images/btc.svg',
-        investmentAmount: 50,
-        hasFirstPurchase: false,
+        symbol: 'BTC/USDT',
+        image: '/public/images/btc.svg',
         price: 0,
+        investmentAmount: DEFAULT_INVESTMENT,
+        hasFirstPurchase: false,
         quantity: 0,
+        totalInvested: 0,
         profitLoss: 0,
         profitLossPercentage: 0,
-        orders: []
+        orders: [],
+        loading: false,
+        error: null
     },
     {
-        symbol: 'SOLUSDT',
-        baseAsset: 'SOL',
         name: 'Solana',
-        logoUrl: './public/images/sol.svg',
+        symbol: 'SOL/USDT',
+        image: '/public/images/sol.svg',
+        price: 0,
         investmentAmount: 50,
         hasFirstPurchase: false,
-        price: 0,
         quantity: 0,
+        totalInvested: 0,
         profitLoss: 0,
         profitLossPercentage: 0,
-        orders: []
+        orders: [],
+        loading: false,
+        error: null
     },
     {
-        symbol: 'XRPUSDT',
-        baseAsset: 'XRP',
         name: 'XRP',
-        logoUrl: './public/images/xrp.svg',
+        symbol: 'XRP/USDT',
+        image: '/public/images/xrp.svg',
+        price: 0,
         investmentAmount: 50,
         hasFirstPurchase: false,
-        price: 0,
         quantity: 0,
+        totalInvested: 0,
         profitLoss: 0,
         profitLossPercentage: 0,
-        orders: []
+        orders: [],
+        loading: false,
+        error: null
     },
     {
-        symbol: 'PENDLEUSDT',
-        baseAsset: 'PENDLE',
         name: 'Pendle',
-        logoUrl: './public/images/pendle.svg',
+        symbol: 'PENDLE/USDT',
+        image: '/public/images/pendle.svg',
+        price: 0,
         investmentAmount: 50,
         hasFirstPurchase: false,
-        price: 0,
         quantity: 0,
+        totalInvested: 0,
         profitLoss: 0,
         profitLossPercentage: 0,
-        orders: []
+        orders: [],
+        loading: false,
+        error: null
     },
     {
-        symbol: 'DOGEUSDT',
-        baseAsset: 'DOGE',
         name: 'Dogecoin',
-        logoUrl: './public/images/doge.svg',
+        symbol: 'DOGE/USDT',
+        image: '/public/images/doge.svg',
+        price: 0,
         investmentAmount: 50,
         hasFirstPurchase: false,
-        price: 0,
         quantity: 0,
+        totalInvested: 0,
         profitLoss: 0,
         profitLossPercentage: 0,
-        orders: []
+        orders: [],
+        loading: false,
+        error: null
     },
     {
-        symbol: 'NEARUSDT',
-        baseAsset: 'NEAR',
         name: 'NEAR Protocol',
-        logoUrl: './public/images/near.svg',
+        symbol: 'NEAR/USDT',
+        image: '/public/images/near.svg',
+        price: 0,
         investmentAmount: 50,
         hasFirstPurchase: false,
-        price: 0,
         quantity: 0,
+        totalInvested: 0,
         profitLoss: 0,
         profitLossPercentage: 0,
-        orders: []
+        orders: [],
+        loading: false,
+        error: null
     }
 ];
 
@@ -90,96 +109,93 @@ const app = new Vue({
         cryptocurrencies: cryptoData,
         isConnected: false,
         websockets: {},
-        error: null
+        error: null,
+        loading: true
     },
     methods: {
-        // Initialize WebSocket connections for real-time price updates
-        initWebSockets() {
-            this.cryptocurrencies.forEach(crypto => {
-                const symbol = crypto.symbol.toLowerCase();
-                const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol}@ticker`);
-                
-                ws.onopen = () => {
-                    console.log(`WebSocket connected for ${crypto.symbol}`);
-                    this.isConnected = true;
-                };
-                
-                ws.onmessage = (event) => {
-                    const data = JSON.parse(event.data);
-                    crypto.price = parseFloat(data.c); // Current price
-                    
-                    // Update profit/loss if first purchase was made
-                    if (crypto.hasFirstPurchase) {
-                        this.updateProfitLoss(crypto);
-                    }
-                };
-                
-                ws.onerror = (error) => {
-                    console.error(`WebSocket error for ${crypto.symbol}:`, error);
-                    this.isConnected = false;
-                };
-                
-                ws.onclose = () => {
-                    console.log(`WebSocket closed for ${crypto.symbol}`);
-                    this.isConnected = false;
-                    // Try to reconnect after 5 seconds
-                    setTimeout(() => this.initWebSocket(crypto), 5000);
-                };
-                
-                this.websockets[crypto.symbol] = ws;
-            });
+        // Format timestamp to readable time
+        formatTime(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString() + ' ' + date.toLocaleDateString();
         },
         
-        // Make the first purchase
-        async makeFirstPurchase(crypto) {
-            try {
-                const response = await axios.post(`${API_BASE_URL}/binance/start-session`, {
-                    symbol: crypto.symbol,
-                    amount: crypto.investmentAmount
-                });
-                
-                if (response.data.success) {
-                    crypto.hasFirstPurchase = true;
+        // Initialize WebSocket connections for real-time price updates
+        initializeWebSockets() {
+            this.cryptocurrencies.forEach(crypto => {
+                try {
+                    const symbol = crypto.symbol.replace('/', '').toLowerCase();
+                    const ws = new WebSocket(`${WEBSOCKET_URL}/${symbol}@ticker`);
                     
-                    // Get the session data
-                    await this.loadSessionData(crypto);
+                    ws.onopen = () => {
+                        console.log(`WebSocket connection established for ${crypto.symbol}`);
+                        this.isConnected = true;
+                    };
                     
-                    // Get order history
-                    await this.loadOrderHistory(crypto);
+                    ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            crypto.price = parseFloat(data.c).toFixed(2);
+                            
+                            // Update profit/loss if first purchase has been made
+                            if (crypto.hasFirstPurchase && crypto.quantity > 0) {
+                                const currentValue = crypto.quantity * crypto.price;
+                                crypto.profitLoss = currentValue - crypto.totalInvested;
+                                crypto.profitLossPercentage = (crypto.profitLoss / crypto.totalInvested) * 100;
+                            }
+                        } catch (error) {
+                            console.error(`Error processing WebSocket data for ${crypto.symbol}:`, error);
+                        }
+                    };
                     
-                    // Show success message
-                    alert(`First purchase of ${crypto.name} successful!`);
+                    ws.onerror = (error) => {
+                        console.error(`WebSocket error for ${crypto.symbol}:`, error);
+                        this.isConnected = false;
+                    };
+                    
+                    ws.onclose = () => {
+                        console.log(`WebSocket connection closed for ${crypto.symbol}`);
+                        this.isConnected = false;
+                        
+                        // Attempt to reconnect after 5 seconds
+                        setTimeout(() => {
+                            this.initializeWebSockets();
+                        }, 5000);
+                    };
+                    
+                    this.websockets[crypto.symbol] = ws;
+                } catch (error) {
+                    console.error(`Error setting up WebSocket for ${crypto.symbol}:`, error);
                 }
-            } catch (error) {
-                console.error('Error making first purchase:', error);
-                alert(`Error making first purchase: ${error.response?.data?.error || error.message}`);
-            }
+            });
         },
         
         // Load session data for a cryptocurrency
         async loadSessionData(crypto) {
             try {
-                const response = await axios.get(`${API_BASE_URL}/binance/sessions/${crypto.symbol}`);
+                console.log(`Loading session data for ${crypto.symbol}`);
+                const symbol = crypto.symbol.replace('/', '');
+                const response = await axios.get(`${API_BASE_URL}/binance/sessions/${symbol}`);
                 
-                if (response.data) {
-                    const session = response.data;
+                if (response.data && response.data.active) {
+                    // Update crypto with session data
                     crypto.hasFirstPurchase = true;
-                    crypto.quantity = parseFloat(session.total_quantity);
-                    crypto.initialPrice = parseFloat(session.initial_price);
-                    crypto.initialAmount = parseFloat(session.initial_amount);
-                    crypto.totalInvested = parseFloat(session.total_invested);
-                    
-                    this.updateProfitLoss(crypto);
+                    crypto.quantity = response.data.total_quantity;
+                    crypto.totalInvested = response.data.total_invested;
+                    crypto.profitLoss = response.data.profit_loss;
+                    crypto.profitLossPercentage = (crypto.profitLoss / crypto.totalInvested) * 100;
                 }
             } catch (error) {
                 console.error(`Error loading session data for ${crypto.symbol}:`, error);
+                crypto.error = `Error loading session data: ${error.message}`;
             }
         },
         
         // Load order history for a cryptocurrency
         async loadOrderHistory(crypto) {
             try {
-                const response = await axios.get(`${API_BASE_URL}/binance/orders/${crypto.symbol}`);
+                console.log(`Loading order history for ${crypto.symbol}`);
+                const symbol = crypto.symbol.replace('/', '');
+                const response = await axios.get(`${API_BASE_URL}/binance/orders/${symbol}`);
                 
                 if (response.data && response.data.length > 0) {
                     crypto.orders = response.data.map(order => ({
@@ -195,41 +211,51 @@ const app = new Vue({
             }
         },
         
-        // Update profit/loss calculations
-        updateProfitLoss(crypto) {
-            if (!crypto.hasFirstPurchase) return;
-            
-            const currentValue = crypto.price * crypto.quantity;
-            crypto.profitLoss = currentValue - crypto.totalInvested;
-            crypto.profitLossPercentage = (crypto.profitLoss / crypto.totalInvested) * 100;
-        },
-        
-        // Get color for profit/loss bar
-        getProfitLossColor(percentage) {
-            if (percentage > 0) {
-                // Green gradient for profits
-                const intensity = Math.min(percentage / 10, 1); // Cap at 10% for full intensity
-                return `rgba(46, 204, 113, ${0.3 + intensity * 0.7})`; // From light to dark green
-            } else {
-                // Red gradient for losses
-                const intensity = Math.min(Math.abs(percentage) / 10, 1); // Cap at 10% for full intensity
-                return `rgba(231, 76, 60, ${0.3 + intensity * 0.7})`; // From light to dark red
+        // Make the first purchase
+        async makeFirstPurchase(crypto) {
+            try {
+                crypto.loading = true;
+                crypto.error = null;
+                
+                console.log(`Making first purchase for ${crypto.symbol} with amount $${crypto.investmentAmount}`);
+                
+                const response = await axios.post(`${API_BASE_URL}/binance/start-session`, {
+                    symbol: crypto.symbol.replace('/', ''),
+                    amount: crypto.investmentAmount
+                });
+                
+                if (response.data && response.data.success) {
+                    crypto.hasFirstPurchase = true;
+                    
+                    // Get the session data
+                    await this.loadSessionData(crypto);
+                    
+                    // Get order history
+                    await this.loadOrderHistory(crypto);
+                    
+                    // Show success message
+                    alert(`First purchase of ${crypto.name} successful!`);
+                } else {
+                    throw new Error(response.data?.error || 'Unknown error occurred');
+                }
+            } catch (error) {
+                console.error('Error making first purchase:', error);
+                crypto.error = `Error making first purchase: ${error.response?.data?.error || error.message}`;
+                alert(`Error making first purchase: ${error.response?.data?.error || error.message}`);
+            } finally {
+                crypto.loading = false;
             }
         },
         
-        // Format timestamp to readable time
-        formatTime(timestamp) {
-            const date = new Date(timestamp);
-            return date.toLocaleTimeString() + ' ' + date.toLocaleDateString();
-        },
-        
-        // Initialize the app
+        // Initialize the application
         async initialize() {
             try {
-                // Initialize WebSockets for real-time price updates
-                this.initWebSockets();
+                this.loading = true;
                 
-                // Load initial data for all cryptocurrencies
+                // Initialize WebSocket connections for real-time price updates
+                this.initializeWebSockets();
+                
+                // Load session data for all cryptocurrencies
                 for (const crypto of this.cryptocurrencies) {
                     await this.loadSessionData(crypto);
                     
@@ -238,16 +264,19 @@ const app = new Vue({
                     }
                 }
             } catch (error) {
-                console.error('Error initializing app:', error);
-                this.error = error.message;
+                console.error('Error initializing application:', error);
+                this.error = `Error initializing application: ${error.message}`;
+            } finally {
+                this.loading = false;
             }
         }
     },
     mounted() {
+        // Initialize the application when Vue is mounted
         this.initialize();
     },
     beforeDestroy() {
-        // Close all WebSocket connections
+        // Close all WebSocket connections when Vue is destroyed
         Object.values(this.websockets).forEach(ws => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.close();

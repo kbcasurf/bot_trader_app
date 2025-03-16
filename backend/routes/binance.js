@@ -1,22 +1,32 @@
 const express = require('express');
 const router = express.Router();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const binanceService = require('../services/binanceService');
-const tradingBot = require('../services/tradingBot');
 
-// Get current price for a symbol
-router.get('/price/:symbol', async (req, res) => {
+// Get account information
+router.get('/account', async (req, res, next) => {
   try {
-    const { symbol } = req.params;
-    const price = await binanceService.getPrice(symbol);
-    res.json({ symbol, price });
+    const accountInfo = await binanceService.getAccountInfo();
+    res.json(accountInfo);
   } catch (error) {
-    console.error('Error getting price:', error);
-    res.status(500).json({ error: 'Failed to get price' });
+    next(error);
   }
 });
 
-// Start a new trading session (first purchase)
-router.post('/start-session', async (req, res) => {
+// Get current price for a symbol
+router.get('/price/:symbol', async (req, res, next) => {
+  try {
+    const { symbol } = req.params;
+    const price = await binanceService.getCurrentPrice(symbol);
+    res.json({ symbol, price });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Start a new trading session
+router.post('/session/start', async (req, res, next) => {
   try {
     const { symbol, amount } = req.body;
     
@@ -24,51 +34,32 @@ router.post('/start-session', async (req, res) => {
       return res.status(400).json({ error: 'Symbol and amount are required' });
     }
     
-    const order = await tradingBot.startNewSession(symbol, parseFloat(amount));
-    res.json({ success: true, order });
+    const result = await binanceService.startSession(symbol, parseFloat(amount));
+    res.json(result);
   } catch (error) {
-    console.error('Error starting session:', error);
-    res.status(500).json({ error: 'Failed to start trading session' });
+    next(error);
   }
 });
 
-// Get order history for a symbol
-router.get('/orders/:symbol', async (req, res) => {
+// Get session data
+router.get('/session/:symbol', async (req, res, next) => {
   try {
     const { symbol } = req.params;
-    const orders = await binanceService.getOrderHistory(symbol);
-    res.json(orders);
-  } catch (error) {
-    console.error('Error getting orders:', error);
-    res.status(500).json({ error: 'Failed to get order history' });
-  }
-});
-
-// Get all trading sessions
-router.get('/sessions', async (req, res) => {
-  try {
-    const sessions = await tradingBot.getAllSessions();
-    res.json(sessions);
-  } catch (error) {
-    console.error('Error getting sessions:', error);
-    res.status(500).json({ error: 'Failed to get trading sessions' });
-  }
-});
-
-// Get a specific trading session
-router.get('/sessions/:symbol', async (req, res) => {
-  try {
-    const { symbol } = req.params;
-    const session = await tradingBot.getSession(symbol);
-    
-    if (!session) {
-      return res.status(404).json({ error: 'Trading session not found' });
-    }
-    
+    const session = await binanceService.getSession(symbol);
     res.json(session);
   } catch (error) {
-    console.error('Error getting session:', error);
-    res.status(500).json({ error: 'Failed to get trading session' });
+    next(error);
+  }
+});
+
+// Get orders for a session
+router.get('/orders/:symbol', async (req, res, next) => {
+  try {
+    const { symbol } = req.params;
+    const orders = await binanceService.getOrders(symbol);
+    res.json(orders);
+  } catch (error) {
+    next(error);
   }
 });
 
