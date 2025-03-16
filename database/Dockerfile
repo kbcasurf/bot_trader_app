@@ -1,4 +1,4 @@
-FROM mariadb:10.6
+FROM mariadb:lts
 
 # Copy custom configuration if needed
 COPY my.cnf /etc/mysql/conf.d/
