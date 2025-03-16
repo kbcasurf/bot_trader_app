@@ -115,11 +115,11 @@ async function initializeTables() {
     await db.query(`
       CREATE TABLE IF NOT EXISTS settings (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        key VARCHAR(50) NOT NULL,
+        setting_key VARCHAR(50) NOT NULL,
         value TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_key (key)
+        UNIQUE KEY unique_key (setting_key)
       )
     `);
     
