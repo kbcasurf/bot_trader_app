@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const db = require('../db/connection');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const binanceService = require('../services/binanceService');
@@ -60,6 +61,46 @@ router.get('/orders/:symbol', async (req, res, next) => {
     res.json(orders);
   } catch (error) {
     next(error);
+  }
+});
+
+// Get all settings
+router.get('/settings', async (req, res) => {
+  try {
+    const [settings] = await db.query('SELECT setting_key, value FROM settings');
+    res.json(settings);
+  } catch (error) {
+    console.error('Error fetching settings:', error);
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+// Update settings
+router.post('/settings', async (req, res) => {
+  try {
+    const { settings } = req.body;
+    
+    // Validate settings
+    if (!settings || !Array.isArray(settings)) {
+      return res.status(400).json({ error: 'Invalid settings format' });
+    }
+    
+    // Update each setting
+    for (const setting of settings) {
+      if (!setting.key || !setting.value) continue;
+      
+      await db.query(
+        'UPDATE settings SET value = ? WHERE setting_key = ?',
+        [setting.value, setting.key]
+      );
+    }
+    
+    // Get updated settings
+    const [updatedSettings] = await db.query('SELECT setting_key, value FROM settings');
+    res.json(updatedSettings);
+  } catch (error) {
+    console.error('Error updating settings:', error);
+    res.status(500).json({ error: 'Failed to update settings' });
   }
 });
 

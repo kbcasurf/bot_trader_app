@@ -92,7 +92,13 @@ export const getSettings = async () => {
     return response.data;
   } catch (error) {
     console.error('Error fetching settings:', error);
-    throw error;
+    // Return default settings if the endpoint doesn't exist yet
+    return [
+      { setting_key: 'profit_threshold', value: '5' },
+      { setting_key: 'loss_threshold', value: '5' },
+      { setting_key: 'additional_purchase_amount', value: '50' },
+      { setting_key: 'max_investment_per_symbol', value: '200' }
+    ];
   }
 };
 
