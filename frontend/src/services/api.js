@@ -1,6 +1,9 @@
 import axios from 'axios';
 
+// Get API URL from environment variables or use default
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+
+console.log('Using API URL:', API_URL);
 
 const api = axios.create({
   baseURL: API_URL,
@@ -24,7 +27,7 @@ api.interceptors.request.use(
 // Add response interceptor for logging
 api.interceptors.response.use(
   (response) => {
-    console.log('API Response:', response.status, response.data);
+    console.log('API Response:', response.status);
     return response;
   },
   (error) => {

@@ -11,7 +11,6 @@ function App() {
     lossThreshold: 5
   });
   
-  // Add a loading state for settings
   const [settingsLoading, setSettingsLoading] = useState(true);
   
   useEffect(() => {
@@ -19,6 +18,7 @@ function App() {
       setSettingsLoading(true);
       try {
         const data = await getSettings();
+        console.log('Settings data received:', data);
         setSettings({
           profitThreshold: parseInt(data.find(s => s.setting_key === 'profit_threshold')?.value || '5', 10),
           lossThreshold: parseInt(data.find(s => s.setting_key === 'loss_threshold')?.value || '5', 10),
@@ -49,7 +49,7 @@ function App() {
         </div>
       </main>
       
-      {/* Update the footer to show loading state */}
+      {/* Footer with settings information */}
       <footer>
         {settingsLoading ? (
           <p>Loading settings...</p>

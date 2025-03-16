@@ -12,22 +12,23 @@ const CryptoCard = ({ symbol }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [message, setMessage] = useState('');
 
+  // Format price based on symbol
+  const formatPrice = (price, symbol) => {
+    if (symbol === 'BTCUSDT') {
+      return parseFloat(price).toFixed(2);
+    }
+    return parseFloat(price).toFixed(4);
+  };
+
   useEffect(() => {
     let isMounted = true;
     const fetchData = async () => {
       try {
+        console.log(`Fetching data for ${symbol}...`);
         const data = await fetchCryptoData(symbol);
+        console.log(`Received data for ${symbol}:`, data);
+        
         if (isMounted) {
-          // Update the price formatting to handle different decimal places based on the symbol
-          const formatPrice = (price, symbol) => {
-            // Bitcoin typically shows fewer decimal places than other cryptocurrencies
-            if (symbol === 'BTCUSDT') {
-              return parseFloat(price).toFixed(2);
-            }
-            return parseFloat(price).toFixed(4);
-          };
-          
-          // Then in the useEffect:
           setCrypto({
             symbol: symbol,
             price: formatPrice(data.price, symbol),
@@ -36,13 +37,13 @@ const CryptoCard = ({ symbol }) => {
           });
         }
       } catch (error) {
+        console.error(`Error fetching ${symbol} data:`, error);
         if (isMounted) {
           setCrypto(prev => ({
             ...prev,
             loading: false,
             error: 'Failed to load price data'
           }));
-          console.error(`Error fetching ${symbol} data:`, error);
         }
       }
     };
@@ -67,12 +68,13 @@ const CryptoCard = ({ symbol }) => {
     setMessage('Processing...');
     
     try {
+      console.log(`Starting trade for ${symbol} with amount ${investmentAmount}`);
       const response = await startTrading(symbol, investmentAmount);
-      setMessage('First Purchase');
       console.log('Trade response:', response);
+      setMessage('First Purchase');
     } catch (error) {
-      setMessage('Error starting trade');
       console.error('Trade error:', error);
+      setMessage('Error starting trade');
     } finally {
       setIsProcessing(false);
     }
