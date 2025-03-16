@@ -20,8 +20,7 @@ services:
     ports:
       - "4000:4000"
     depends_on:
-      database:
-        condition: service_healthy
+      - database
     env_file:
       - ./.env
     volumes:
@@ -33,20 +32,19 @@ services:
 
   # Update the database service section
   database:
-    build: ./database
+    image: mariadb:lts
     ports:
       - "3306:3306"
     env_file:
       - ./.env
+    environment:
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
+      - MARIADB_DATABASE=${DB_NAME}
+      - MARIADB_USER=${DB_USER}
+      - MARIADB_PASSWORD=${DB_PASSWORD}
     volumes:
       - db-data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
     networks:
       - app-network
     restart: unless-stopped
