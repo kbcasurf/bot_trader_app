@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../db/connection');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
-const binanceService = require('../services/binanceService');
+const binanceService = require('../services/binanceservice.js');
 
 // Get account information
 router.get('/account', async (req, res, next) => {
@@ -112,4 +112,21 @@ router.post('/settings', async (req, res) => {
   }
 });
 
+// Add this endpoint to your binance.js routes file
+
+// Sell all crypto for a symbol
+router.post('/session/sell-all', async (req, res, next) => {
+  try {
+    const { symbol } = req.body;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+    
+    const result = await binanceService.sellAllCrypto(symbol);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
 module.exports = router;

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
-const telegramService = require('../services/telegramService');
+const telegramService = require('../services/telegramservice.js');
 
 // Send a message
 router.post('/send', async (req, res, next) => {

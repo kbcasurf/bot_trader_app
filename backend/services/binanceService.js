@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const WebSocket = require('ws');
 const path = require('path');
 const db = require('../db/connection');
-const telegramService = require('./telegramService');
+const telegramService = require('./telegramservice.js');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 // Binance API configuration
@@ -453,4 +453,57 @@ module.exports = {
   getOrders,
   setupBinanceWebsocket,
   loadActiveSessions,
+};
+
+// Add this function to your binanceService.js file
+
+// Sell all crypto for a symbol
+exports.sellAllCrypto = async (symbol) => {
+  try {
+    // Get current session
+    const session = await getSession(symbol);
+    
+    if (!session) {
+      throw new Error(`No active session found for ${symbol}`);
+    }
+    
+    // Get current price
+    const currentPrice = await getCurrentPrice(symbol);
+    
+    // Calculate quantity to sell (all available)
+    const quantity = session.quantity || 0;
+    
+    if (quantity <= 0) {
+      return { message: 'No crypto to sell', symbol, quantity };
+    }
+    
+    // Place sell order
+    const order = await placeOrder(symbol, 'SELL', quantity);
+    
+    // Update session status
+    await db.query(
+      'UPDATE trading_sessions SET status = ?, end_price = ?, end_time = NOW() WHERE symbol = ? AND status = ?',
+      ['CLOSED', currentPrice, symbol, 'ACTIVE']
+    );
+    
+    // Log the sell transaction
+    await db.query(
+      'INSERT INTO trading_transactions (session_id, type, price, quantity, timestamp) VALUES (?, ?, ?, ?, NOW())',
+      [session.id, 'SELL', currentPrice, quantity]
+    );
+    
+    // Send notification
+    await telegramService.sendMessage(`🔴 SOLD ALL ${symbol} at ${currentPrice} USDT`);
+    
+    return {
+      message: 'Successfully sold all crypto',
+      symbol,
+      price: currentPrice,
+      quantity,
+      order
+    };
+  } catch (error) {
+    console.error(`Error selling all ${symbol}:`, error);
+    throw error;
+  }
 };

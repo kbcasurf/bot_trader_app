@@ -1,4 +1,4 @@
-const binanceService = require('./binanceService');
+const binanceService = require('./binanceservice.js');
 
 // Setup trading bot
 async function setupTradingBot() {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchCryptoData, startTrading } from '../services/api';
+import { fetchCryptoData, startTrading, sellAllCrypto } from '../services/api';
 
 const CryptoCard = ({ symbol }) => {
   const [crypto, setCrypto] = useState({
@@ -11,6 +11,21 @@ const CryptoCard = ({ symbol }) => {
   const [investmentAmount, setInvestmentAmount] = useState(100);
   const [isProcessing, setIsProcessing] = useState(false);
   const [message, setMessage] = useState('');
+  const [isSelling, setIsSelling] = useState(false);
+
+  // Get the correct image based on symbol
+  const getCryptoImage = (symbol) => {
+    const symbolMap = {
+      'BTCUSDT': 'btc.svg',
+      'DOGEUSDT': 'doge.svg',
+      'NEARUSDT': 'near.svg',
+      'PENDLEUSDT': 'pendle.svg',
+      'SOLUSDT': 'sol.svg',
+      'XRPUSDT': 'xrp.svg'
+    };
+    
+    return `/images/${symbolMap[symbol] || 'btc.svg'}`;
+  };
 
   // Format price based on symbol
   const formatPrice = (price, symbol) => {
@@ -94,6 +109,29 @@ const CryptoCard = ({ symbol }) => {
     }
   };
 
+  const handleSellAll = async () => {
+    setIsSelling(true);
+    setMessage('Processing sell order...');
+    
+    try {
+      console.log(`Selling all ${symbol}`);
+      const response = await sellAllCrypto(symbol);
+      console.log('Sell response:', response);
+      setMessage('Successfully sold');
+      
+      // Refresh data after selling
+      setTimeout(() => {
+        fetchInitialData();
+        setMessage('');
+      }, 2000);
+    } catch (error) {
+      console.error('Sell error:', error);
+      setMessage('Error selling crypto');
+    } finally {
+      setIsSelling(false);
+    }
+  };
+
   if (crypto.loading) {
     return (
       <div className="crypto-card loading">
@@ -110,11 +148,18 @@ const CryptoCard = ({ symbol }) => {
     );
   }
 
-  // Update the render method to show when using fallback data
+  // Update the render method to include the crypto image
   return (
     <div className="crypto-card">
       <div className="crypto-header">
-        <h3>{crypto.symbol}</h3>
+        <div className="crypto-info">
+          <img 
+            src={getCryptoImage(symbol)} 
+            alt={symbol} 
+            className="crypto-icon" 
+          />
+          <h3>{crypto.symbol}</h3>
+        </div>
         <p className="price">
           {crypto.price} USDT
           {crypto.fallback && <span className="fallback-indicator"> (cached)</span>}
@@ -135,13 +180,23 @@ const CryptoCard = ({ symbol }) => {
         <p className="amount">${investmentAmount}</p>
       </div>
       
-      <button 
-        className="trade-button" 
-        onClick={handleTrade} 
-        disabled={isProcessing}
-      >
-        {isProcessing ? message : 'First Purchase'}
-      </button>
+      <div className="button-group">
+        <button 
+          className="trade-button" 
+          onClick={handleTrade} 
+          disabled={isProcessing || isSelling}
+        >
+          {isProcessing ? message : 'First Purchase'}
+        </button>
+        
+        <button 
+          className="sell-button" 
+          onClick={handleSellAll} 
+          disabled={isProcessing || isSelling}
+        >
+          {isSelling ? message : 'Sell All'}
+        </button>
+      </div>
     </div>
   );
 };

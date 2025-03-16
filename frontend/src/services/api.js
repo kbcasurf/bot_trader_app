@@ -177,4 +177,16 @@ export const getActiveSessions = async () => {
   }
 };
 
+// Add this function to your existing API service
+
+export const sellAllCrypto = async (symbol) => {
+  try {
+    const response = await api.post(`/api/binance/session/sell-all`, { symbol });
+    return response.data;
+  } catch (error) {
+    console.error(`Error selling all ${symbol}:`, error);
+    throw error;
+  }
+};
+
 export default api;

@@ -7,8 +7,8 @@ const rateLimit = require('express-rate-limit');
 const binanceRoutes = require('./routes/binance');
 const telegramRoutes = require('./routes/telegram');
 const db = require('./db/connection');
-const { setupBinanceWebsocket, loadActiveSessions } = require('./services/binanceService.js');
-const { setupTradingBot } = require('./services/tradingBotService.js');
+const { setupBinanceWebsocket, loadActiveSessions } = require('./services/binanceservice.js');
+const { setupTradingBot } = require('./services/tradingbotservice.js');
 const http = require('http');
 const WebSocket = require('ws');
 
