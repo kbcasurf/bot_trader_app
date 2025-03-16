@@ -477,8 +477,8 @@ exports.sellAllCrypto = async (symbol) => {
       return { message: 'No crypto to sell', symbol, quantity };
     }
     
-    // Place sell order
-    const order = await placeOrder(symbol, 'SELL', quantity);
+    // Place sell order - Fixed function name from placeOrder to placeMarketOrder
+    const order = await placeMarketOrder(symbol, 'SELL', quantity);
     
     // Update session status
     await db.query(
