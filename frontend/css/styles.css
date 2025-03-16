@@ -1,13 +1,16 @@
+/* Base styles */
 :root {
-    --primary-color: #3498db;
-    --secondary-color: #2ecc71;
-    --danger-color: #e74c3c;
-    --dark-color: #2c3e50;
-    --light-color: #ecf0f1;
-    --card-bg: #ffffff;
+    --primary-color: #2c3e50;
+    --secondary-color: #3498db;
+    --accent-color: #e74c3c;
+    --background-color: #f5f7fa;
+    --card-background: #ffffff;
     --text-color: #333333;
-    --border-radius: 8px;
-    --box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    --border-color: #e1e4e8;
+    --success-color: #2ecc71;
+    --warning-color: #f39c12;
+    --danger-color: #e74c3c;
+    --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 * {
@@ -18,7 +21,7 @@
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: var(--light-color);
+    background-color: var(--background-color);
     color: var(--text-color);
     line-height: 1.6;
 }
@@ -29,30 +32,30 @@ body {
     min-height: 100vh;
 }
 
+/* Header styles */
 header {
-    background-color: var(--dark-color);
+    background-color: var(--primary-color);
     color: white;
     padding: 1rem 2rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    box-shadow: var(--shadow);
 }
 
-.status-indicator {
+.connection-status {
     padding: 0.5rem 1rem;
     border-radius: 20px;
     font-size: 0.9rem;
     font-weight: bold;
-}
-
-.online {
-    background-color: var(--secondary-color);
-}
-
-.offline {
     background-color: var(--danger-color);
 }
 
+.connection-status.connected {
+    background-color: var(--success-color);
+}
+
+/* Main content styles */
 main {
     flex: 1;
     padding: 2rem;
@@ -60,29 +63,16 @@ main {
 
 .crypto-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
     gap: 2rem;
-}
-
-@media (max-width: 1200px) {
-    .crypto-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-@media (max-width: 768px) {
-    .crypto-grid {
-        grid-template-columns: 1fr;
-    }
+    margin-bottom: 2rem;
 }
 
 .crypto-card {
-    background-color: var(--card-bg);
-    border-radius: var(--border-radius);
-    box-shadow: var(--box-shadow);
+    background-color: var(--card-background);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
     padding: 1.5rem;
-    display: flex;
-    flex-direction: column;
     transition: transform 0.3s ease;
 }
 
@@ -90,40 +80,91 @@ main {
     transform: translateY(-5px);
 }
 
-.investment-slider {
-    margin-bottom: 1rem;
+.crypto-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 1.5rem;
 }
 
-.investment-slider input[type="range"] {
+.crypto-logo {
+    width: 40px;
+    height: 40px;
+    margin-right: 1rem;
+}
+
+.crypto-price {
+    margin-left: auto;
+    font-weight: bold;
+    font-size: 1.2rem;
+}
+
+/* Investment slider styles */
+.investment-slider {
+    margin-bottom: 1.5rem;
+}
+
+.slider-container {
+    position: relative;
+    margin: 1rem 0;
+}
+
+.slider {
     width: 100%;
-    margin-bottom: 0.5rem;
+    height: 10px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #ddd;
+    outline: none;
+    border-radius: 5px;
+}
+
+.slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--secondary-color);
+    cursor: pointer;
+}
+
+.slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--secondary-color);
+    cursor: pointer;
 }
 
 .slider-labels {
     display: flex;
     justify-content: space-between;
+    margin-top: 0.5rem;
     font-size: 0.8rem;
-    color: #777;
+    color: #666;
 }
 
 .selected-amount {
     text-align: center;
     font-weight: bold;
-    margin-top: 0.5rem;
     font-size: 1.2rem;
-    color: var(--primary-color);
+    color: var(--secondary-color);
 }
 
+/* Button styles */
 .purchase-btn {
-    background-color: var(--primary-color);
+    display: block;
+    width: 100%;
+    padding: 0.8rem;
+    background-color: var(--secondary-color);
     color: white;
     border: none;
-    padding: 0.75rem;
-    border-radius: var(--border-radius);
-    cursor: pointer;
+    border-radius: 4px;
+    font-size: 1rem;
     font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.3s;
     margin-bottom: 1.5rem;
-    transition: background-color 0.3s ease;
 }
 
 .purchase-btn:hover {
@@ -135,109 +176,65 @@ main {
     cursor: not-allowed;
 }
 
-.crypto-info {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.crypto-logo {
-    width: 80px;
-    height: 80px;
-    margin-bottom: 1rem;
-}
-
-.crypto-logo img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-}
-
-.crypto-name {
-    font-size: 1.5rem;
-    font-weight: bold;
-    margin-bottom: 0.5rem;
-}
-
-.crypto-price {
-    font-size: 1.2rem;
-    margin-bottom: 1rem;
-    color: var(--dark-color);
-}
-
-.crypto-holdings {
-    width: 100%;
-    margin-bottom: 1rem;
-    text-align: center;
-}
-
-.holdings-label {
-    font-weight: bold;
-    margin-bottom: 0.25rem;
-}
-
-.holdings-value {
-    font-size: 1.1rem;
-}
-
-.holdings-value-usd {
-    color: #7f8c8d;
-    font-size: 0.9rem;
-}
-
-.profit-loss-bar {
-    width: 100%;
+/* Holdings info styles */
+.holdings-info {
     margin-bottom: 1.5rem;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border-radius: 4px;
 }
 
-.profit-loss-label {
+.holdings-row {
+    display: flex;
+    justify-content: space-between;
     margin-bottom: 0.5rem;
-    font-weight: bold;
 }
 
 .profit {
-    color: var(--secondary-color);
+    color: var(--success-color);
 }
 
 .loss {
     color: var(--danger-color);
 }
 
-.progress-bar {
-    width: 100%;
-    height: 10px;
-    background-color: #ecf0f1;
-    border-radius: 5px;
+/* Profit/Loss bar styles */
+.profit-loss-bar-container {
+    height: 20px;
+    background-color: #eee;
+    border-radius: 10px;
+    margin-bottom: 1.5rem;
     overflow: hidden;
 }
 
-.progress {
+.profit-loss-bar {
     height: 100%;
-    transition: width 0.3s ease, background-color 0.3s ease;
+    border-radius: 10px;
+    transition: width 0.5s, background-color 0.5s;
 }
 
+/* Order history styles */
 .order-history {
-    width: 100%;
-    margin-top: 1rem;
+    margin-top: 1.5rem;
 }
 
-.order-history h4 {
-    margin-bottom: 0.5rem;
-    text-align: center;
+.order-history h3 {
+    margin-bottom: 0.8rem;
+    font-size: 1rem;
 }
 
 .order-list {
     max-height: 150px;
     overflow-y: auto;
-    border: 1px solid #ddd;
-    border-radius: var(--border-radius);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
 }
 
 .order-item {
-    padding: 0.5rem;
+    padding: 0.8rem;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
-    border-bottom: 1px solid #eee;
     font-size: 0.9rem;
 }
 
@@ -245,22 +242,53 @@ main {
     border-bottom: none;
 }
 
-.order-time {
-    color: #7f8c8d;
+.order-item .buy {
+    color: var(--success-color);
 }
 
-.order-side.buy {
-    color: var(--secondary-color);
-}
-
-.order-side.sell {
+.order-item .sell {
     color: var(--danger-color);
 }
 
+.order-time {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.no-orders {
+    padding: 1rem;
+    text-align: center;
+    color: #666;
+}
+
+/* Error message styles */
+.error-message {
+    color: var(--danger-color);
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+
+/* Footer styles */
 footer {
-    background-color: var(--dark-color);
+    background-color: var(--primary-color);
     color: white;
     text-align: center;
     padding: 1rem;
     margin-top: auto;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .crypto-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    header {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .connection-status {
+        margin-top: 1rem;
+    }
 }

@@ -58,7 +58,6 @@ PORT=4000
 ```bash
 docker-compose up -d
 ```
-
 The application will be available at:
 - Frontend: http://localhost:3000
 - Backend: http://localhost:4000
