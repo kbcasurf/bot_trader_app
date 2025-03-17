@@ -227,18 +227,31 @@ async function placeMarketOrder(symbol, side, quantity) {
     // Convert quantity to a number to ensure proper calculations
     let numQuantity = parseFloat(quantity);
     
+    // Ensure quantity is a valid number
+    if (isNaN(numQuantity) || numQuantity <= 0) {
+      throw new Error(`Invalid quantity: ${quantity}. Must be a positive number.`);
+    }
+    
     // Round quantity to match step size
     if (info.stepSize > 0) {
-      numQuantity = roundToStepSize(numQuantity, info.stepSize);
+      // Calculate the precision based on step size
+      const precision = info.stepSize.toString().includes('.') 
+        ? info.stepSize.toString().split('.')[1].length 
+        : 0;
+      
+      // Round to the correct precision
+      numQuantity = Math.floor(numQuantity / info.stepSize) * info.stepSize;
+      numQuantity = parseFloat(numQuantity.toFixed(precision));
     }
     
     // Ensure quantity is within min/max bounds
     if (info.minQty > 0 && numQuantity < info.minQty) {
-      numQuantity = info.minQty;
+      throw new Error(`Quantity ${numQuantity} is below minimum allowed: ${info.minQty}`);
     }
     
     if (info.maxQty > 0 && numQuantity > info.maxQty) {
       numQuantity = info.maxQty;
+      console.log(`Quantity adjusted to maximum allowed: ${info.maxQty}`);
     }
     
     // Format quantity to appropriate precision
@@ -253,7 +266,31 @@ async function placeMarketOrder(symbol, side, quantity) {
       quantity: formattedQuantity,
     };
 
-    return makeRequest('/v3/order', 'POST', params);
+    try {
+      const result = await makeRequest('/v3/order', 'POST', params);
+      console.log(`Order placed successfully for ${symbol}: ${side} ${formattedQuantity}`);
+      return result;
+    } catch (apiError) {
+      // Log detailed error information
+      console.error(`Binance API error placing order:`, apiError.response?.data || apiError.message);
+      
+      // Check for specific error codes
+      if (apiError.response?.data?.code) {
+        const errorCode = apiError.response.data.code;
+        const errorMsg = apiError.response.data.msg || 'Unknown error';
+        
+        // Handle specific error codes
+        if (errorCode === -1013) {
+          throw new Error(`Filter failure: LOT_SIZE. Quantity: ${formattedQuantity}. ${errorMsg}`);
+        } else if (errorCode === -2010) {
+          throw new Error(`Insufficient balance. ${errorMsg}`);
+        } else {
+          throw new Error(`Binance API error (${errorCode}): ${errorMsg}`);
+        }
+      }
+      
+      throw apiError;
+    }
   } catch (error) {
     console.error(`Error placing ${side} order for ${symbol}:`, error);
     throw error;
@@ -270,14 +307,29 @@ async function startSession(symbol, amount) {
     const price = await getCurrentPrice(formattedSymbol);
     
     // Calculate quantity based on investment amount
-    const quantity = (amount / price).toFixed(8);
+    let quantity = (amount / price).toFixed(8);
+    
+    // Get symbol info to ensure quantity meets requirements
+    const info = await getSymbolInfo(formattedSymbol);
+    
+    // Adjust quantity to match step size
+    if (info.stepSize > 0) {
+      const precision = info.stepSize.toString().includes('.') 
+        ? info.stepSize.toString().split('.')[1].length 
+        : 0;
+      
+      quantity = Math.floor(parseFloat(quantity) / info.stepSize) * info.stepSize;
+      quantity = quantity.toFixed(precision);
+    }
+    
+    console.log(`Starting session for ${formattedSymbol} with amount $${amount}, calculated quantity: ${quantity}`);
     
     // Place buy order
     const order = await placeMarketOrder(formattedSymbol, 'buy', quantity);
     
     // Save session to database
     const result = await db.query(
-      'INSERT INTO sessions (symbol, initial_investment, total_invested, total_quantity) VALUES (?, ?, ?, ?)',
+      'INSERT INTO sessions (symbol, initial_investment, total_invested, total_quantity, active) VALUES (?, ?, ?, ?, TRUE)',
       [formattedSymbol, amount, amount, quantity]
     );
     
@@ -519,17 +571,116 @@ async function sellAllCrypto(symbol) {
     
     console.log(`Attempting to sell all ${formattedSymbol}`);
     
-    // Get current session
-    const session = await getSession(formattedSymbol);
+    // First check if there's an active session in memory
+    if (activeSessions && activeSessions[formattedSymbol]) {
+      console.log(`Found active session in memory for ${formattedSymbol}`);
+      
+      // Get the session from database to ensure it's up to date
+      const dbSessions = await db.query(
+        'SELECT * FROM sessions WHERE id = ? AND active = TRUE',
+        [activeSessions[formattedSymbol].id]
+      );
+      
+      if (dbSessions.length > 0) {
+        // Continue with selling using the session from database
+        const session = dbSessions[0];
+        
+        // Get current price
+        const currentPrice = await getCurrentPrice(formattedSymbol);
+        
+        // Calculate quantity to sell (all available)
+        const quantity = session.total_quantity || 0;
+        
+        console.log(`Selling ${quantity} of ${formattedSymbol} at $${currentPrice}`);
+        
+        if (quantity <= 0) {
+          return { 
+            success: false,
+            message: 'No crypto to sell', 
+            symbol: formattedSymbol, 
+            quantity 
+          };
+        }
+        
+        // Place sell order
+        const order = await placeMarketOrder(formattedSymbol, 'sell', quantity);
+        
+        // Calculate total
+        const total = quantity * currentPrice;
+        
+        // Save order to database
+        await db.query(
+          'INSERT INTO orders (session_id, symbol, side, price, quantity, total) VALUES (?, ?, ?, ?, ?, ?)',
+          [session.id, formattedSymbol, 'sell', currentPrice, quantity, total]
+        );
+        
+        // Update session
+        await db.query(
+          'UPDATE sessions SET active = FALSE, updated_at = NOW() WHERE id = ?',
+          [session.id]
+        );
+        
+        // Calculate profit/loss
+        const profitLoss = total - session.total_invested;
+        const profitLossPercentage = (profitLoss / session.total_invested) * 100;
+        
+        // Send notification
+        await telegramService.sendMessage(
+          `🔴 SOLD ALL ${formattedSymbol}\n` +
+          `🔢 Quantity: ${quantity}\n` +
+          `💵 Price: $${currentPrice}\n` +
+          `💸 Total: $${total.toFixed(2)}\n` +
+          `${profitLoss >= 0 ? '✅ Profit' : '❌ Loss'}: $${profitLoss.toFixed(2)} (${profitLossPercentage.toFixed(2)}%)`
+        );
+        
+        // Remove from active sessions
+        delete activeSessions[formattedSymbol];
+        
+        return {
+          success: true,
+          message: 'Successfully sold all crypto',
+          symbol: formattedSymbol,
+          price: currentPrice,
+          quantity,
+          total,
+          profit_loss: profitLoss,
+          profit_loss_percentage: profitLossPercentage
+        };
+      }
+    }
     
-    if (!session || !session.active) {
-      console.log(`No active session found for ${formattedSymbol}`);
-      // Instead of throwing an error, return a meaningful response
+    // If not found in memory or not active in DB, try to find by symbol
+    console.log(`Querying database for active session with symbol ${formattedSymbol}`);
+    const sessions = await db.query(
+      'SELECT * FROM sessions WHERE symbol = ? AND active = TRUE ORDER BY created_at DESC LIMIT 1',
+      [formattedSymbol]
+    );
+    
+    if (sessions.length === 0) {
+      console.log(`No active session found in database for ${formattedSymbol}`);
+      
+      // Check if there's any session for this symbol, even if not active
+      const allSessions = await db.query(
+        'SELECT * FROM sessions WHERE symbol = ? ORDER BY created_at DESC LIMIT 1',
+        [formattedSymbol]
+      );
+      
+      if (allSessions.length > 0) {
+        console.log(`Found inactive session for ${formattedSymbol}, session ID: ${allSessions[0].id}`);
+        return { 
+          success: false, 
+          message: `Session for ${formattedSymbol} is already closed` 
+        };
+      }
+      
       return { 
         success: false, 
         message: `No active session found for ${formattedSymbol}` 
       };
     }
+    
+    // Continue with the rest of the function using the session from database
+    const session = sessions[0];
     
     // Get current price
     const currentPrice = await getCurrentPrice(formattedSymbol);
@@ -548,64 +699,8 @@ async function sellAllCrypto(symbol) {
       };
     }
     
-    // Check if API credentials are set
-    if (!process.env.BINANCE_API_KEY || !process.env.BINANCE_API_SECRET) {
-      console.log('Using mock sell order since API credentials are not set');
-      
-      // Calculate total
-      const total = quantity * currentPrice;
-      
-      // Save order to database
-      await db.query(
-        'INSERT INTO orders (session_id, symbol, side, price, quantity, total) VALUES (?, ?, ?, ?, ?, ?)',
-        [session.id, formattedSymbol, 'sell', currentPrice, quantity, total]
-      );
-      
-      // Update session
-      await db.query(
-        'UPDATE sessions SET active = FALSE, updated_at = NOW() WHERE id = ?',
-        [session.id]
-      );
-      
-      // Calculate profit/loss
-      const profitLoss = total - session.total_invested;
-      const profitLossPercentage = (profitLoss / session.total_invested) * 100;
-      
-      // Send notification if telegram service is available
-      if (typeof telegramService !== 'undefined' && telegramService && telegramService.sendMessage) {
-        await telegramService.sendMessage(
-          `🔴 SOLD ALL ${formattedSymbol} (MOCK)\n` +
-          `🔢 Quantity: ${quantity}\n` +
-          `💵 Price: $${currentPrice}\n` +
-          `💸 Total: $${total.toFixed(2)}\n` +
-          `${profitLoss >= 0 ? '✅ Profit' : '❌ Loss'}: $${profitLoss.toFixed(2)} (${profitLossPercentage.toFixed(2)}%)`
-        );
-      }
-      
-      // Remove from active sessions if it exists there
-      if (activeSessions && activeSessions[formattedSymbol]) {
-        delete activeSessions[formattedSymbol];
-      }
-      
-      return {
-        success: true,
-        message: 'Successfully sold all crypto (MOCK)',
-        symbol: formattedSymbol,
-        price: currentPrice,
-        quantity,
-        total,
-        profit_loss: profitLoss,
-        profit_loss_percentage: profitLossPercentage
-      };
-    }
-    
-    // Format quantity to appropriate precision
-    const formattedQuantity = parseFloat(quantity).toFixed(8);
-    
     // Place sell order
-    const order = await placeMarketOrder(formattedSymbol, 'sell', formattedQuantity);
-    
-    console.log('Sell order placed:', order);
+    const order = await placeMarketOrder(formattedSymbol, 'sell', quantity);
     
     // Calculate total
     const total = quantity * currentPrice;
@@ -627,18 +722,16 @@ async function sellAllCrypto(symbol) {
     const profitLossPercentage = (profitLoss / session.total_invested) * 100;
     
     // Send notification
-    if (typeof telegramService !== 'undefined' && telegramService && telegramService.sendMessage) {
-      await telegramService.sendMessage(
-        `🔴 SOLD ALL ${formattedSymbol}\n` +
-        `🔢 Quantity: ${quantity}\n` +
-        `💵 Price: $${currentPrice}\n` +
-        `💸 Total: $${total.toFixed(2)}\n` +
-        `${profitLoss >= 0 ? '✅ Profit' : '❌ Loss'}: $${profitLoss.toFixed(2)} (${profitLossPercentage.toFixed(2)}%)`
-      );
-    }
+    await telegramService.sendMessage(
+      `🔴 SOLD ALL ${formattedSymbol}\n` +
+      `🔢 Quantity: ${quantity}\n` +
+      `💵 Price: $${currentPrice}\n` +
+      `💸 Total: $${total.toFixed(2)}\n` +
+      `${profitLoss >= 0 ? '✅ Profit' : '❌ Loss'}: $${profitLoss.toFixed(2)} (${profitLossPercentage.toFixed(2)}%)`
+    );
     
-    // Remove from active sessions if it exists there
-    if (activeSessions && activeSessions[formattedSymbol]) {
+    // Update active sessions in memory
+    if (activeSessions[formattedSymbol]) {
       delete activeSessions[formattedSymbol];
     }
     
@@ -654,7 +747,6 @@ async function sellAllCrypto(symbol) {
     };
   } catch (error) {
     console.error(`Error selling all ${symbol}:`, error);
-    // Return error response instead of throwing
     return {
       success: false,
       message: `Error selling all ${symbol}: ${error.message}`,
