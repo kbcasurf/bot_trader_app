@@ -344,23 +344,39 @@ async function buyMore(symbol, price) {
   }
 }
 
-// Sell all holdings
-async function sellAll(symbol, price) {
+// Sell all crypto for a symbol
+async function sellAllCrypto(symbol) {
   try {
-    const session = activeSessions[symbol];
+    // Format the symbol properly
+    const formattedSymbol = symbol.replace('/', '');
     
-    if (!session || session.totalQuantity <= 0) return;
+    // Get current session
+    const session = await getSession(formattedSymbol);
     
-    // Place sell order
-    const order = await placeMarketOrder(symbol, 'sell', session.totalQuantity);
+    if (!session || !session.active) {
+      throw new Error(`No active session found for ${formattedSymbol}`);
+    }
+    
+    // Get current price
+    const currentPrice = await getCurrentPrice(formattedSymbol);
+    
+    // Calculate quantity to sell (all available)
+    const quantity = session.total_quantity || 0;
+    
+    if (quantity <= 0) {
+      return { message: 'No crypto to sell', symbol: formattedSymbol, quantity };
+    }
+    
+    // Place sell order - using the correct function and parameters
+    const order = await placeMarketOrder(formattedSymbol, 'sell', quantity);
     
     // Calculate total
-    const total = session.totalQuantity * price;
+    const total = quantity * currentPrice;
     
     // Save order to database
     await db.query(
       'INSERT INTO orders (session_id, symbol, side, price, quantity, total) VALUES (?, ?, ?, ?, ?, ?)',
-      [session.id, symbol, 'sell', price, session.totalQuantity, total]
+      [session.id, formattedSymbol, 'sell', currentPrice, quantity, total]
     );
     
     // Update session
@@ -370,22 +386,37 @@ async function sellAll(symbol, price) {
     );
     
     // Calculate profit/loss
-    const profitLoss = total - session.totalInvested;
-    const profitLossPercentage = (profitLoss / session.totalInvested) * 100;
+    const profitLoss = total - session.total_invested;
+    const profitLossPercentage = (profitLoss / session.total_invested) * 100;
     
     // Send notification
-    await telegramService.sendMessage(
-      `💰 SOLD ALL ${symbol}\n` +
-      `🔢 Quantity: ${session.totalQuantity}\n` +
-      `💵 Price: $${price}\n` +
-      `💸 Total: $${total.toFixed(2)}\n` +
-      `${profitLoss >= 0 ? '✅ Profit' : '❌ Loss'}: $${profitLoss.toFixed(2)} (${profitLossPercentage.toFixed(2)}%)`
-    );
+    if (telegramService && telegramService.sendMessage) {
+      await telegramService.sendMessage(
+        `🔴 SOLD ALL ${formattedSymbol}\n` +
+        `🔢 Quantity: ${quantity}\n` +
+        `💵 Price: $${currentPrice}\n` +
+        `💸 Total: $${total.toFixed(2)}\n` +
+        `${profitLoss >= 0 ? '✅ Profit' : '❌ Loss'}: $${profitLoss.toFixed(2)} (${profitLossPercentage.toFixed(2)}%)`
+      );
+    }
     
-    // Remove from active sessions
-    delete activeSessions[symbol];
+    // Remove from active sessions if it exists there
+    if (activeSessions[formattedSymbol]) {
+      delete activeSessions[formattedSymbol];
+    }
+    
+    return {
+      message: 'Successfully sold all crypto',
+      symbol: formattedSymbol,
+      price: currentPrice,
+      quantity,
+      total,
+      profit_loss: profitLoss,
+      profit_loss_percentage: profitLossPercentage
+    };
   } catch (error) {
     console.error(`Error selling all ${symbol}:`, error);
+    throw error;
   }
 }
 
@@ -510,57 +541,9 @@ module.exports = {
   getOrders,
   setupBinanceWebsocket,
   loadActiveSessions,
+  sellAllCrypto, // Make sure this is exported
 };
 
-// Add this function to your binanceService.js file
-
-// Sell all crypto for a symbol
-exports.sellAllCrypto = async (symbol) => {
-  try {
-    // Get current session
-    const session = await getSession(symbol);
-    
-    if (!session) {
-      throw new Error(`No active session found for ${symbol}`);
-    }
-    
-    // Get current price
-    const currentPrice = await getCurrentPrice(symbol);
-    
-    // Calculate quantity to sell (all available)
-    const quantity = session.quantity || 0;
-    
-    if (quantity <= 0) {
-      return { message: 'No crypto to sell', symbol, quantity };
-    }
-    
-    // Place sell order - Fixed function name from placeOrder to placeMarketOrder
-    const order = await placeMarketOrder(symbol, 'SELL', quantity);
-    
-    // Update session status
-    await db.query(
-      'UPDATE trading_sessions SET status = ?, end_price = ?, end_time = NOW() WHERE symbol = ? AND status = ?',
-      ['CLOSED', currentPrice, symbol, 'ACTIVE']
-    );
-    
-    // Log the sell transaction
-    await db.query(
-      'INSERT INTO trading_transactions (session_id, type, price, quantity, timestamp) VALUES (?, ?, ?, ?, NOW())',
-      [session.id, 'SELL', currentPrice, quantity]
-    );
-    
-    // Send notification
-    await telegramService.sendMessage(`🔴 SOLD ALL ${symbol} at ${currentPrice} USDT`);
-    
-    return {
-      message: 'Successfully sold all crypto',
-      symbol,
-      price: currentPrice,
-      quantity,
-      order
-    };
-  } catch (error) {
-    console.error(`Error selling all ${symbol}:`, error);
-    throw error;
-  }
-};
+// Remove this duplicate export if it exists
+// exports.sellAllCrypto = async (symbol) => {
+// ... };

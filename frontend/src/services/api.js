@@ -189,4 +189,14 @@ export const sellAllCrypto = async (symbol) => {
   }
 };
 
+export const startTrade = async (symbol, amount) => {
+  try {
+    const response = await axios.post('/api/binance/session/start', { symbol, amount });
+    return response.data;
+  } catch (error) {
+    console.error('Error starting trade:', error);
+    throw error;
+  }
+};
+
 export default api;
