@@ -133,10 +133,16 @@ export const fetchCryptoData = async (symbol) => {
 export const startTrading = async (symbol, amount) => {
   try {
     const response = await api.post('/api/binance/trade', { symbol, amount });
-    return response.data;
+    return {
+      success: true,
+      data: response.data
+    };
   } catch (error) {
     console.error(`Error starting trade for ${symbol}:`, error);
-    throw error;
+    return {
+      success: false,
+      message: error.response?.data?.error || `Error starting trade for ${symbol}`
+    };
   }
 };
 
@@ -177,14 +183,17 @@ export const getActiveSessions = async () => {
   }
 };
 
-// Updated function to handle errors more gracefully
+// Updated to return a consistent response format
 export const sellAllCrypto = async (symbol) => {
   try {
     const response = await api.post(`/api/binance/session/sell-all`, { symbol });
-    return response.data;
+    return {
+      success: true,
+      data: response.data,
+      message: 'Sell successful'
+    };
   } catch (error) {
     console.error(`Error selling all ${symbol}:`, error);
-    // Instead of throwing, return an error object so the component can handle it
     return { 
       success: false, 
       message: error.response?.data?.message || `Error selling ${symbol}` 
@@ -196,10 +205,18 @@ export const sellAllCrypto = async (symbol) => {
 export const checkSessionStatus = async (symbol) => {
   try {
     const response = await api.get(`/api/binance/session/${symbol}`);
-    return response.data;
+    return {
+      success: true,
+      active: response.data.active || false,
+      data: response.data
+    };
   } catch (error) {
     console.error(`Error checking session for ${symbol}:`, error);
-    return { active: false };
+    return { 
+      success: false,
+      active: false,
+      message: error.response?.data?.message || `Error checking session for ${symbol}`
+    };
   }
 };
 

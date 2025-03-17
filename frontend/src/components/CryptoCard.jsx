@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchCryptoData, startTrading, sellAllCrypto } from '../services/api';
+import { fetchCryptoData, startTrading, sellAllCrypto, checkSessionStatus } from '../services/api';
 
 const CryptoCard = ({ symbol }) => {
   const [crypto, setCrypto] = useState({
@@ -12,7 +12,6 @@ const CryptoCard = ({ symbol }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [message, setMessage] = useState('');
   const [isSelling, setIsSelling] = useState(false);
-  const [hasActiveSession, setHasActiveSession] = useState(false);
 
   // Get the correct image based on symbol
   const getCryptoImage = (symbol) => {
@@ -59,36 +58,11 @@ const CryptoCard = ({ symbol }) => {
     }
   };
 
-  // Function to check if there's an active trading session
-  const checkForActiveSession = async () => {
-    try {
-      // Make request to check session status
-      // Using the price endpoint as a proxy since it should return faster
-      const priceData = await fetchCryptoData(symbol);
-      
-      // If we can fetch price data, let's assume we can check session status
-      try {
-        // This is where we'd ideally have a dedicated endpoint
-        // For now, let's assume if we got this far, we can attempt to sell
-        setHasActiveSession(true);
-      } catch (sessionError) {
-        console.error(`Error checking session for ${symbol}:`, sessionError);
-        setHasActiveSession(false);
-      }
-    } catch (error) {
-      console.error(`Network error checking session for ${symbol}:`, error);
-      setHasActiveSession(false);
-    }
-  };
-
   useEffect(() => {
     let isMounted = true;
     
     // Initial data fetch
     fetchData();
-    
-    // Check for active session
-    checkForActiveSession();
     
     // Listen for WebSocket price updates
     const handlePriceUpdate = (event) => {
@@ -124,8 +98,12 @@ const CryptoCard = ({ symbol }) => {
       console.log(`Starting trade for ${symbol} with amount ${investmentAmount}`);
       const response = await startTrading(symbol, investmentAmount);
       console.log('Trade response:', response);
-      setMessage('First Purchase');
-      setHasActiveSession(true);
+      
+      if (response.success) {
+        setMessage('Purchase successful');
+      } else {
+        setMessage(response.message || 'Purchase completed');
+      }
       
       // Refresh data after successful purchase
       setTimeout(() => {
@@ -135,6 +113,11 @@ const CryptoCard = ({ symbol }) => {
     } catch (error) {
       console.error('Trade error:', error);
       setMessage('Error starting trade');
+      
+      // Clear error message after a delay
+      setTimeout(() => {
+        setMessage('');
+      }, 2000);
     } finally {
       setIsProcessing(false);
     }
@@ -151,21 +134,52 @@ const CryptoCard = ({ symbol }) => {
       
       if (response.success) {
         setMessage('Successfully sold');
-        setHasActiveSession(false);
       } else {
-        setMessage(response.message || 'Error selling crypto');
+        // If "No active session" response, try to create one first
+        if (response.message && response.message.includes('No active session')) {
+          setMessage('Creating session first...');
+          
+          // Create session with default investment amount
+          const tradeResponse = await startTrading(symbol, investmentAmount);
+          console.log('Auto-generated session response:', tradeResponse);
+          
+          if (tradeResponse.success) {
+            // Now try selling again after a short delay
+            setTimeout(async () => {
+              setMessage('Now selling...');
+              const secondSellAttempt = await sellAllCrypto(symbol);
+              
+              if (secondSellAttempt.success) {
+                setMessage('Successfully sold');
+              } else {
+                setMessage(secondSellAttempt.message || 'Error selling');
+              }
+            }, 1000);
+          } else {
+            setMessage('Could not create session');
+          }
+        } else {
+          setMessage(response.message || 'Error selling');
+        }
       }
       
       // Refresh data after attempting to sell
       setTimeout(() => {
         fetchData();
         setMessage('');
-      }, 2000);
+      }, 3000);
     } catch (error) {
       console.error('Sell error:', error);
       setMessage('Error selling crypto');
+      
+      // Clear error message after a delay
+      setTimeout(() => {
+        setMessage('');
+      }, 2000);
     } finally {
-      setIsSelling(false);
+      setTimeout(() => {
+        setIsSelling(false);
+      }, 3000);
     }
   };
 
@@ -228,14 +242,14 @@ const CryptoCard = ({ symbol }) => {
         <button 
           className="sell-button" 
           onClick={handleSellAll} 
-          disabled={isProcessing || isSelling || !hasActiveSession}
+          disabled={isProcessing || isSelling}
         >
           {isSelling ? message : 'Sell All'}
         </button>
       </div>
       
-      {!hasActiveSession && (
-        <p className="status-message">No active trading session</p>
+      {message && (
+        <p className="status-message">{message}</p>
       )}
     </div>
   );
