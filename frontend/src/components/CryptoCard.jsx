@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchCryptoData, startTrading, sellAllCrypto, checkSessionStatus } from '../services/api';
+import { fetchCryptoData, startTrading, sellAllCrypto } from '../services/api';
 
 const CryptoCard = ({ symbol }) => {
   const [crypto, setCrypto] = useState({
@@ -35,7 +35,7 @@ const CryptoCard = ({ symbol }) => {
     return parseFloat(price).toFixed(4);
   };
 
-  // Function to fetch data for this cryptocurrency
+  // Function to fetch cryptocurrency data
   const fetchData = async () => {
     try {
       console.log(`Fetching data for ${symbol}...`);
@@ -92,29 +92,24 @@ const CryptoCard = ({ symbol }) => {
 
   const handleTrade = async () => {
     setIsProcessing(true);
-    setMessage('Processing...');
+    setMessage('Processing purchase...');
     
     try {
       console.log(`Starting trade for ${symbol} with amount ${investmentAmount}`);
       const response = await startTrading(symbol, investmentAmount);
       console.log('Trade response:', response);
+      setMessage('Purchase successful');
       
-      if (response.success) {
-        setMessage('Purchase successful');
-      } else {
-        setMessage(response.message || 'Purchase completed');
-      }
-      
-      // Refresh data after successful purchase
+      // Refresh data after trade
       setTimeout(() => {
         fetchData();
         setMessage('');
       }, 2000);
     } catch (error) {
       console.error('Trade error:', error);
-      setMessage('Error starting trade');
+      setMessage('Error purchasing');
       
-      // Clear error message after a delay
+      // Clear message after delay
       setTimeout(() => {
         setMessage('');
       }, 2000);
@@ -123,63 +118,60 @@ const CryptoCard = ({ symbol }) => {
     }
   };
 
+  // All-in-one function that handles the entire sell process
   const handleSellAll = async () => {
     setIsSelling(true);
     setMessage('Processing sell order...');
     
     try {
       console.log(`Selling all ${symbol}`);
-      const response = await sellAllCrypto(symbol);
-      console.log('Sell response:', response);
       
-      if (response.success) {
-        setMessage('Successfully sold');
+      // 1. Try to sell first
+      const sellResponse = await sellAllCrypto(symbol);
+      console.log('Initial sell response:', sellResponse);
+      
+      // 2. If "No active session" error, create a session first
+      if (sellResponse.message && sellResponse.message.includes('No active session')) {
+        setMessage('Creating session first...');
+        
+        // Create trading session
+        const tradeResponse = await startTrading(symbol, investmentAmount);
+        console.log('Session creation response:', tradeResponse);
+        
+        // Wait a moment for the session to be fully created
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Try selling again
+        setMessage('Now selling...');
+        const secondSellResponse = await sellAllCrypto(symbol);
+        console.log('Second sell attempt response:', secondSellResponse);
+        
+        setMessage(secondSellResponse.success ? 'Successfully sold' : secondSellResponse.message || 'Operation completed');
+      } else if (sellResponse.message && sellResponse.message.includes('already closed')) {
+        // Session is already closed - nothing to sell
+        setMessage('No active session to sell');
       } else {
-        // If "No active session" response, try to create one first
-        if (response.message && response.message.includes('No active session')) {
-          setMessage('Creating session first...');
-          
-          // Create session with default investment amount
-          const tradeResponse = await startTrading(symbol, investmentAmount);
-          console.log('Auto-generated session response:', tradeResponse);
-          
-          if (tradeResponse.success) {
-            // Now try selling again after a short delay
-            setTimeout(async () => {
-              setMessage('Now selling...');
-              const secondSellAttempt = await sellAllCrypto(symbol);
-              
-              if (secondSellAttempt.success) {
-                setMessage('Successfully sold');
-              } else {
-                setMessage(secondSellAttempt.message || 'Error selling');
-              }
-            }, 1000);
-          } else {
-            setMessage('Could not create session');
-          }
-        } else {
-          setMessage(response.message || 'Error selling');
-        }
+        // Initial sell attempt result
+        setMessage(sellResponse.success ? 'Successfully sold' : sellResponse.message || 'Operation completed');
       }
       
-      // Refresh data after attempting to sell
+      // Refresh data after selling
       setTimeout(() => {
         fetchData();
         setMessage('');
-      }, 3000);
+      }, 2000);
     } catch (error) {
-      console.error('Sell error:', error);
-      setMessage('Error selling crypto');
+      console.error('Sell process error:', error);
+      setMessage('Error during sell process');
       
-      // Clear error message after a delay
+      // Clear message after delay
       setTimeout(() => {
         setMessage('');
       }, 2000);
     } finally {
       setTimeout(() => {
         setIsSelling(false);
-      }, 3000);
+      }, 2000);
     }
   };
 
@@ -236,7 +228,7 @@ const CryptoCard = ({ symbol }) => {
           onClick={handleTrade} 
           disabled={isProcessing || isSelling}
         >
-          {isProcessing ? message : 'First Purchase'}
+          {isProcessing ? 'Processing...' : 'First Purchase'}
         </button>
         
         <button 
@@ -244,7 +236,7 @@ const CryptoCard = ({ symbol }) => {
           onClick={handleSellAll} 
           disabled={isProcessing || isSelling}
         >
-          {isSelling ? message : 'Sell All'}
+          {isSelling ? 'Processing...' : 'Sell All'}
         </button>
       </div>
       
