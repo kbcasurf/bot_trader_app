@@ -1,4 +1,4 @@
-// Inside the handleSellAll function
+// Inside the handleSellAll function in SessionCard.jsx
 const handleSellAll = async () => {
   try {
     setLoading(true);

@@ -329,60 +329,113 @@ async function startSession(symbol, amount) {
 // Get session data
 // Add a utility function for formatting symbols consistently
 function formatSymbol(symbol) {
-// Remove any slashes if present
-return symbol.replace('/', '');
+  // Remove any slashes if present
+  return symbol.replace('/', '');
 }
 
 // Add a utility function for formatting display values
 function formatDisplayValue(value, decimals = 3) {
-return parseFloat(value).toFixed(decimals);
+  return parseFloat(value).toFixed(decimals);
 }
 
 // Update the getSession function to include formatted display values
 async function getSession(symbol) {
-try {
-const formattedSymbol = formatSymbol(symbol);
+  try {
+    const formattedSymbol = formatSymbol(symbol);
+    console.log(`Getting session for symbol: ${formattedSymbol}`);
+    
+    // First check if it's in memory
+    if (activeSessions && activeSessions[formattedSymbol]) {
+      console.log(`Found active session in memory for ${formattedSymbol}`);
+      // Get the latest data from database to ensure it's up to date
+      const sessions = await db.query(
+        'SELECT * FROM sessions WHERE id = ? AND active = TRUE',
+        [activeSessions[formattedSymbol].id]
+      );
+      
+      if (sessions.length > 0) {
+        const session = sessions[0];
+        const currentPrice = currentPrices[formattedSymbol] || await getCurrentPrice(formattedSymbol);
+        const currentValue = session.total_quantity * currentPrice;
+        const profitLoss = currentValue - session.total_invested;
 
-const sessions = await db.query(
-'SELECT * FROM sessions WHERE symbol = ? AND active = TRUE',
-[formattedSymbol]
-);
+        return {
+          active: true,
+          id: session.id,
+          symbol: formattedSymbol,
+          initial_investment: session.initial_investment,
+          total_invested: session.total_invested,
+          total_quantity: session.total_quantity,
+          display_quantity: formatDisplayValue(session.total_quantity),
+          current_price: currentPrice,
+          display_price: formatDisplayValue(currentPrice),
+          current_value: currentValue,
+          display_value: formatDisplayValue(currentValue),
+          profit_loss: profitLoss,
+          display_profit_loss: formatDisplayValue(profitLoss),
+          profit_loss_percentage: (profitLoss / session.total_invested) * 100,
+          display_percentage: formatDisplayValue((profitLoss / session.total_invested) * 100),
+          created_at: session.created_at,
+          updated_at: session.updated_at,
+        };
+      }
+    }
+    
+    // If not in memory or not found in DB by ID, try to find by symbol
+    console.log(`Querying database for active session with symbol ${formattedSymbol}`);
+    const sessions = await db.query(
+      'SELECT * FROM sessions WHERE symbol = ? AND active = TRUE ORDER BY created_at DESC LIMIT 1',
+      [formattedSymbol]
+    );
+    
+    if (sessions.length === 0) {
+      console.log(`No active session found in database for ${formattedSymbol}`);
+      return {
+        active: false,
+      };
+    }
+    
+    const session = sessions[0];
+    console.log(`Found active session in database for ${formattedSymbol}:`, session.id);
+    
+    // Update active sessions in memory
+    if (!activeSessions[formattedSymbol]) {
+      activeSessions[formattedSymbol] = {
+        id: session.id,
+        initialPrice: session.initial_price || 0,
+        lastBuyPrice: session.last_buy_price || 0,
+        totalInvested: session.total_invested,
+        totalQuantity: session.total_quantity,
+      };
+    }
+    
+    const currentPrice = currentPrices[formattedSymbol] || await getCurrentPrice(formattedSymbol);
+    const currentValue = session.total_quantity * currentPrice;
+    const profitLoss = currentValue - session.total_invested;
 
-if (sessions.length === 0) {
-return {
-active: false,
-};
-}
-
-const session = sessions[0];
-const currentPrice = currentPrices[formattedSymbol] || await getCurrentPrice(formattedSymbol);
-const currentValue = session.total_quantity * currentPrice;
-const profitLoss = currentValue - session.total_invested;
-
-return {
-active: true,
-id: session.id,
-symbol: formattedSymbol,
-initial_investment: session.initial_investment,
-total_invested: session.total_invested,
-total_quantity: session.total_quantity,
-// Add formatted display values
-display_quantity: formatDisplayValue(session.total_quantity),
-current_price: currentPrice,
-display_price: formatDisplayValue(currentPrice),
-current_value: currentValue,
-display_value: formatDisplayValue(currentValue),
-profit_loss: profitLoss,
-display_profit_loss: formatDisplayValue(profitLoss),
-profit_loss_percentage: (profitLoss / session.total_invested) * 100,
-display_percentage: formatDisplayValue((profitLoss / session.total_invested) * 100),
-created_at: session.created_at,
-updated_at: session.updated_at,
-};
-} catch (error) {
-console.error('Error getting session:', error);
-throw error;
-}
+    return {
+      active: true,
+      id: session.id,
+      symbol: formattedSymbol,
+      initial_investment: session.initial_investment,
+      total_invested: session.total_invested,
+      total_quantity: session.total_quantity,
+      display_quantity: formatDisplayValue(session.total_quantity),
+      current_price: currentPrice,
+      display_price: formatDisplayValue(currentPrice),
+      current_value: currentValue,
+      display_value: formatDisplayValue(currentValue),
+      profit_loss: profitLoss,
+      display_profit_loss: formatDisplayValue(profitLoss),
+      profit_loss_percentage: (profitLoss / session.total_invested) * 100,
+      display_percentage: formatDisplayValue((profitLoss / session.total_invested) * 100),
+      created_at: session.created_at,
+      updated_at: session.updated_at,
+    };
+  } catch (error) {
+    console.error('Error getting session:', error);
+    throw error;
+  }
 }
 
 // Get orders for a session
