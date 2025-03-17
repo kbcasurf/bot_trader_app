@@ -10,7 +10,64 @@ require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
 const BINANCE_API_URL = process.env.BINANCE_API_SERVER; // Testnet URL
-const BINANCE_WS_URL = 'wss://stream.binance.com:9443/ws';
+// Add this near the top of your file with other constants
+const BINANCE_WS_URL = process.env.BINANCE_WS_URL || 'wss://stream.binance.com:9443/ws';
+
+// Then in your setupBinanceWebsocket function
+function setupBinanceWebsocket(broadcastCallback) {
+  // Symbols to monitor
+  const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'PENDLEUSDT', 'DOGEUSDT', 'NEARUSDT'];
+  
+  // Create a WebSocket connection for each symbol
+  symbols.forEach(symbol => {
+    try {
+      console.log(`Connecting to Binance WebSocket for ${symbol}: ${BINANCE_WS_URL}/${symbol.toLowerCase()}@ticker`);
+      const ws = new WebSocket(`${BINANCE_WS_URL}/${symbol.toLowerCase()}@ticker`);
+      
+      ws.on('open', () => {
+        console.log(`WebSocket connection established for ${symbol}`);
+      });
+      
+      // In your WebSocket message handler:
+      ws.on('message', (data) => {
+        try {
+          const tickerData = JSON.parse(data);
+          const price = parseFloat(tickerData.c); // Current price
+          
+          // Store current price
+          currentPrices[symbol] = price;
+          
+          // Broadcast price update to clients
+          if (global.broadcastPriceUpdate) {
+            global.broadcastPriceUpdate(symbol, price);
+          }
+          
+          // Check if we should buy or sell based on price changes
+          checkTradingConditions(symbol, price);
+        } catch (error) {
+          console.error(`Error processing WebSocket data for ${symbol}:`, error);
+        }
+      });
+      
+      ws.on('error', (error) => {
+        console.error(`WebSocket error for ${symbol}:`, error);
+      });
+      
+      ws.on('close', () => {
+        console.log(`WebSocket connection closed for ${symbol}`);
+        
+        // Attempt to reconnect after 5 seconds
+        setTimeout(() => {
+          setupBinanceWebsocket();
+        }, 5000);
+      });
+      
+      websockets[symbol] = ws;
+    } catch (error) {
+      console.error(`Error setting up WebSocket for ${symbol}:`, error);
+    }
+  });
+}
 
 // Profit/Loss thresholds
 const PROFIT_THRESHOLD = parseFloat(process.env.VITE_PROFIT_THRESHOLD) || 5; // 5%

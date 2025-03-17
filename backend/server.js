@@ -16,43 +16,42 @@ const WebSocket = require('ws');
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Add this to your server.js file if it's not already there
+const WebSocket = require('ws');
+const http = require('http');
+
 // Create HTTP server
 const server = http.createServer(app);
 
-// Create WebSocket server
-const wss = new WebSocket.Server({ 
-  server,
-  path: '/ws'
-});
+// Create WebSocket server for frontend connections
+const wss = new WebSocket.Server({ server, path: '/ws' });
 
-// Store connected clients
-const clients = new Set();
-
-// WebSocket connection handler
+// Handle WebSocket connections
 wss.on('connection', (ws) => {
-  console.log('Client connected to WebSocket');
-  clients.add(ws);
+  console.log('Frontend client connected to WebSocket');
+  
+  ws.on('message', (message) => {
+    console.log('Received message from frontend:', message);
+  });
   
   ws.on('close', () => {
-    console.log('Client disconnected from WebSocket');
-    clients.delete(ws);
+    console.log('Frontend client disconnected from WebSocket');
   });
 });
 
-// Function to broadcast price updates to all connected clients
+// Define the broadcast function
 global.broadcastPriceUpdate = (symbol, price) => {
-  const message = JSON.stringify({
-    type: 'price',
-    symbol,
-    price
-  });
-  
-  clients.forEach(client => {
+  wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
+      client.send(JSON.stringify({ type: 'price', symbol, price }));
     }
   });
 };
+
+// Use server.listen instead of app.listen
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
 // Middleware
 app.use(helmet());

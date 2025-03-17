@@ -6,7 +6,10 @@ async function setupTradingBot() {
     // Load active sessions from database
     await binanceService.loadActiveSessions();
     
-    console.log('Trading bot initialized');
+    // Setup WebSocket connection to Binance API
+    binanceService.setupBinanceWebsocket();
+    
+    console.log('Trading bot initialized with Binance WebSocket connection');
   } catch (error) {
     console.error('Error setting up trading bot:', error);
   }
