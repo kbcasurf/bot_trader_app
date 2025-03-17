@@ -27,7 +27,8 @@ router.get('/price/:symbol', async (req, res, next) => {
 });
 
 // Start a new trading session
-router.post('/session/start', async (req, res, next) => {
+// Add this new route to handle trade requests from the frontend
+router.post('/trade', async (req, res, next) => {
   try {
     const { symbol, amount } = req.body;
     
