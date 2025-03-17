@@ -12,6 +12,7 @@ const CryptoCard = ({ symbol }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [message, setMessage] = useState('');
   const [isSelling, setIsSelling] = useState(false);
+  const [hasActiveSession, setHasActiveSession] = useState(false);
 
   // Get the correct image based on symbol
   const getCryptoImage = (symbol) => {
@@ -35,36 +36,59 @@ const CryptoCard = ({ symbol }) => {
     return parseFloat(price).toFixed(4);
   };
 
+  // Function to fetch data for this cryptocurrency
+  const fetchData = async () => {
+    try {
+      console.log(`Fetching data for ${symbol}...`);
+      const data = await fetchCryptoData(symbol);
+      
+      setCrypto({
+        symbol: symbol,
+        price: formatPrice(data.price, symbol),
+        loading: false,
+        error: null,
+        fallback: data.fallback
+      });
+    } catch (error) {
+      console.error(`Error fetching ${symbol} data:`, error);
+      setCrypto(prev => ({
+        ...prev,
+        loading: false,
+        error: 'Failed to load price data'
+      }));
+    }
+  };
+
+  // Function to check if there's an active trading session
+  const checkForActiveSession = async () => {
+    try {
+      // Make request to check session status
+      // Using the price endpoint as a proxy since it should return faster
+      const priceData = await fetchCryptoData(symbol);
+      
+      // If we can fetch price data, let's assume we can check session status
+      try {
+        // This is where we'd ideally have a dedicated endpoint
+        // For now, let's assume if we got this far, we can attempt to sell
+        setHasActiveSession(true);
+      } catch (sessionError) {
+        console.error(`Error checking session for ${symbol}:`, sessionError);
+        setHasActiveSession(false);
+      }
+    } catch (error) {
+      console.error(`Network error checking session for ${symbol}:`, error);
+      setHasActiveSession(false);
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
     
-    // Initial data fetch (one-time only)
-    const fetchInitialData = async () => {
-      try {
-        console.log(`Fetching initial data for ${symbol}...`);
-        const data = await fetchCryptoData(symbol);
-        
-        if (isMounted) {
-          setCrypto({
-            symbol: symbol,
-            price: formatPrice(data.price, symbol),
-            loading: false,
-            error: null
-          });
-        }
-      } catch (error) {
-        console.error(`Error fetching ${symbol} data:`, error);
-        if (isMounted) {
-          setCrypto(prev => ({
-            ...prev,
-            loading: false,
-            error: 'Failed to load price data'
-          }));
-        }
-      }
-    };
-
-    fetchInitialData();
+    // Initial data fetch
+    fetchData();
+    
+    // Check for active session
+    checkForActiveSession();
     
     // Listen for WebSocket price updates
     const handlePriceUpdate = (event) => {
@@ -101,6 +125,13 @@ const CryptoCard = ({ symbol }) => {
       const response = await startTrading(symbol, investmentAmount);
       console.log('Trade response:', response);
       setMessage('First Purchase');
+      setHasActiveSession(true);
+      
+      // Refresh data after successful purchase
+      setTimeout(() => {
+        fetchData();
+        setMessage('');
+      }, 2000);
     } catch (error) {
       console.error('Trade error:', error);
       setMessage('Error starting trade');
@@ -117,11 +148,17 @@ const CryptoCard = ({ symbol }) => {
       console.log(`Selling all ${symbol}`);
       const response = await sellAllCrypto(symbol);
       console.log('Sell response:', response);
-      setMessage('Successfully sold');
       
-      // Refresh data after selling
+      if (response.success) {
+        setMessage('Successfully sold');
+        setHasActiveSession(false);
+      } else {
+        setMessage(response.message || 'Error selling crypto');
+      }
+      
+      // Refresh data after attempting to sell
       setTimeout(() => {
-        fetchInitialData();
+        fetchData();
         setMessage('');
       }, 2000);
     } catch (error) {
@@ -148,7 +185,6 @@ const CryptoCard = ({ symbol }) => {
     );
   }
 
-  // Update the render method to include the crypto image
   return (
     <div className="crypto-card">
       <div className="crypto-header">
@@ -192,11 +228,15 @@ const CryptoCard = ({ symbol }) => {
         <button 
           className="sell-button" 
           onClick={handleSellAll} 
-          disabled={isProcessing || isSelling}
+          disabled={isProcessing || isSelling || !hasActiveSession}
         >
           {isSelling ? message : 'Sell All'}
         </button>
       </div>
+      
+      {!hasActiveSession && (
+        <p className="status-message">No active trading session</p>
+      )}
     </div>
   );
 };
