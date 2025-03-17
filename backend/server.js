@@ -16,10 +16,6 @@ const WebSocket = require('ws');
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Add this to your server.js file if it's not already there
-const WebSocket = require('ws');
-const http = require('http');
-
 // Create HTTP server
 const server = http.createServer(app);
 
