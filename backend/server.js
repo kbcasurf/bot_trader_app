@@ -44,11 +44,6 @@ global.broadcastPriceUpdate = (symbol, price) => {
   });
 };
 
-// Use server.listen instead of app.listen
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
 // Middleware
 app.use(helmet());
 app.use(cors());
@@ -211,11 +206,7 @@ async function startServer() {
     // Initialize database tables
     await initializeTables();
 
-    // Start the server
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
-
+    // REMOVED: Don't call app.listen here since we're using server.listen above
     // Setup Binance websocket connections
     setupBinanceWebsocket();
 
@@ -226,6 +217,11 @@ async function startServer() {
     process.exit(1);
   }
 }
+
+// Start the server with server.listen (already defined above)
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
 startServer();
 
