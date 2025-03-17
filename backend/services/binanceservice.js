@@ -134,7 +134,62 @@ async function getCurrentPrice(symbol) {
   }
 }
 
-// Update the placeMarketOrder function to ensure it's properly implemented
+// Add this utility function to round quantity according to step size
+function roundToStepSize(quantity, stepSize) {
+  if (!stepSize) return quantity;
+  
+  const precision = stepSize.toString().includes('.') 
+    ? stepSize.toString().split('.')[1].length 
+    : 0;
+  
+  return Math.floor(quantity / stepSize) * stepSize;
+}
+
+// Store symbol info including step sizes
+const symbolInfo = {};
+
+// Get symbol information including filters (lot size, etc.)
+async function getSymbolInfo(symbol) {
+  try {
+    // Check if we already have the info cached
+    if (symbolInfo[symbol]) {
+      return symbolInfo[symbol];
+    }
+    
+    // Get exchange info from Binance
+    const response = await axios.get(`${BINANCE_API_URL}/v3/exchangeInfo`, {
+      params: { symbol }
+    });
+    
+    const symbolData = response.data.symbols.find(s => s.symbol === symbol);
+    
+    if (!symbolData) {
+      throw new Error(`Symbol ${symbol} not found in exchange info`);
+    }
+    
+    // Extract lot size filter
+    const lotSizeFilter = symbolData.filters.find(f => f.filterType === 'LOT_SIZE');
+    
+    // Store in cache
+    symbolInfo[symbol] = {
+      minQty: parseFloat(lotSizeFilter?.minQty || 0),
+      maxQty: parseFloat(lotSizeFilter?.maxQty || 0),
+      stepSize: parseFloat(lotSizeFilter?.stepSize || 0)
+    };
+    
+    console.log(`Symbol info for ${symbol}:`, symbolInfo[symbol]);
+    
+    return symbolInfo[symbol];
+  } catch (error) {
+    console.error(`Error getting symbol info for ${symbol}:`, error);
+    // Return default values if we can't get the info
+    return {
+      minQty: 0,
+      maxQty: 0,
+      stepSize: 0
+    };
+  }
+}
 
 // Place a market order
 async function placeMarketOrder(symbol, side, quantity) {
@@ -166,8 +221,30 @@ async function placeMarketOrder(symbol, side, quantity) {
       };
     }
 
+    // Get symbol info to determine step size
+    const info = await getSymbolInfo(symbol);
+    
+    // Convert quantity to a number to ensure proper calculations
+    let numQuantity = parseFloat(quantity);
+    
+    // Round quantity to match step size
+    if (info.stepSize > 0) {
+      numQuantity = roundToStepSize(numQuantity, info.stepSize);
+    }
+    
+    // Ensure quantity is within min/max bounds
+    if (info.minQty > 0 && numQuantity < info.minQty) {
+      numQuantity = info.minQty;
+    }
+    
+    if (info.maxQty > 0 && numQuantity > info.maxQty) {
+      numQuantity = info.maxQty;
+    }
+    
     // Format quantity to appropriate precision
-    const formattedQuantity = parseFloat(quantity).toFixed(8);
+    const formattedQuantity = numQuantity.toString();
+    
+    console.log(`Placing ${side} order for ${symbol}, original quantity: ${quantity}, adjusted quantity: ${formattedQuantity}`);
     
     const params = {
       symbol,
@@ -387,11 +464,18 @@ async function sellAllCrypto(symbol) {
     // Format the symbol properly
     const formattedSymbol = symbol.replace('/', '');
     
+    console.log(`Attempting to sell all ${formattedSymbol}`);
+    
     // Get current session
     const session = await getSession(formattedSymbol);
     
     if (!session || !session.active) {
-      throw new Error(`No active session found for ${formattedSymbol}`);
+      console.log(`No active session found for ${formattedSymbol}`);
+      // Instead of throwing an error, return a meaningful response
+      return { 
+        success: false, 
+        message: `No active session found for ${formattedSymbol}` 
+      };
     }
     
     // Get current price
@@ -400,12 +484,75 @@ async function sellAllCrypto(symbol) {
     // Calculate quantity to sell (all available)
     const quantity = session.total_quantity || 0;
     
+    console.log(`Selling ${quantity} of ${formattedSymbol} at $${currentPrice}`);
+    
     if (quantity <= 0) {
-      return { message: 'No crypto to sell', symbol: formattedSymbol, quantity };
+      return { 
+        success: false,
+        message: 'No crypto to sell', 
+        symbol: formattedSymbol, 
+        quantity 
+      };
     }
     
-    // Place sell order - using the correct function and parameters
-    const order = await placeMarketOrder(formattedSymbol, 'sell', quantity);
+    // Check if API credentials are set
+    if (!process.env.BINANCE_API_KEY || !process.env.BINANCE_API_SECRET) {
+      console.log('Using mock sell order since API credentials are not set');
+      
+      // Calculate total
+      const total = quantity * currentPrice;
+      
+      // Save order to database
+      await db.query(
+        'INSERT INTO orders (session_id, symbol, side, price, quantity, total) VALUES (?, ?, ?, ?, ?, ?)',
+        [session.id, formattedSymbol, 'sell', currentPrice, quantity, total]
+      );
+      
+      // Update session
+      await db.query(
+        'UPDATE sessions SET active = FALSE, updated_at = NOW() WHERE id = ?',
+        [session.id]
+      );
+      
+      // Calculate profit/loss
+      const profitLoss = total - session.total_invested;
+      const profitLossPercentage = (profitLoss / session.total_invested) * 100;
+      
+      // Send notification if telegram service is available
+      if (typeof telegramService !== 'undefined' && telegramService && telegramService.sendMessage) {
+        await telegramService.sendMessage(
+          `🔴 SOLD ALL ${formattedSymbol} (MOCK)\n` +
+          `🔢 Quantity: ${quantity}\n` +
+          `💵 Price: $${currentPrice}\n` +
+          `💸 Total: $${total.toFixed(2)}\n` +
+          `${profitLoss >= 0 ? '✅ Profit' : '❌ Loss'}: $${profitLoss.toFixed(2)} (${profitLossPercentage.toFixed(2)}%)`
+        );
+      }
+      
+      // Remove from active sessions if it exists there
+      if (activeSessions && activeSessions[formattedSymbol]) {
+        delete activeSessions[formattedSymbol];
+      }
+      
+      return {
+        success: true,
+        message: 'Successfully sold all crypto (MOCK)',
+        symbol: formattedSymbol,
+        price: currentPrice,
+        quantity,
+        total,
+        profit_loss: profitLoss,
+        profit_loss_percentage: profitLossPercentage
+      };
+    }
+    
+    // Format quantity to appropriate precision
+    const formattedQuantity = parseFloat(quantity).toFixed(8);
+    
+    // Place sell order
+    const order = await placeMarketOrder(formattedSymbol, 'sell', formattedQuantity);
+    
+    console.log('Sell order placed:', order);
     
     // Calculate total
     const total = quantity * currentPrice;
@@ -427,7 +574,7 @@ async function sellAllCrypto(symbol) {
     const profitLossPercentage = (profitLoss / session.total_invested) * 100;
     
     // Send notification
-    if (telegramService && telegramService.sendMessage) {
+    if (typeof telegramService !== 'undefined' && telegramService && telegramService.sendMessage) {
       await telegramService.sendMessage(
         `🔴 SOLD ALL ${formattedSymbol}\n` +
         `🔢 Quantity: ${quantity}\n` +
@@ -438,11 +585,12 @@ async function sellAllCrypto(symbol) {
     }
     
     // Remove from active sessions if it exists there
-    if (activeSessions[formattedSymbol]) {
+    if (activeSessions && activeSessions[formattedSymbol]) {
       delete activeSessions[formattedSymbol];
     }
     
     return {
+      success: true,
       message: 'Successfully sold all crypto',
       symbol: formattedSymbol,
       price: currentPrice,
@@ -453,7 +601,12 @@ async function sellAllCrypto(symbol) {
     };
   } catch (error) {
     console.error(`Error selling all ${symbol}:`, error);
-    throw error;
+    // Return error response instead of throwing
+    return {
+      success: false,
+      message: `Error selling all ${symbol}: ${error.message}`,
+      error: error.message
+    };
   }
 }
 
@@ -580,7 +733,3 @@ module.exports = {
   loadActiveSessions,
   sellAllCrypto, // Make sure this is exported
 };
-
-// Remove this duplicate export if it exists
-// exports.sellAllCrypto = async (symbol) => {
-// ... };
