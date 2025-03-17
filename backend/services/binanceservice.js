@@ -241,6 +241,9 @@ async function placeMarketOrder(symbol, side, quantity) {
       
       // Round to the correct precision
       numQuantity = Math.floor(numQuantity / info.stepSize) * info.stepSize;
+      
+      // Format with exact precision required by Binance
+      // This is the key fix - use toFixed with the exact precision needed
       numQuantity = parseFloat(numQuantity.toFixed(precision));
     }
     
@@ -254,7 +257,8 @@ async function placeMarketOrder(symbol, side, quantity) {
       console.log(`Quantity adjusted to maximum allowed: ${info.maxQty}`);
     }
     
-    // Format quantity to appropriate precision
+    // Format quantity to appropriate precision - IMPORTANT FIX
+    // Use toString() instead of keeping the floating point representation
     const formattedQuantity = numQuantity.toString();
     
     console.log(`Placing ${side} order for ${symbol}, original quantity: ${quantity}, adjusted quantity: ${formattedQuantity}`);
@@ -284,6 +288,8 @@ async function placeMarketOrder(symbol, side, quantity) {
           throw new Error(`Filter failure: LOT_SIZE. Quantity: ${formattedQuantity}. ${errorMsg}`);
         } else if (errorCode === -2010) {
           throw new Error(`Insufficient balance. ${errorMsg}`);
+        } else if (errorCode === -1111) {
+          throw new Error(`Precision error: ${errorMsg}. Try a different quantity.`);
         } else {
           throw new Error(`Binance API error (${errorCode}): ${errorMsg}`);
         }
@@ -306,20 +312,26 @@ async function startSession(symbol, amount) {
     // Get current price
     const price = await getCurrentPrice(formattedSymbol);
     
-    // Calculate quantity based on investment amount
-    let quantity = (amount / price).toFixed(8);
-    
     // Get symbol info to ensure quantity meets requirements
     const info = await getSymbolInfo(formattedSymbol);
     
+    // Calculate quantity based on investment amount
+    let rawQuantity = amount / price;
+    
     // Adjust quantity to match step size
+    let quantity;
     if (info.stepSize > 0) {
       const precision = info.stepSize.toString().includes('.') 
         ? info.stepSize.toString().split('.')[1].length 
         : 0;
       
-      quantity = Math.floor(parseFloat(quantity) / info.stepSize) * info.stepSize;
+      // Round down to the nearest step size
+      quantity = Math.floor(rawQuantity / info.stepSize) * info.stepSize;
+      
+      // Format with exact precision required by Binance
       quantity = quantity.toFixed(precision);
+    } else {
+      quantity = rawQuantity.toFixed(8); // Default to 8 decimal places
     }
     
     console.log(`Starting session for ${formattedSymbol} with amount $${amount}, calculated quantity: ${quantity}`);
@@ -525,8 +537,29 @@ async function buyMore(symbol, price) {
     
     if (!session) return;
     
+    // Get symbol info to determine step size
+    const info = await getSymbolInfo(symbol);
+    
     // Calculate quantity based on additional purchase amount
-    const quantity = (ADDITIONAL_PURCHASE_AMOUNT / price).toFixed(8);
+    let rawQuantity = ADDITIONAL_PURCHASE_AMOUNT / price;
+    
+    // Adjust quantity to match step size
+    let quantity;
+    if (info.stepSize > 0) {
+      const precision = info.stepSize.toString().includes('.') 
+        ? info.stepSize.toString().split('.')[1].length 
+        : 0;
+      
+      // Round down to the nearest step size
+      quantity = Math.floor(rawQuantity / info.stepSize) * info.stepSize;
+      
+      // Format with exact precision required by Binance
+      quantity = quantity.toFixed(precision);
+    } else {
+      quantity = rawQuantity.toFixed(8); // Default to 8 decimal places
+    }
+    
+    console.log(`Buying more ${symbol} at $${price}, calculated quantity: ${quantity}`);
     
     // Place buy order
     const order = await placeMarketOrder(symbol, 'buy', quantity);
