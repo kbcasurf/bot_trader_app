@@ -3,22 +3,6 @@
 // Determine log level from environment
 const LOG_LEVEL = process.env.LOG_LEVEL;
 
-// Map log levels to numeric values for comparison
-const LOG_LEVELS = {
-  error: 0,
-  warn: 1,
-  info: 2,
-  debug: 3
-};
-
-// Current numeric log level
-const CURRENT_LEVEL = LOG_LEVELS[LOG_LEVEL.toLowerCase()] || LOG_LEVELS.info;
-
-// Helper to check if a given level should be logged
-function shouldLog(level) {
-  return LOG_LEVELS[level.toLowerCase()] <= CURRENT_LEVEL;
-}
-
 // Format a log message
 function formatMessage(level, message, data) {
   const timestamp = new Date().toISOString();
