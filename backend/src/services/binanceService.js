@@ -1,282 +1,302 @@
-const Binance = require('binance-api-node').default;
-const logger = require('../utils/logger');
+const Binance = require('node-binance-api');
+const mariadb = require('mariadb');
+const config = require('../config');
 
-// Create Binance client instance
-const binanceClient = Binance({
-  apiKey: process.env.BINANCE_API_KEY,
-  apiSecret: process.env.BINANCE_API_SECRET,
-  getTime: () => Date.now()
+// Create a pool for database connections
+const pool = mariadb.createPool({
+  host: config.database.host,
+  port: config.database.port,
+  user: config.database.user,
+  password: config.database.password,
+  database: config.database.database,
+  connectionLimit: 5
 });
 
-/**
- * Setup Binance websocket connections for all supported trading pairs
- */
-function setupWebsocket() {
-  try {
-    const supportedPairs = require('../config/binance').supportedPairs;
-    logger.info(`Setting up Binance websocket connections for ${supportedPairs.length} pairs`);
-    
-    // Create a connection for each supported pair
-    const connections = supportedPairs.map(symbol => {
-      return startPriceStream(symbol, (priceData) => {
-        // Emit the price update to any connected websocket clients
-        const io = require('../app').get('io');
-        if (io) {
-          io.emit('priceUpdate', {
-            symbol: priceData.symbol,
-            price: priceData.price,
-            timestamp: priceData.timestamp
-          });
-        }
-      });
-    });
-    
-    logger.info(`Established ${connections.length} Binance websocket connections`);
-    return connections;
-  } catch (error) {
-    logger.error('Error setting up Binance websocket connections:', error);
-    throw error;
+// Initialize Binance API client
+const binance = new Binance().options({
+  APIKEY: config.binance.apiKey,
+  APISECRET: config.binance.apiSecret,
+  urls: {
+    base: config.binance.baseUrl
   }
-}
+});
 
-/**
- * Test connection to Binance API
- */
-async function testConnection() {
+// Get all trading pairs from the database
+exports.getTradingPairs = async () => {
+  let conn;
   try {
-    const ping = await binanceClient.ping();
-    logger.info('Binance API connection successful');
-    return { success: true, ping };
+    conn = await pool.getConnection();
+    const rows = await conn.query('SELECT * FROM trading_pairs');
+    return rows;
   } catch (error) {
-    logger.error('Binance API connection error:', error);
+    console.error('Error fetching trading pairs:', error);
     throw error;
+  } finally {
+    if (conn) conn.release();
   }
-}
+};
 
-/**
- * Get account information
- */
-async function getAccountInfo() {
+// Get a single trading pair by ID
+exports.getTradingPairById = async (tradingPairId) => {
+  let conn;
   try {
-    const info = await binanceClient.accountInfo();
-    logger.debug('Account info retrieved successfully');
-    return info;
-  } catch (error) {
-    logger.error('Error retrieving account info:', error);
-    throw error;
-  }
-}
-
-/**
- * Get current price for a symbol
- * @param {string} symbol - Trading pair symbol
- */
-async function getCurrentPrice(symbol) {
-  try {
-    const ticker = await binanceClient.prices({ symbol });
-    return parseFloat(ticker[symbol]);
-  } catch (error) {
-    logger.error(`Error getting current price for ${symbol}:`, error);
-    throw error;
-  }
-}
-
-/**
- * Start a WebSocket connection for price updates
- * @param {string} symbol - Trading pair symbol
- * @param {Function} callback - Callback function for price updates
- */
-async function startPriceStream(symbol, callback) {
-  try {
-    // Convert symbol to lowercase for WebSocket
-    const lowerSymbol = symbol.toLowerCase();
-    
-    // Start WebSocket for trade updates
-    const stream = binanceClient.ws.trades(symbol, trade => {
-      callback({
-        symbol,
-        price: parseFloat(trade.price),
-        quantity: parseFloat(trade.quantity),
-        timestamp: trade.eventTime
-      });
-    });
-    
-    logger.info(`Price stream started for ${symbol}`);
-    return stream;
-  } catch (error) {
-    logger.error(`Error starting price stream for ${symbol}:`, error);
-    throw error;
-  }
-}
-
-/**
- * Close a WebSocket stream
- * @param {Object} stream - WebSocket stream to close
- */
-async function closeStream(stream) {
-  try {
-    if (stream && typeof stream.close === 'function') {
-      stream.close();
-      logger.info('WebSocket stream closed');
+    conn = await pool.getConnection();
+    const rows = await conn.query('SELECT * FROM trading_pairs WHERE id = ?', [tradingPairId]);
+    if (rows.length === 0) {
+      throw new Error(`Trading pair with ID ${tradingPairId} not found`);
     }
-    return true;
+    return rows[0];
   } catch (error) {
-    logger.error('Error closing WebSocket stream:', error);
-    return false;
-  }
-}
-
-/**
- * Execute a buy order
- * @param {string} symbol - Trading pair symbol
- * @param {number} quantity - Quantity to buy
- */
-async function executeBuy(symbol, quantity) {
-  try {
-    // Round quantity to appropriate precision
-    const symbolInfo = await getSymbolInfo(symbol);
-    const roundedQuantity = roundStepSize(quantity, symbolInfo.stepSize);
-    
-    // Execute market buy
-    const order = await binanceClient.order({
-      symbol: symbol,
-      side: 'BUY',
-      type: 'MARKET',
-      quantity: roundedQuantity.toString()
-    });
-    
-    logger.info(`Buy order executed for ${symbol}: ${roundedQuantity}`);
-    return order;
-  } catch (error) {
-    logger.error(`Error executing buy order for ${symbol}:`, error);
+    console.error(`Error fetching trading pair with ID ${tradingPairId}:`, error);
     throw error;
+  } finally {
+    if (conn) conn.release();
   }
-}
+};
 
-/**
- * Execute a sell order
- * @param {string} symbol - Trading pair symbol
- * @param {number} quantity - Quantity to sell
- */
-async function executeSell(symbol, quantity) {
+// Get current price for a symbol from Binance
+exports.getCurrentPrice = async (symbol) => {
   try {
-    // Round quantity to appropriate precision
-    const symbolInfo = await getSymbolInfo(symbol);
-    const roundedQuantity = roundStepSize(quantity, symbolInfo.stepSize);
-    
-    // Execute market sell
-    const order = await binanceClient.order({
-      symbol: symbol,
-      side: 'SELL',
-      type: 'MARKET',
-      quantity: roundedQuantity.toString()
-    });
-    
-    logger.info(`Sell order executed for ${symbol}: ${roundedQuantity}`);
-    return order;
-  } catch (error) {
-    logger.error(`Error executing sell order for ${symbol}:`, error);
-    throw error;
-  }
-}
-
-/**
- * Get detailed information about a trading symbol
- * @param {string} symbol - Trading pair symbol
- */
-async function getSymbolInfo(symbol) {
-  try {
-    const exchangeInfo = await binanceClient.exchangeInfo();
-    const symbolInfo = exchangeInfo.symbols.find(s => s.symbol === symbol);
-    
-    if (!symbolInfo) {
-      throw new Error(`Symbol ${symbol} not found in exchange info`);
-    }
-    
-    // Extract lot size filter for step size
-    const lotSizeFilter = symbolInfo.filters.find(filter => filter.filterType === 'LOT_SIZE');
-    const stepSize = lotSizeFilter ? parseFloat(lotSizeFilter.stepSize) : 0.00000100;
-    
-    return {
-      baseAsset: symbolInfo.baseAsset,
-      quoteAsset: symbolInfo.quoteAsset,
-      stepSize: stepSize,
-      minQty: parseFloat(lotSizeFilter.minQty),
-      maxQty: parseFloat(lotSizeFilter.maxQty)
+    // In Phase 1, we'll simulate price data
+    // In later phases, this would make a real API call to Binance
+    const mockPrices = {
+      'BTCUSDT': 67500.25,
+      'SOLUSDT': 145.75,
+      'XRPUSDT': 0.55,
+      'PENDLEUSDT': 2.35,
+      'DOGEUSDT': 0.12,
+      'NEARUSDT': 4.85
     };
-  } catch (error) {
-    logger.error(`Error getting symbol info for ${symbol}:`, error);
-    throw error;
-  }
-}
-
-/**
- * Round quantity to step size precision
- * @param {number} quantity - Quantity to round
- * @param {number} stepSize - Step size from symbol info
- */
-function roundStepSize(quantity, stepSize) {
-  if (!stepSize) {
-    return quantity;
-  }
-  
-  // Calculate precision based on step size
-  const precision = stepSize.toString().split('.')[1]?.length || 0;
-  
-  // Round down to step size
-  return Math.floor(quantity / stepSize) * stepSize;
-}
-
-/**
- * Get USDT balance
- */
-async function getUSDTBalance() {
-  try {
-    const account = await binanceClient.accountInfo();
-    const usdtBalance = account.balances.find(b => b.asset === 'USDT');
-    return {
-      free: parseFloat(usdtBalance.free),
-      locked: parseFloat(usdtBalance.locked)
-    };
-  } catch (error) {
-    logger.error('Error getting USDT balance:', error);
-    throw error;
-  }
-}
-
-/**
- * Get balance for specific crypto
- * @param {string} asset - Asset symbol (e.g., "BTC")
- */
-async function getAssetBalance(asset) {
-  try {
-    const account = await binanceClient.accountInfo();
-    const assetBalance = account.balances.find(b => b.asset === asset);
     
-    if (!assetBalance) {
-      return { free: 0, locked: 0 };
+    // Add some random fluctuation for simulation
+    const basePrice = mockPrices[symbol] || 100;
+    const fluctuation = (Math.random() - 0.5) * 0.02; // +/- 1% change
+    const price = basePrice * (1 + fluctuation);
+    
+    return parseFloat(price.toFixed(getPrecision(basePrice)));
+  } catch (error) {
+    console.error(`Error fetching price for ${symbol}:`, error);
+    throw error;
+  }
+};
+
+// Helper function for price precision
+function getPrecision(price) {
+  if (price < 0.1) return 6;
+  if (price < 1) return 5;
+  if (price < 10) return 4;
+  if (price < 1000) return 2;
+  return 2;
+}
+
+// Get holdings for a trading pair
+exports.getHoldings = async (tradingPairId) => {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    const rows = await conn.query(
+      'SELECT * FROM holdings WHERE trading_pair_id = ?',
+      [tradingPairId]
+    );
+    
+    if (rows.length === 0) {
+      // Return default holdings with zero quantity
+      return {
+        tradingPairId: parseInt(tradingPairId),
+        quantity: 0,
+        averageBuyPrice: 0,
+        lastBuyPrice: 0
+      };
     }
     
     return {
-      free: parseFloat(assetBalance.free),
-      locked: parseFloat(assetBalance.locked)
+      tradingPairId: rows[0].trading_pair_id,
+      quantity: parseFloat(rows[0].quantity),
+      averageBuyPrice: parseFloat(rows[0].average_buy_price || 0),
+      lastBuyPrice: parseFloat(rows[0].last_buy_price || 0)
     };
   } catch (error) {
-    logger.error(`Error getting ${asset} balance:`, error);
+    console.error(`Error fetching holdings for trading pair ${tradingPairId}:`, error);
     throw error;
+  } finally {
+    if (conn) conn.release();
   }
-}
+};
 
-module.exports = {
-  testConnection,
-  getAccountInfo,
-  getCurrentPrice,
-  startPriceStream,
-  closeStream,
-  executeBuy,
-  executeSell,
-  getSymbolInfo,
-  getUSDTBalance,
-  getAssetBalance,
-  setupWebsocket
+// Get transaction history for a trading pair
+exports.getTransactions = async (tradingPairId) => {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    const rows = await conn.query(
+      'SELECT * FROM transactions WHERE trading_pair_id = ? ORDER BY created_at DESC',
+      [tradingPairId]
+    );
+    
+    return rows.map(row => ({
+      id: row.id,
+      tradingPairId: row.trading_pair_id,
+      type: row.transaction_type,
+      quantity: parseFloat(row.quantity),
+      price: parseFloat(row.price),
+      totalAmount: parseFloat(row.total_amount),
+      status: row.status,
+      timestamp: row.created_at
+    }));
+  } catch (error) {
+    console.error(`Error fetching transactions for trading pair ${tradingPairId}:`, error);
+    throw error;
+  } finally {
+    if (conn) conn.release();
+  }
+};
+
+// Execute a buy order
+exports.executeBuyOrder = async (tradingPairId, amount) => {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    
+    // Get trading pair information
+    const tradingPair = await exports.getTradingPairById(tradingPairId);
+    
+    // Get current price from Binance (or simulation in Phase 1)
+    const currentPrice = await exports.getCurrentPrice(tradingPair.symbol);
+    
+    // Calculate quantity based on investment amount
+    const quantity = amount / currentPrice;
+    
+    // Start transaction
+    await conn.beginTransaction();
+    
+    // Insert transaction record
+    const transactionResult = await conn.query(
+      `INSERT INTO transactions 
+       (trading_pair_id, transaction_type, quantity, price, total_amount, status) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [tradingPairId, 'BUY', quantity, currentPrice, amount, 'COMPLETED']
+    );
+    
+    const transactionId = transactionResult.insertId;
+    
+    // Update or insert holdings
+    const existingHoldings = await conn.query(
+      'SELECT * FROM holdings WHERE trading_pair_id = ?',
+      [tradingPairId]
+    );
+    
+    if (existingHoldings.length > 0) {
+      // Update existing holdings
+      const currentHoldings = existingHoldings[0];
+      const currentQuantity = parseFloat(currentHoldings.quantity);
+      const newQuantity = currentQuantity + quantity;
+      
+      // Calculate new average buy price
+      const currentValue = currentQuantity * parseFloat(currentHoldings.average_buy_price || 0);
+      const newValue = quantity * currentPrice;
+      const newAverageBuyPrice = (currentValue + newValue) / newQuantity;
+      
+      await conn.query(
+        `UPDATE holdings 
+         SET quantity = ?, average_buy_price = ?, last_buy_price = ? 
+         WHERE trading_pair_id = ?`,
+        [newQuantity, newAverageBuyPrice, currentPrice, tradingPairId]
+      );
+    } else {
+      // Insert new holdings
+      await conn.query(
+        `INSERT INTO holdings 
+         (trading_pair_id, quantity, average_buy_price, last_buy_price) 
+         VALUES (?, ?, ?, ?)`,
+        [tradingPairId, quantity, currentPrice, currentPrice]
+      );
+    }
+    
+    // Commit transaction
+    await conn.commit();
+    
+    // Return transaction details
+    return {
+      id: transactionId,
+      tradingPairId: parseInt(tradingPairId),
+      type: 'BUY',
+      quantity: parseFloat(quantity.toFixed(8)),
+      price: currentPrice,
+      totalAmount: parseFloat(amount),
+      status: 'COMPLETED',
+      timestamp: new Date()
+    };
+  } catch (error) {
+    if (conn) await conn.rollback();
+    console.error('Error executing buy order:', error);
+    throw error;
+  } finally {
+    if (conn) conn.release();
+  }
+};
+
+// Execute a sell all order
+exports.executeSellAllOrder = async (tradingPairId) => {
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    
+    // Get trading pair information
+    const tradingPair = await exports.getTradingPairById(tradingPairId);
+    
+    // Get current holdings
+    const holdings = await exports.getHoldings(tradingPairId);
+    
+    if (holdings.quantity <= 0) {
+      throw new Error('No holdings to sell');
+    }
+    
+    // Get current price from Binance (or simulation in Phase 1)
+    const currentPrice = await exports.getCurrentPrice(tradingPair.symbol);
+    
+    // Calculate total amount from selling all holdings
+    const totalAmount = holdings.quantity * currentPrice;
+    
+    // Start transaction
+    await conn.beginTransaction();
+    
+    // Insert transaction record
+    const transactionResult = await conn.query(
+      `INSERT INTO transactions 
+       (trading_pair_id, transaction_type, quantity, price, total_amount, status) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [tradingPairId, 'SELL', holdings.quantity, currentPrice, totalAmount, 'COMPLETED']
+    );
+    
+    const transactionId = transactionResult.insertId;
+    
+    // Reset holdings
+    await conn.query(
+      `UPDATE holdings 
+       SET quantity = 0, average_buy_price = 0, last_buy_price = 0 
+       WHERE trading_pair_id = ?`,
+      [tradingPairId]
+    );
+    
+    // Commit transaction
+    await conn.commit();
+    
+    // Return transaction details
+    return {
+      id: transactionId,
+      tradingPairId: parseInt(tradingPairId),
+      type: 'SELL',
+      quantity: parseFloat(holdings.quantity),
+      price: currentPrice,
+      totalAmount: parseFloat(totalAmount.toFixed(2)),
+      status: 'COMPLETED',
+      timestamp: new Date()
+    };
+  } catch (error) {
+    if (conn) await conn.rollback();
+    console.error('Error executing sell all order:', error);
+    throw error;
+  } finally {
+    if (conn) conn.release();
+  }
 };

@@ -1,33 +1,83 @@
-import Vue from 'vue';
+import { createApp } from 'vue';
 import App from './App.vue';
-import store from './store';
-import api from './services/api';
+import { createStore } from 'vuex';
+import './assets/styles/main.css';
 
-// Make API available in all components
-Vue.prototype.$api = api;
-
-// Configure Vue
-Vue.config.productionTip = false;
-
-// Format filters
-Vue.filter('formatPrice', (value) => {
-  if (!value) return '0.00';
-  return parseFloat(value).toFixed(2);
+// Create a new store instance
+const store = createStore({
+  state() {
+    return {
+      tradingPairs: [],
+      holdings: {},
+      transactions: {},
+      priceData: {}
+    };
+  },
+  mutations: {
+    setTradingPairs(state, pairs) {
+      state.tradingPairs = pairs;
+    },
+    updateHoldings(state, { symbol, data }) {
+      state.holdings[symbol] = data;
+    },
+    updateTransactions(state, { symbol, data }) {
+      state.transactions[symbol] = data;
+    },
+    updatePriceData(state, { symbol, price }) {
+      state.priceData[symbol] = price;
+    }
+  },
+  actions: {
+    async fetchTradingPairs({ commit }) {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/trading-pairs`);
+        const data = await response.json();
+        commit('setTradingPairs', data);
+        return data;
+      } catch (error) {
+        console.error('Error fetching trading pairs:', error);
+        return [];
+      }
+    },
+    async fetchHoldings({ commit }, symbol) {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/holdings/${symbol}`);
+        const data = await response.json();
+        commit('updateHoldings', { symbol, data });
+        return data;
+      } catch (error) {
+        console.error(`Error fetching holdings for ${symbol}:`, error);
+        return null;
+      }
+    },
+    async fetchTransactions({ commit }, symbol) {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/transactions/${symbol}`);
+        const data = await response.json();
+        commit('updateTransactions', { symbol, data });
+        return data;
+      } catch (error) {
+        console.error(`Error fetching transactions for ${symbol}:`, error);
+        return [];
+      }
+    }
+  },
+  getters: {
+    getTradingPair: (state) => (symbol) => {
+      return state.tradingPairs.find(pair => pair.symbol === symbol);
+    },
+    getHoldings: (state) => (symbol) => {
+      return state.holdings[symbol] || null;
+    },
+    getTransactions: (state) => (symbol) => {
+      return state.transactions[symbol] || [];
+    },
+    getCurrentPrice: (state) => (symbol) => {
+      return state.priceData[symbol] || null;
+    }
+  }
 });
 
-Vue.filter('formatQuantity', (value) => {
-  if (!value) return '0.00000000';
-  return parseFloat(value).toFixed(8);
-});
-
-Vue.filter('formatDate', (dateString) => {
-  if (!dateString) return '';
-  const date = new Date(dateString);
-  return date.toLocaleString();
-});
-
-// Create Vue instance
-new Vue({
-  store,
-  render: h => h(App)
-}).$mount('#app');
+createApp(App)
+  .use(store)
+  .mount('#app');
