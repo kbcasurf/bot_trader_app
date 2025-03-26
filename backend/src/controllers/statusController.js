@@ -1,6 +1,6 @@
 const os = require('os');
 const db = require('../../config/database');
-const logger = require('../../utils/logger');
+const logger = require('../utils/logger');
 const packageJson = require('../../package.json');
 
 // Get overall system status

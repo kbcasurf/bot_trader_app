@@ -1,5 +1,5 @@
 const db = require('../../config/database');
-const logger = require('../../utils/logger');
+const logger = require('../utils/logger');
 
 // Get system status
 exports.getSystemStatus = async (req, res, next) => {
