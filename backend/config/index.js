@@ -9,26 +9,26 @@ dotenv.config();
 // Load environment variables with defaults
 const config = {
     database: {
-      host: process.env.DB_HOST || 'database',
-      port: parseInt(process.env.DB_PORT || '3306', 10),
-      user: process.env.DB_USER || 'trading_bot_user',
+      host: process.env.DB_HOST,
+      port: parseInt(process.env.DB_PORT, 10),
+      user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME || 'crypto_trading_bot',
+      database: process.env.DB_NAME,
       connectionLimit: 5
     },
     server: {
-      port: parseInt(process.env.PORT || '5000', 10),
-      env: process.env.NODE_ENV || 'development'
+      port: parseInt(process.env.PORT, 10),
+      env: process.env.NODE_ENV
     },
     jwt: {
       secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_EXPIRES_IN || '24h'
+      expiresIn: process.env.JWT_EXPIRES_IN
     },
     binance: {
       apiKey: process.env.BINANCE_API_KEY,
       apiSecret: process.env.BINANCE_API_SECRET,
-      baseUrl: process.env.BINANCE_API_URL || 'https://testnet.binance.vision/',
-      websocketUrl: 'wss://stream.binance.com:9443'
+      baseUrl: process.env.BINANCE_API_URL,  
+      websocketUrl: process.env.BINANCE_WEBSOCKET_URL
     },
     telegram: {
       botToken: process.env.TELEGRAM_BOT_TOKEN,
@@ -41,7 +41,7 @@ const apiRoutes = require('./src/routes/api');
 
 // Create Express app
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT;
 
 // Middleware
 app.use(helmet());
@@ -62,7 +62,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({
     error: {
       message: 'Something went wrong on the server',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+      details: process.env.NODE_ENV ? err.message : undefined
     }
   });
 });

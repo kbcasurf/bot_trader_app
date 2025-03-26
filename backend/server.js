@@ -26,7 +26,7 @@ function checkRequiredEnvVars() {
 }
 
 // Get port from environment or default to 5000
-const port = process.env.PORT || 5000;
+const port = process.env.PORT;
 
 // Create HTTP server
 const server = http.createServer(app);

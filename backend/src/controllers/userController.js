@@ -28,8 +28,8 @@ exports.register = async (req, res, next) => {
       },
       token: jwt.sign(
         { id: 1, username, email },
-        process.env.JWT_SECRET || 'your-default-secret-key',
-        { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN }
       )
     });
   } catch (error) {
@@ -64,8 +64,8 @@ exports.login = async (req, res, next) => {
       },
       token: jwt.sign(
         { id: 1, username: 'demouser', email },
-        process.env.JWT_SECRET || 'your-default-secret-key',
-        { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN }
       )
     });
   } catch (error) {

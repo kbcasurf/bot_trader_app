@@ -1,7 +1,7 @@
 // Simple logger utility
 
 // Determine log level from environment
-const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const LOG_LEVEL = process.env.LOG_LEVEL;
 
 // Map log levels to numeric values for comparison
 const LOG_LEVELS = {
