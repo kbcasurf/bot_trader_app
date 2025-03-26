@@ -1,10 +1,8 @@
-FROM mariadb:11.2
+FROM mariadb:10.6
 
-# Copy initialization scripts
-COPY init/ /docker-entrypoint-initdb.d/
+COPY schema.sql /docker-entrypoint-initdb.d/
+COPY init.sql /docker-entrypoint-initdb.d/
 
-# Copy custom MariaDB configuration
-COPY conf/mariadb.cnf /etc/mysql/conf.d/
-
-# Expose port
 EXPOSE 3306
+
+CMD ["mysqld"]
