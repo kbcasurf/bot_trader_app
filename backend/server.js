@@ -146,20 +146,28 @@ async function startServer() {
 }
 
 // Initialize database tables and default settings
+// Initialize database tables and default settings
 async function initializeDatabase() {
   try {
     logger.info('Verifying database tables...');
     const conn = await db.getConnection();
     
     // Check if required tables exist
-    const [tables] = await conn.query(`
+    const tablesResult = await conn.query(`
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = ? 
       AND table_name IN ('trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history')
     `, [process.env.DB_NAME || 'crypto_trading_bot']);
     
-    const tableNames = tables.map(row => row.table_name);
+    // Fix for the tables.map issue - ensure we're correctly accessing the result
+    // The MariaDB driver might return results in different formats
+    const tables = Array.isArray(tablesResult) ? tablesResult[0] : tablesResult;
+    
+    // Make sure we have an array we can map over
+    const tableNames = Array.isArray(tables) 
+      ? tables.map(row => row.table_name)
+      : tables ? Object.values(tables).map(row => row.table_name) : [];
     
     // If all tables exist, we can skip initialization
     const allTablesExist = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history']
@@ -176,14 +184,20 @@ async function initializeDatabase() {
     await new Promise(resolve => setTimeout(resolve, 5000));
     
     // Check again after waiting
-    const [tablesAfterWait] = await conn.query(`
+    const tablesAfterWaitResult = await conn.query(`
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = ? 
       AND table_name IN ('trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history')
     `, [process.env.DB_NAME || 'crypto_trading_bot']);
     
-    const tableNamesAfterWait = tablesAfterWait.map(row => row.table_name);
+    // Apply the same fix for the second query
+    const tablesAfterWait = Array.isArray(tablesAfterWaitResult) ? tablesAfterWaitResult[0] : tablesAfterWaitResult;
+    
+    // Make sure we have an array we can map over
+    const tableNamesAfterWait = Array.isArray(tablesAfterWait) 
+      ? tablesAfterWait.map(row => row.table_name)
+      : tablesAfterWait ? Object.values(tablesAfterWait).map(row => row.table_name) : [];
     
     const allTablesExistAfterWait = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history']
       .every(table => tableNamesAfterWait.includes(table));
@@ -281,8 +295,10 @@ async function initializeDatabase() {
     }
     
     // Seed initial data if trading_pairs is empty
-    const [pairsCount] = await conn.query('SELECT COUNT(*) as count FROM trading_pairs');
-    if (pairsCount[0].count === 0) {
+    const pairsCountResult = await conn.query('SELECT COUNT(*) as count FROM trading_pairs');
+    const pairsCount = Array.isArray(pairsCountResult) ? pairsCountResult[0] : pairsCountResult;
+    
+    if (pairsCount && pairsCount[0] && pairsCount[0].count === 0) {
       logger.info('Seeding trading pairs...');
       
       await conn.query(`
@@ -296,14 +312,19 @@ async function initializeDatabase() {
       `);
       
       // Initialize holdings for each trading pair
-      const [pairs] = await conn.query('SELECT id FROM trading_pairs');
-      for (const pair of pairs) {
-        await conn.query(`
-          INSERT INTO holdings (trading_pair_id, quantity) VALUES (?, 0)
-        `, [pair.id]);
-      }
+      const pairsResult = await conn.query('SELECT id FROM trading_pairs');
+      const pairs = Array.isArray(pairsResult) ? pairsResult[0] : pairsResult;
       
-      logger.info('Seeded trading pairs and initialized holdings');
+      if (pairs) {
+        const pairsArray = Array.isArray(pairs) ? pairs : Object.values(pairs);
+        for (const pair of pairsArray) {
+          await conn.query(`
+            INSERT INTO holdings (trading_pair_id, quantity) VALUES (?, 0)
+          `, [pair.id]);
+        }
+        
+        logger.info('Seeded trading pairs and initialized holdings');
+      }
     }
     
     conn.release();
