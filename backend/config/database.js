@@ -1,5 +1,5 @@
 const mariadb = require('mariadb');
-const logger = require('../utils/logger');
+const logger = require('../src/utils/logger');
 
 // Create a database connection pool using environment variables
 const pool = mariadb.createPool({

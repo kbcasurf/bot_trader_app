@@ -2,7 +2,7 @@
 const http = require('http');
 const app = require('./src/app');
 const logger = require('./src/utils/logger');
-const db = require('./src/config/database');
+const db = require('./config/database');
 const dotenv = require('dotenv');
 
 // Load environment variables
