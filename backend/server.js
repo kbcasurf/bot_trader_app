@@ -1,10 +1,8 @@
 // Import required modules
 const http = require('http');
 const app = require('./src/app');
-const logger = require('./utils/logger');
-const db = require('./config/database');
-const binanceService = require('./src/services/binanceService');
-const tradingService = require('./services/tradingService');
+const logger = require('./src/utils/logger');
+const db = require('./src/config/database');
 const dotenv = require('dotenv');
 
 // Load environment variables
@@ -14,9 +12,9 @@ dotenv.config();
 function checkRequiredEnvVars() {
   const requiredVars = [
     'JWT_SECRET',
-    'MARIADB_DATABASE',
-    'MARIADB_USER',
-    'MARIADB_PASSWORD'
+    'DB_NAME',
+    'DB_USER',
+    'DB_PASSWORD'
   ];
   
   const missing = requiredVars.filter(varName => !process.env[varName]);
@@ -27,7 +25,7 @@ function checkRequiredEnvVars() {
   }
 }
 
-// Get port from environment or default to 3000
+// Get port from environment or default to 5000
 const port = process.env.PORT || 5000;
 
 // Create HTTP server
@@ -47,13 +45,33 @@ io.on('connection', (socket) => {
   logger.info(`Client connected: ${socket.id}`);
   
   // Send initial data to client
-  tradingService.getAllTradingState()
-    .then(data => {
-      socket.emit('initialData', data);
-    })
-    .catch(err => {
+  const sendInitialData = async () => {
+    try {
+      // In Phase 1, we'll send mock data
+      // In later phases, this will be actual trading state from the database
+      const mockData = {
+        tradingPairs: [
+          { id: 1, symbol: 'BTCUSDT', displayName: 'BTC/USDT', isActive: true },
+          { id: 2, symbol: 'SOLUSDT', displayName: 'SOL/USDT', isActive: true },
+          { id: 3, symbol: 'XRPUSDT', displayName: 'XRP/USDT', isActive: true },
+          { id: 4, symbol: 'PENDLEUSDT', displayName: 'PENDLE/USDT', isActive: true },
+          { id: 5, symbol: 'DOGEUSDT', displayName: 'DOGE/USDT', isActive: true },
+          { id: 6, symbol: 'NEARUSDT', displayName: 'NEAR/USDT', isActive: true }
+        ],
+        settings: {
+          profitThreshold: 5,
+          lossThreshold: 5,
+          additionalPurchaseAmount: 50,
+          maxInvestmentPerSymbol: 200
+        }
+      };
+      socket.emit('initialData', mockData);
+    } catch (err) {
       logger.error('Error fetching initial data:', err);
-    });
+    }
+  };
+  
+  sendInitialData();
   
   // Handle disconnection
   socket.on('disconnect', () => {
@@ -69,7 +87,27 @@ async function startServer() {
   try {
     // Initialize database connection with retry logic
     logger.info('Initializing database connection...');
-    const dbInitialized = await db.initialize(10, 3000); // 10 retries, 3 seconds between retries
+    
+    // Try to connect to the database
+    let dbInitialized = false;
+    let retryCount = 0;
+    const maxRetries = 10;
+    const retryInterval = 3000; // 3 seconds
+    
+    while (!dbInitialized && retryCount < maxRetries) {
+      try {
+        await db.getConnection();
+        dbInitialized = true;
+        logger.info('Database connection established successfully');
+      } catch (error) {
+        retryCount++;
+        logger.warn(`Failed to connect to database (attempt ${retryCount}/${maxRetries}): ${error.message}`);
+        if (retryCount < maxRetries) {
+          logger.info(`Retrying in ${retryInterval / 1000} seconds...`);
+          await new Promise(resolve => setTimeout(resolve, retryInterval));
+        }
+      }
+    }
     
     if (!dbInitialized) {
       throw new Error('Failed to initialize database after multiple attempts');
@@ -85,20 +123,20 @@ async function startServer() {
       // Check environment variables
       checkRequiredEnvVars();
       
-      // Initialize Binance websocket connections
+      // Initialize services
       try {
-        binanceService.setupWebsocket();
-        logger.info('Binance websocket connections established');
+        setupWebSocketFeeds();
+        logger.info('WebSocket feeds established');
       } catch (error) {
-        logger.error('Failed to setup Binance websocket connections:', error);
+        logger.error('Failed to setup WebSocket feeds:', error);
       }
       
-      // Initialize trading bot service
+      // Initialize trading bot simulation (Phase 1)
       try {
-        tradingService.setupTradingBot(io);
-        logger.info('Trading bot service initialized successfully');
+        setupSimulation(io);
+        logger.info('Trading simulation initialized successfully');
       } catch (error) {
-        logger.error('Failed to initialize trading bot service:', error);
+        logger.error('Failed to initialize trading simulation:', error);
       }
     });
   } catch (error) {
@@ -114,154 +152,192 @@ async function initializeDatabase() {
     const conn = await db.getConnection();
     
     // Check if required tables exist
-    const [cryptoConfigExists] = await conn.query(`
-      SELECT COUNT(*) as count FROM information_schema.tables 
-      WHERE table_schema = ? AND table_name = 'crypto_config'
-    `, [process.env.MARIADB_DATABASE || 'crypto_trading_bot']);
+    const [tables] = await conn.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = ? 
+      AND table_name IN ('trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history')
+    `, [process.env.DB_NAME || 'crypto_trading_bot']);
     
-    const [tradingStateExists] = await conn.query(`
-      SELECT COUNT(*) as count FROM information_schema.tables 
-      WHERE table_schema = ? AND table_name = 'trading_state'
-    `, [process.env.MARIADB_DATABASE || 'crypto_trading_bot']);
-    
-    const [settingsExists] = await conn.query(`
-      SELECT COUNT(*) as count FROM information_schema.tables 
-      WHERE table_schema = ? AND table_name = 'settings'
-    `, [process.env.MARIADB_DATABASE || 'crypto_trading_bot']);
+    const tableNames = tables.map(row => row.table_name);
     
     // If all tables exist, we can skip initialization
-    if (cryptoConfigExists.count > 0 && tradingStateExists.count > 0 && settingsExists.count > 0) {
+    const allTablesExist = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history']
+      .every(table => tableNames.includes(table));
+    
+    if (allTablesExist) {
       logger.info('All required database tables already exist');
-      await ensureDefaultSettings(conn);
       conn.release();
       return;
     }
     
-    // Wait a bit to allow init.sql to complete if it's running
-    logger.info('Waiting for database initialization from init.sql...');
+    // Wait for database initialization to complete if it's in progress
+    logger.info('Some tables are missing. Waiting for database initialization...');
     await new Promise(resolve => setTimeout(resolve, 5000));
     
     // Check again after waiting
-    const [tablesExistAfterWait] = await conn.query(`
-      SELECT COUNT(*) as count FROM information_schema.tables 
-      WHERE table_schema = ? AND table_name IN ('crypto_config', 'trading_state', 'settings')
-    `, [process.env.MARIADB_DATABASE || 'crypto_trading_bot']);
+    const [tablesAfterWait] = await conn.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = ? 
+      AND table_name IN ('trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history')
+    `, [process.env.DB_NAME || 'crypto_trading_bot']);
     
-    if (tablesExistAfterWait.count >= 3) {
-      logger.info('Database tables were created by init.sql');
-      await ensureDefaultSettings(conn);
+    const tableNamesAfterWait = tablesAfterWait.map(row => row.table_name);
+    
+    const allTablesExistAfterWait = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history']
+      .every(table => tableNamesAfterWait.includes(table));
+    
+    if (allTablesExistAfterWait) {
+      logger.info('Database tables were created by init scripts');
       conn.release();
       return;
     }
     
-    // If tables still don't exist, create them using the schema in database/init/01-schema.sql
-    // This is a simplified version - you may want to read and execute the SQL file directly
+    // If tables still don't exist, create them (simplified schema)
     logger.info('Creating missing database tables...');
     
-    // Create crypto_config table if it doesn't exist
-    if (cryptoConfigExists.count === 0) {
+    // Create trading_pairs table if it doesn't exist
+    if (!tableNamesAfterWait.includes('trading_pairs')) {
       await conn.query(`
-        CREATE TABLE IF NOT EXISTS crypto_config (
+        CREATE TABLE IF NOT EXISTS trading_pairs (
           id INT AUTO_INCREMENT PRIMARY KEY,
-          symbol VARCHAR(20) NOT NULL,
-          base_asset VARCHAR(10) NOT NULL,
-          quote_asset VARCHAR(10) NOT NULL,
-          is_active BOOLEAN DEFAULT TRUE,
+          symbol VARCHAR(20) NOT NULL UNIQUE,
+          display_name VARCHAR(50) NOT NULL,
+          logo_url VARCHAR(255),
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          UNIQUE KEY (symbol)
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
       `);
+      logger.info('Created trading_pairs table');
     }
     
-    // Create trading_state table if it doesn't exist
-    if (tradingStateExists.count === 0) {
+    // Create trading_configurations table if it doesn't exist
+    if (!tableNamesAfterWait.includes('trading_configurations')) {
       await conn.query(`
-        CREATE TABLE IF NOT EXISTS trading_state (
+        CREATE TABLE IF NOT EXISTS trading_configurations (
           id INT AUTO_INCREMENT PRIMARY KEY,
-          symbol VARCHAR(20) NOT NULL,
-          initial_purchase_price DECIMAL(20, 8) NULL,
-          last_purchase_price DECIMAL(20, 8) NULL,
-          total_investment DECIMAL(20, 8) DEFAULT 0,
-          current_holdings DECIMAL(20, 8) DEFAULT 0,
-          is_active BOOLEAN DEFAULT FALSE,
+          trading_pair_id INT NOT NULL,
+          initial_investment DECIMAL(10, 2) NOT NULL,
+          active BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          FOREIGN KEY (symbol) REFERENCES crypto_config(symbol),
-          UNIQUE KEY (symbol)
+          FOREIGN KEY (trading_pair_id) REFERENCES trading_pairs(id)
         )
       `);
+      logger.info('Created trading_configurations table');
     }
     
-    // Create settings table if it doesn't exist
-    if (settingsExists.count === 0) {
+    // Create transactions table if it doesn't exist
+    if (!tableNamesAfterWait.includes('transactions')) {
       await conn.query(`
-        CREATE TABLE IF NOT EXISTS settings (
+        CREATE TABLE IF NOT EXISTS transactions (
           id INT AUTO_INCREMENT PRIMARY KEY,
-          key VARCHAR(50) NOT NULL,
-          value TEXT NOT NULL,
+          trading_pair_id INT NOT NULL,
+          transaction_type ENUM('BUY', 'SELL') NOT NULL,
+          quantity DECIMAL(20, 8) NOT NULL,
+          price DECIMAL(20, 8) NOT NULL,
+          total_amount DECIMAL(20, 8) NOT NULL,
+          binance_order_id VARCHAR(255),
+          status ENUM('PENDING', 'COMPLETED', 'FAILED') DEFAULT 'PENDING',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          UNIQUE KEY (key)
+          FOREIGN KEY (trading_pair_id) REFERENCES trading_pairs(id)
         )
       `);
+      logger.info('Created transactions table');
     }
     
-    // Seed initial data if crypto_config is empty
-    const [cryptoCount] = await conn.query('SELECT COUNT(*) as count FROM crypto_config');
-    if (cryptoCount.count === 0) {
-      logger.info('Seeding cryptocurrency pairs...');
+    // Create holdings table if it doesn't exist
+    if (!tableNamesAfterWait.includes('holdings')) {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS holdings (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          trading_pair_id INT NOT NULL,
+          quantity DECIMAL(20, 8) NOT NULL DEFAULT 0,
+          average_buy_price DECIMAL(20, 8),
+          last_buy_price DECIMAL(20, 8),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          FOREIGN KEY (trading_pair_id) REFERENCES trading_pairs(id),
+          UNIQUE KEY unique_trading_pair (trading_pair_id)
+        )
+      `);
+      logger.info('Created holdings table');
+    }
+    
+    // Create price_history table if it doesn't exist
+    if (!tableNamesAfterWait.includes('price_history')) {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS price_history (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          trading_pair_id INT NOT NULL,
+          price DECIMAL(20, 8) NOT NULL,
+          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (trading_pair_id) REFERENCES trading_pairs(id)
+        )
+      `);
+      logger.info('Created price_history table');
+    }
+    
+    // Seed initial data if trading_pairs is empty
+    const [pairsCount] = await conn.query('SELECT COUNT(*) as count FROM trading_pairs');
+    if (pairsCount[0].count === 0) {
+      logger.info('Seeding trading pairs...');
       
       await conn.query(`
-        INSERT INTO crypto_config (symbol, base_asset, quote_asset) VALUES
-        ('BTCUSDT', 'BTC', 'USDT'),
-        ('SOLUSDT', 'SOL', 'USDT'),
-        ('XRPUSDT', 'XRP', 'USDT'),
-        ('PENDLEUSDT', 'PENDLE', 'USDT'),
-        ('DOGEUSDT', 'DOGE', 'USDT'),
-        ('NEARUSDT', 'NEAR', 'USDT')
+        INSERT INTO trading_pairs (symbol, display_name, logo_url) VALUES
+        ('BTCUSDT', 'BTC/USDT', '/assets/logos/btc.png'),
+        ('SOLUSDT', 'SOL/USDT', '/assets/logos/sol.png'),
+        ('XRPUSDT', 'XRP/USDT', '/assets/logos/xrp.png'),
+        ('PENDLEUSDT', 'PENDLE/USDT', '/assets/logos/pendle.png'),
+        ('DOGEUSDT', 'DOGE/USDT', '/assets/logos/doge.png'),
+        ('NEARUSDT', 'NEAR/USDT', '/assets/logos/near.png')
       `);
       
-      // Initialize trading state for each cryptocurrency
-      await conn.query(`
-        INSERT INTO trading_state (symbol, is_active)
-        SELECT symbol, FALSE FROM crypto_config
-      `);
+      // Initialize holdings for each trading pair
+      const [pairs] = await conn.query('SELECT id FROM trading_pairs');
+      for (const pair of pairs) {
+        await conn.query(`
+          INSERT INTO holdings (trading_pair_id, quantity) VALUES (?, 0)
+        `, [pair.id]);
+      }
+      
+      logger.info('Seeded trading pairs and initialized holdings');
     }
-    
-    // Ensure default settings
-    await ensureDefaultSettings(conn);
     
     conn.release();
-    logger.info('Database tables initialized successfully');
+    logger.info('Database initialization completed successfully');
   } catch (error) {
     logger.error('Error initializing database tables:', error);
     throw error;
   }
 }
 
-// Ensure default settings exist
-async function ensureDefaultSettings(conn) {
-  try {
-    // Check if settings table has default values
-    const [settingsCount] = await conn.query('SELECT COUNT(*) as count FROM settings');
+// Setup WebSocket feeds for price data
+function setupWebSocketFeeds() {
+  // In Phase 1, this is a placeholder
+  // In later phases, this will connect to Binance WebSocket API
+  logger.info('WebSocket feeds setup in simulation mode for Phase 1');
+}
+
+// Setup trading simulation for Phase 1
+function setupSimulation(io) {
+  // Simulate price changes every 10 seconds
+  setInterval(() => {
+    // Generate random price changes
+    const updates = [
+      { symbol: 'BTCUSDT', price: 66000 + (Math.random() - 0.5) * 2000 },
+      { symbol: 'SOLUSDT', price: 145 + (Math.random() - 0.5) * 10 },
+      { symbol: 'XRPUSDT', price: 0.55 + (Math.random() - 0.5) * 0.05 },
+      { symbol: 'PENDLEUSDT', price: 2.35 + (Math.random() - 0.5) * 0.2 },
+      { symbol: 'DOGEUSDT', price: 0.12 + (Math.random() - 0.5) * 0.02 },
+      { symbol: 'NEARUSDT', price: 4.85 + (Math.random() - 0.5) * 0.4 }
+    ];
     
-    // Insert default settings if none exist
-    if (settingsCount.count === 0) {
-      logger.info('Inserting default settings...');
-      
-      await conn.query(`
-        INSERT INTO settings (key, value) VALUES
-          ('profit_threshold', '5'),
-          ('loss_threshold', '5'),
-          ('additional_purchase_amount', '50'),
-          ('max_investment_per_symbol', '200')
-      `);
-    }
-  } catch (error) {
-    logger.error('Error ensuring default settings:', error);
-    throw error;
-  }
+    // Emit price updates to connected clients
+    io.emit('priceUpdates', updates);
+  }, 10000);
 }
 
 // Start server
@@ -280,12 +356,18 @@ process.on('unhandledRejection', (reason, promise) => {
 
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
-  await db.closeAll();
-  process.exit(0);
+  await db.end();
+  server.close(() => {
+    logger.info('Server closed');
+    process.exit(0);
+  });
 });
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully');
-  await db.closeAll();
-  process.exit(0);
+  await db.end();
+  server.close(() => {
+    logger.info('Server closed');
+    process.exit(0);
+  });
 });
