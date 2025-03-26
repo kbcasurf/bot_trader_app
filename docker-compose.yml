@@ -8,6 +8,8 @@ services:
       - /app/node_modules
     depends_on:
       - backend
+    env_file:
+      - ./.env
     environment:
       - NODE_ENV=development
       - VITE_API_URL=http://localhost:5000/api
@@ -21,6 +23,8 @@ services:
       - /app/node_modules
     depends_on:
       - database
+    env_file:
+      - ./.env
 
   database:
     build: ./database
@@ -28,6 +32,8 @@ services:
       - "3306:3306"
     volumes:
       - crypto_data:/var/lib/mysql
+    env_file:
+      - ./.env
 
 volumes:
   crypto_data:
