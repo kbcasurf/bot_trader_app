@@ -1,7 +1,23 @@
 // Simple logger utility
 
 // Determine log level from environment
-const LOG_LEVEL = process.env.LOG_LEVEL;
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+
+// Map log levels to numeric values for comparison
+const LOG_LEVELS = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  debug: 3
+};
+
+// Current numeric log level
+const CURRENT_LEVEL = LOG_LEVELS || LOG_LEVELS.info;
+
+// Helper to check if a given level should be logged
+function shouldLog(level) {
+  return LOG_LEVELS <= CURRENT_LEVEL;
+}
 
 // Format a log message
 function formatMessage(level, message, data) {
