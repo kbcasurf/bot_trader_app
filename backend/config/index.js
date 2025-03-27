@@ -37,7 +37,7 @@ const config = {
   };
 
 // Import routes
-const apiRoutes = require('./src/routes/api');
+const apiRoutes = require('../src/routes/api');
 
 // Create Express app
 const app = express();
