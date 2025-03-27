@@ -6,7 +6,7 @@ const db = require('./config/database');
 const dotenv = require('dotenv');
 const telegramService = require('./src/services/telegramService');
 const websocketController = require('./src/controllers/websocketController');
-
+const tradingService = require('./src/services/tradingService');
 
 // Load environment variables
 dotenv.config();
@@ -29,7 +29,7 @@ function checkRequiredEnvVars() {
 }
 
 // Get port from environment or default to 5000
-const port = process.env.PORT;
+const port = process.env.PORT || 5000;
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -43,10 +43,11 @@ const io = new Server(server, {
   }
 });
   
-  io.on('connection', (socket) => {
-    // Handle new connection with our WebSocket controller
-    websocketController.handleConnection(socket);
-  });
+io.on('connection', (socket) => {
+  // Handle new connection with our WebSocket controller
+  websocketController.handleConnection(socket);
+  logger.info(`New client connected: ${socket.id}`);
+});
 
 // Make io available globally
 app.set('io', io);
@@ -85,14 +86,24 @@ async function startServer() {
     // Check if tables exist and create them if needed
     await initializeDatabase();
     
+    // Initialize Telegram bot for notifications
+    await initializeTelegramService();
+    
+    // Initialize WebSockets for price updates
+    await websocketController.initializeWebSockets(io);
+    
     // Start the server
-    server.listen(port, () => {
+    server.listen(port, '0.0.0.0', () => {
       logger.info(`Server running on port ${port}`);
       
       // Check environment variables
       checkRequiredEnvVars();
       
-     
+      // Set up simulated price feed for Phase 2
+      if (process.env.NODE_ENV !== 'production') {
+        setupSimulation(io);
+        logger.info('Running in simulation mode with generated price data');
+      }
     });
   } catch (error) {
     logger.error('Failed to start server:', error);
@@ -100,7 +111,6 @@ async function startServer() {
   }
 }
 
-// Initialize database tables and default settings
 // Initialize database tables and default settings
 async function initializeDatabase() {
   try {
@@ -116,13 +126,11 @@ async function initializeDatabase() {
     `, [process.env.DB_NAME || 'crypto_trading_bot']);
     
     // Fix for the tables.map issue - ensure we're correctly accessing the result
-    // The MariaDB driver might return results in different formats
-    const tables = Array.isArray(tablesResult) ? tablesResult[0] : tablesResult;
-    
-    // Make sure we have an array we can map over
-    const tableNames = Array.isArray(tables) 
-      ? tables.map(row => row.table_name)
-      : tables ? Object.values(tables).map(row => row.table_name) : [];
+    const tableNames = Array.isArray(tablesResult) 
+      ? tablesResult[0].map(row => row.table_name)
+      : tablesResult && typeof tablesResult === 'object' 
+        ? Object.values(tablesResult).map(row => row.table_name) 
+        : [];
     
     // If all tables exist, we can skip initialization
     const allTablesExist = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history']
@@ -135,39 +143,10 @@ async function initializeDatabase() {
     }
     
     // Wait for database initialization to complete if it's in progress
-    logger.info('Some tables are missing. Waiting for database initialization...');
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    
-    // Check again after waiting
-    const tablesAfterWaitResult = await conn.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = ? 
-      AND table_name IN ('trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history')
-    `, [process.env.DB_NAME || 'crypto_trading_bot']);
-    
-    // Apply the same fix for the second query
-    const tablesAfterWait = Array.isArray(tablesAfterWaitResult) ? tablesAfterWaitResult[0] : tablesAfterWaitResult;
-    
-    // Make sure we have an array we can map over
-    const tableNamesAfterWait = Array.isArray(tablesAfterWait) 
-      ? tablesAfterWait.map(row => row.table_name)
-      : tablesAfterWait ? Object.values(tablesAfterWait).map(row => row.table_name) : [];
-    
-    const allTablesExistAfterWait = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history']
-      .every(table => tableNamesAfterWait.includes(table));
-    
-    if (allTablesExistAfterWait) {
-      logger.info('Database tables were created by init scripts');
-      conn.release();
-      return;
-    }
-    
-    // If tables still don't exist, create them (simplified schema)
-    logger.info('Creating missing database tables...');
+    logger.info('Some tables are missing. Creating required database tables...');
     
     // Create trading_pairs table if it doesn't exist
-    if (!tableNamesAfterWait.includes('trading_pairs')) {
+    if (!tableNames.includes('trading_pairs')) {
       await conn.query(`
         CREATE TABLE IF NOT EXISTS trading_pairs (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -182,7 +161,7 @@ async function initializeDatabase() {
     }
     
     // Create trading_configurations table if it doesn't exist
-    if (!tableNamesAfterWait.includes('trading_configurations')) {
+    if (!tableNames.includes('trading_configurations')) {
       await conn.query(`
         CREATE TABLE IF NOT EXISTS trading_configurations (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -198,7 +177,7 @@ async function initializeDatabase() {
     }
     
     // Create transactions table if it doesn't exist
-    if (!tableNamesAfterWait.includes('transactions')) {
+    if (!tableNames.includes('transactions')) {
       await conn.query(`
         CREATE TABLE IF NOT EXISTS transactions (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -218,7 +197,7 @@ async function initializeDatabase() {
     }
     
     // Create holdings table if it doesn't exist
-    if (!tableNamesAfterWait.includes('holdings')) {
+    if (!tableNames.includes('holdings')) {
       await conn.query(`
         CREATE TABLE IF NOT EXISTS holdings (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -236,7 +215,7 @@ async function initializeDatabase() {
     }
     
     // Create price_history table if it doesn't exist
-    if (!tableNamesAfterWait.includes('price_history')) {
+    if (!tableNames.includes('price_history')) {
       await conn.query(`
         CREATE TABLE IF NOT EXISTS price_history (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -251,9 +230,11 @@ async function initializeDatabase() {
     
     // Seed initial data if trading_pairs is empty
     const pairsCountResult = await conn.query('SELECT COUNT(*) as count FROM trading_pairs');
-    const pairsCount = Array.isArray(pairsCountResult) ? pairsCountResult[0] : pairsCountResult;
+    const pairsCount = Array.isArray(pairsCountResult) 
+      ? pairsCountResult[0][0].count 
+      : pairsCountResult && pairsCountResult.count;
     
-    if (pairsCount && pairsCount[0] && pairsCount[0].count === 0) {
+    if (pairsCount === 0) {
       logger.info('Seeding trading pairs...');
       
       await conn.query(`
@@ -266,9 +247,11 @@ async function initializeDatabase() {
         ('NEARUSDT', 'NEAR/USDT', '/assets/logos/near.png')
       `);
       
-      // Initialize holdings for each trading pair
+      // Initialize holdings with zero quantity for each trading pair
       const pairsResult = await conn.query('SELECT id FROM trading_pairs');
-      const pairs = Array.isArray(pairsResult) ? pairsResult[0] : pairsResult;
+      const pairs = Array.isArray(pairsResult) 
+        ? pairsResult[0] 
+        : pairsResult;
       
       if (pairs) {
         const pairsArray = Array.isArray(pairs) ? pairs : Object.values(pairs);
@@ -290,30 +273,95 @@ async function initializeDatabase() {
   }
 }
 
-// Setup WebSocket feeds for price data
-function setupWebSocketFeeds() {
-  // In Phase 1, this is a placeholder
-  // In later phases, this will connect to Binance WebSocket API
-  logger.info('WebSocket feeds setup in simulation mode for Phase 1');
+// Initialize Telegram notification service
+async function initializeTelegramService() {
+  try {
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      logger.info('Initializing Telegram notification service...');
+      const success = await telegramService.initializeBot();
+      if (success) {
+        logger.info('Telegram notification service initialized successfully');
+      } else {
+        logger.warn('Failed to initialize Telegram notification service');
+      }
+    } else {
+      logger.info('Telegram notification service disabled (missing credentials)');
+    }
+  } catch (error) {
+    logger.error('Error initializing Telegram notification service:', error);
+  }
 }
 
-// Setup trading simulation for Phase 1
+// Setup trading simulation for development and testing
 function setupSimulation(io) {
+  // Base prices for each symbol (these will fluctuate)
+  const basePrices = {
+    'BTCUSDT': 66000,
+    'SOLUSDT': 145, 
+    'XRPUSDT': 0.55,
+    'PENDLEUSDT': 2.35,
+    'DOGEUSDT': 0.12,
+    'NEARUSDT': 4.85
+  };
+  
+  // Keep track of current prices
+  const currentPrices = { ...basePrices };
+  
   // Simulate price changes every 10 seconds
-  setInterval(() => {
-    // Generate random price changes
-    const updates = [
-      { symbol: 'BTCUSDT', price: 66000 + (Math.random() - 0.5) * 2000 },
-      { symbol: 'SOLUSDT', price: 145 + (Math.random() - 0.5) * 10 },
-      { symbol: 'XRPUSDT', price: 0.55 + (Math.random() - 0.5) * 0.05 },
-      { symbol: 'PENDLEUSDT', price: 2.35 + (Math.random() - 0.5) * 0.2 },
-      { symbol: 'DOGEUSDT', price: 0.12 + (Math.random() - 0.5) * 0.02 },
-      { symbol: 'NEARUSDT', price: 4.85 + (Math.random() - 0.5) * 0.4 }
-    ];
+  const simulationInterval = setInterval(() => {
+    // Generate price updates with realistic volatility for each symbol
+    const updates = Object.keys(basePrices).map(symbol => {
+      // Calculate volatility based on the price (higher priced assets have higher absolute changes)
+      const volatilityFactor = Math.max(0.005, Math.min(0.02, 0.01 * Math.sqrt(basePrices[symbol] / 10)));
+      
+      // Random factor between -1 and 1, with slight bias toward price reverting to base
+      const randomFactor = (Math.random() * 2 - 1) * 0.7 + 
+                          ((basePrices[symbol] - currentPrices[symbol]) / basePrices[symbol]) * 0.3;
+      
+      // Calculate new price with random change
+      const priceChange = currentPrices[symbol] * volatilityFactor * randomFactor;
+      const newPrice = Math.max(currentPrices[symbol] + priceChange, basePrices[symbol] * 0.5);
+      
+      // Update current price
+      currentPrices[symbol] = newPrice;
+      
+      return {
+        symbol,
+        price: newPrice,
+        timestamp: new Date().toISOString()
+      };
+    });
     
     // Emit price updates to connected clients
     io.emit('priceUpdates', updates);
-  }, 10000);
+    
+    // Process each price update with the trading algorithm
+    updates.forEach(async update => {
+      try {
+        // Find the trading pair ID for this symbol
+        const conn = await db.getConnection();
+        const [pairResult] = await conn.query('SELECT id FROM trading_pairs WHERE symbol = ?', [update.symbol]);
+        conn.release();
+        
+        if (pairResult && pairResult.length > 0) {
+          const tradingPairId = pairResult[0].id;
+          
+          // Process the price update with the trading algorithm
+          await tradingService.processPriceUpdate(tradingPairId, update.price);
+          
+          // Also broadcast individual price update for WebSocket subscribers
+          websocketController.broadcastPriceUpdate(update.symbol, update.price);
+        }
+      } catch (error) {
+        logger.error(`Error processing simulated price update for ${update.symbol}:`, error);
+      }
+    });
+    
+    logger.debug('Simulated price updates sent:', updates.map(u => `${u.symbol}: $${u.price.toFixed(2)}`).join(', '));
+  }, 10000); // Every 10 seconds
+  
+  // Store the interval for cleanup
+  global.simulationInterval = simulationInterval;
 }
 
 // Start server
@@ -332,18 +380,72 @@ process.on('unhandledRejection', (reason, promise) => {
 
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
-  await db.end();
+  
+  // Clear simulation interval if it exists
+  if (global.simulationInterval) {
+    clearInterval(global.simulationInterval);
+  }
+  
+  // Close database connection
+  try {
+    await db.end();
+    logger.info('Database connections closed');
+  } catch (error) {
+    logger.error('Error closing database connections:', error);
+  }
+  
+  // Stop Telegram bot if running
+  const bot = telegramService.getBot();
+  if (bot) {
+    bot.stop('SIGTERM');
+    logger.info('Telegram bot stopped');
+  }
+  
+  // Close server
   server.close(() => {
     logger.info('Server closed');
     process.exit(0);
   });
+  
+  // Force exit after timeout
+  setTimeout(() => {
+    logger.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
 });
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully');
-  await db.end();
+  
+  // Clear simulation interval if it exists
+  if (global.simulationInterval) {
+    clearInterval(global.simulationInterval);
+  }
+  
+  // Close database connection
+  try {
+    await db.end();
+    logger.info('Database connections closed');
+  } catch (error) {
+    logger.error('Error closing database connections:', error);
+  }
+  
+  // Stop Telegram bot if running
+  const bot = telegramService.getBot();
+  if (bot) {
+    bot.stop('SIGINT');
+    logger.info('Telegram bot stopped');
+  }
+  
+  // Close server
   server.close(() => {
     logger.info('Server closed');
     process.exit(0);
   });
+  
+  // Force exit after timeout
+  setTimeout(() => {
+    logger.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
 });
