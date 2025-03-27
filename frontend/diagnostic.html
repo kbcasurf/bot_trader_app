@@ -10,7 +10,7 @@
     <script>
         const status = document.getElementById('status');
         try {
-            const socket = io('http://backend:5000', {
+            const socket = io('http://localhost:5000', {
                 transports: ['websocket', 'polling']
             });
             
