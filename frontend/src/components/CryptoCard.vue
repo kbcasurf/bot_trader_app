@@ -241,11 +241,16 @@ export default {
     },
     
     connectToWebSocket() {
-      // Get WebSocket URL from environment or construct it based on API URL
-      this.socket = io('/', {
-        transports: ['websocket', 'polling'],
-        path: '/socket.io'
-      });
+      try {
+        console.log(`Connecting to WebSocket for ${this.tradingPair.symbol}`);
+        
+        // Initialize socket with relative path
+        this.socket = io('/', {
+          transports: ['websocket', 'polling'],
+          path: '/socket.io',
+          reconnectionAttempts: 5,
+          reconnectionDelay: 1000
+        });
         
         // Handle connection events
         this.socket.on('connect', () => {
