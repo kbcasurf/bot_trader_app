@@ -16,7 +16,6 @@
     "jsonwebtoken": "^9.0.2",
     "mariadb": "^3.2.0",
     "morgan": "^1.10.0",
-    "node-binance-api": "^0.13.1",
     "socket.io": "^4.7.2",
     "telegraf": "^4.12.2",
     "ws": "^8.13.0"

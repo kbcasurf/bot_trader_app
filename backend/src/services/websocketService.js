@@ -130,11 +130,25 @@ const handleMessage = async (data) => {
 /**
  * Handle WebSocket error event
  */
-const handleError = (error) => {
-  logger.error('WebSocket error:', error);
-  connectionStatus.status = 'error';
-  broadcastConnectionStatus();
-};
+  handleError = (error) => {
+    logger.error('WebSocket error:', error);
+    connectionStatus.status = 'error';
+    broadcastConnectionStatus();
+  
+  // Force reconnection on certain errors
+  if (websocket) {
+    try {
+      websocket.terminate();
+    } catch (e) {
+      // Ignore terminate errors
+    }
+    websocket = null;
+    
+    // Schedule reconnection
+    const binanceService = require('./binanceService');
+    scheduleReconnect(null, binanceService.WEBSOCKET_URL);
+  }
+}; 
 
 /**
  * Handle WebSocket close event

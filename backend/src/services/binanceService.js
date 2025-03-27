@@ -8,10 +8,10 @@ const telegramService = require('./telegramService');
 // Environment variables
 const API_KEY = process.env.BINANCE_API_KEY;
 const API_SECRET = process.env.BINANCE_API_SECRET;
-const API_URL = process.env.BINANCE_API_URL || 'https://testnet.binance.vision';
-const WEBSOCKET_URL = process.env.BINANCE_WEBSOCKET_URL || 'wss://testnet.binance.vision/ws/';
+const API_URL = process.env.BINANCE_API_URL;
+const WEBSOCKET_URL = process.env.BINANCE_WEBSOCKET_URL;
 const RECV_WINDOW = process.env.BINANCE_RECV_WINDOW;
-const TEST_MODE = process.env.NODE_ENV === 'test';
+const TEST_MODE = process.env.NODE_ENV;
 
 // Cache for symbol information
 let symbolInfoCache = null;
