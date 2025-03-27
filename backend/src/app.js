@@ -18,7 +18,6 @@ const app = express();
 // Apply global middleware
 app.use(helmet()); // Security headers
 
-const cors = require('cors');
 app.use(cors());
 app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
