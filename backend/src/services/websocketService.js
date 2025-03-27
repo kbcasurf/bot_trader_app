@@ -1,7 +1,9 @@
 // backend/src/services/websocketService.js
 const WebSocket = require('ws');
 const logger = require('../utils/logger');
-const config = require('../../config');
+
+// Avoid importing other services that might import this one
+// We'll use function parameters instead
 
 // Single WebSocket connection
 let websocket = null;
@@ -24,7 +26,7 @@ let healthCheckInterval = null;
 /**
  * Initialize a single WebSocket connection for all trading pairs
  */
-const initializeWebSocket = async (tradingPairs) => {
+const initializeWebSocket = async (tradingPairs, wsBaseUrl) => {
   // Clear any existing connection and timeouts
   if (websocket) {
     websocket.terminate();
@@ -47,7 +49,6 @@ const initializeWebSocket = async (tradingPairs) => {
     .join('/');
   
   // Create WebSocket URL for combined stream
-  const wsBaseUrl = config.binance?.websocketUrl || 'wss://stream.binance.com';
   const url = `${wsBaseUrl}/stream?streams=${streams}`;
   
   logger.info(`Initializing combined WebSocket connection at ${url}`);
@@ -58,7 +59,7 @@ const initializeWebSocket = async (tradingPairs) => {
     
     // Set up handlers
     websocket.on('open', handleOpen);
-    websocket.on('message', handleMessage);
+    websocket.on('message', data => handleMessage(data));
     websocket.on('error', handleError);
     websocket.on('close', handleClose);
     
@@ -68,7 +69,7 @@ const initializeWebSocket = async (tradingPairs) => {
     return true;
   } catch (error) {
     logger.error('Error initializing WebSocket connection:', error);
-    scheduleReconnect();
+    scheduleReconnect(tradingPairs, wsBaseUrl);
     return false;
   }
 };
@@ -120,20 +121,6 @@ const handleMessage = async (data) => {
       
       // Broadcast price update to connected clients
       broadcastPriceUpdate(symbol, askPrice);
-      
-      // Process price update with trading algorithm
-      try {
-        const binanceService = require('./binanceService');
-        const tradingService = require('./tradingService');
-        
-        // Find trading pair ID for this symbol
-        const tradingPair = await binanceService.getTradingPairBySymbol(symbol);
-        if (tradingPair) {
-          await tradingService.processPriceUpdate(tradingPair.id, askPrice);
-        }
-      } catch (processingError) {
-        logger.error(`Error processing price update for ${symbol}:`, processingError);
-      }
     }
   } catch (error) {
     logger.error('Error processing WebSocket message:', error);
@@ -157,14 +144,15 @@ const handleClose = (code, reason) => {
   connectionStatus.status = 'disconnected';
   broadcastConnectionStatus();
   
-  // Schedule reconnection
-  scheduleReconnect();
+  // Schedule reconnection - pass everything needed as parameters to avoid circular dependencies
+  const binanceService = require('./binanceService');
+  scheduleReconnect(null, binanceService.WEBSOCKET_URL);
 };
 
 /**
  * Schedule WebSocket reconnection with exponential backoff
  */
-const scheduleReconnect = () => {
+const scheduleReconnect = (tradingPairs, wsBaseUrl) => {
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
   }
@@ -192,13 +180,17 @@ const scheduleReconnect = () => {
   reconnectTimeout = setTimeout(async () => {
     // Get fresh trading pairs for reconnection
     try {
-      const binanceService = require('./binanceService');
-      const tradingPairs = await binanceService.getTradingPairs();
-      await initializeWebSocket(tradingPairs);
+      // If trading pairs weren't provided, fetch them
+      let pairs = tradingPairs;
+      if (!pairs) {
+        const binanceService = require('./binanceService');
+        pairs = await binanceService.getTradingPairs();
+      }
+      await initializeWebSocket(pairs, wsBaseUrl);
     } catch (error) {
       logger.error('Error getting trading pairs for reconnection:', error);
       // Try to reconnect with empty pairs as a fallback
-      await initializeWebSocket([]);
+      await initializeWebSocket([], wsBaseUrl);
     }
   }, delay);
 };
@@ -231,7 +223,8 @@ const setupHealthCheck = () => {
         websocket = null;
       }
       
-      scheduleReconnect();
+      const binanceService = require('./binanceService');
+      scheduleReconnect(null, binanceService.WEBSOCKET_URL);
     } else {
       // Send ping to keep connection alive
       if (websocket.readyState === WebSocket.OPEN) {
@@ -280,7 +273,7 @@ const getConnectionStatus = () => {
  */
 const initializeAllWebSockets = async () => {
   try {
-    // Import services dynamically to avoid circular dependencies
+    // Import modules here to avoid circular dependencies
     const binanceService = require('./binanceService');
     
     // Get all trading pairs from database
@@ -289,7 +282,7 @@ const initializeAllWebSockets = async () => {
     logger.info(`Initializing WebSocket connection for ${tradingPairs.length} trading pairs`);
     
     // Initialize single connection for all pairs
-    const success = await initializeWebSocket(tradingPairs);
+    const success = await initializeWebSocket(tradingPairs, binanceService.WEBSOCKET_URL);
     
     return { success, count: tradingPairs.length };
   } catch (error) {
@@ -335,6 +328,7 @@ const broadcastConnectionStatus = () => {
   });
 };
 
+// Module exports
 module.exports = {
   initializeWebSocket,
   getLatestPrice,

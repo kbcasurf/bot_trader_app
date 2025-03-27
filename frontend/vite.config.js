@@ -21,14 +21,14 @@ export default defineConfig(({ mode }) => {
       proxy: {
         // Proxy /api requests to backend
         '/api': {
-          target: env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000',
+          target: env.VITE_API_URL?.replace('/api', ''),
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api/, '/api')
         },
         
         // Proxy WebSocket requests
         '/socket.io': {
-          target: env.VITE_WEBSOCKET_URL || 'http://localhost:5000',
+          target: env.VITE_WEBSOCKET_URL,
           ws: true, // Enable WebSocket proxy
           changeOrigin: true
         }

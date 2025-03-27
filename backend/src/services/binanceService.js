@@ -580,12 +580,19 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
  */
 exports.getCurrentPrice = async (symbol) => {
   try {
-    // Get price only from WebSocket service
+    // Import websocketService directly
     const websocketService = require('./websocketService');
-    return websocketService.getLatestPrice(symbol);
+    
+    try {
+      const price = websocketService.getLatestPrice(symbol);
+      return price;
+    } catch (error) {
+      logger.error(`Error fetching price from WebSocket for ${symbol}:`, error);
+      throw new Error(`No price available for ${symbol} from WebSocket: ${error.message}`);
+    }
   } catch (error) {
-    logger.error(`Error fetching price from WebSocket for ${symbol}:`, error);
-    throw new Error(`No price available for ${symbol} from WebSocket: ${error.message}`);
+    logger.error(`Error in getCurrentPrice for ${symbol}:`, error);
+    throw error;
   }
 };
 

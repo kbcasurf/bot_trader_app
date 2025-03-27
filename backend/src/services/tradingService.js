@@ -6,6 +6,7 @@ const PROFIT_THRESHOLD = parseFloat(process.env.PROFIT_THRESHOLD) || 5; // profi
 const LOSS_THRESHOLD = parseFloat(process.env.LOSS_THRESHOLD) || 5;   // loss threshold for additional purchases
 const ADDITIONAL_PURCHASE_AMOUNT = parseFloat(process.env.ADDITIONAL_PURCHASE_AMOUNT) || 50; // for additional purchases
 
+
 /**
  * Process price update for a trading pair
  * This is the main trading algorithm implementation

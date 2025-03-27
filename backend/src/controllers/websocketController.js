@@ -1,3 +1,4 @@
+// backend/src/controllers/websocketController.js
 const websocketService = require('../services/websocketService');
 const logger = require('../utils/logger');
 
@@ -45,9 +46,18 @@ exports.handleConnection = (socket) => {
       const binanceService = require('../services/binanceService');
       
       const tradingPair = await binanceService.getTradingPairById(tradingPairId);
-      const currentPrice = await binanceService.getCurrentPrice(tradingPair.symbol);
+      
+      // Get holdings data
       const holdings = await binanceService.getHoldings(tradingPairId);
       const transactions = await binanceService.getTransactions(tradingPairId);
+      
+      // Try to get current price
+      let currentPrice = null;
+      try {
+        currentPrice = websocketService.getLatestPrice(tradingPair.symbol);
+      } catch (priceError) {
+        logger.warn(`No price data available for ${tradingPair.symbol} when client subscribed`);
+      }
       
       socket.emit('tradingPairData', {
         tradingPair,
@@ -103,18 +113,7 @@ const sendInitialData = async (socket) => {
  * Broadcast price update to all clients
  */
 exports.broadcastPriceUpdate = (symbol, price) => {
-  const io = global.io;
-  
-  if (!io) {
-    logger.warn('Socket.IO instance not available for broadcasting price update');
-    return;
-  }
-  
-  io.emit('priceUpdate', {
-    symbol,
-    price,
-    timestamp: new Date().toISOString()
-  });
+  websocketService.broadcastPriceUpdate(symbol, price);
 };
 
 /**

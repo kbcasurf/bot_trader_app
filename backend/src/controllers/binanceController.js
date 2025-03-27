@@ -191,10 +191,18 @@ exports.stopTrading = async (req, res, next) => {
 // Get WebSocket connection status
 exports.getWebSocketStatus = async (req, res, next) => {
   try {
-    const status = websocketService.getConnectionStatus();
-    res.json(status);
+    // Import directly from websocketService to avoid circular dependency
+    const websocketService = require('../services/websocketService');
+    
+    try {
+      const status = websocketService.getConnectionStatus();
+      res.json(status);
+    } catch (error) {
+      logger.error('Error getting WebSocket connection status:', error);
+      res.status(500).json({ error: 'Error retrieving WebSocket status' });
+    }
   } catch (error) {
-    logger.error('Error getting WebSocket connection status:', error);
+    logger.error('Error in getWebSocketStatus controller:', error);
     next(error);
   }
 };

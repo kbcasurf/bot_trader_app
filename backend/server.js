@@ -73,11 +73,9 @@ global.io = io; // This ensures the websocketService can access io
  * This ensures we have price data before accepting client requests
  */
 async function waitForInitialPriceData() {
-  const websocketService = require('./src/services/websocketService');
-  const binanceService = require('./src/services/binanceService');
-  
   try {
     // Get all trading pairs
+    const binanceService = require('./src/services/binanceService');
     const tradingPairs = await binanceService.getTradingPairs();
     
     if (tradingPairs.length === 0) {
@@ -93,6 +91,9 @@ async function waitForInitialPriceData() {
     
     // Try to get price data for the first trading pair
     const firstPair = tradingPairs[0];
+    
+    // Import websocketService directly
+    const websocketService = require('./src/services/websocketService');
     
     while (attempts < maxAttempts) {
       try {
