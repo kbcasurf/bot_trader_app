@@ -1,8 +1,5 @@
 const WebSocket = require('ws');
 const logger = require('../utils/logger');
-const tradingService = require('./tradingService');
-const binanceService = require('./binanceService');
-const telegramService = require('./telegramService');
 const config = require('../../config');
 
 // Store active WebSocket connections
@@ -29,7 +26,7 @@ const initializeWebSocket = (symbol) => {
   // Create WebSocket URL
   // Binance WebSocket API provides real-time market data
   // We're using the aggTrade stream which provides trade level data
-  const wsBaseUrl = config.binance.websocketUrl || 'wss://stream.binance.com:9443';
+  const wsBaseUrl = config.binance?.websocketUrl || 'wss://stream.binance.com:9443';
   const url = `${wsBaseUrl}/ws/${formattedSymbol}@aggTrade`;
   
   logger.info(`Initializing WebSocket connection for ${symbol} at ${url}`);
@@ -45,10 +42,8 @@ const initializeWebSocket = (symbol) => {
       reconnectAttempts: 0
     });
     
-    // Notify via Telegram when connection is established
-    telegramService.sendNotification(`🔌 WebSocket connection established for ${symbol}`).catch(error => {
-      logger.error(`Failed to send Telegram notification for WebSocket connection: ${error.message}`);
-    });
+    // Log successful connection
+    logger.info(`WebSocket connection established for ${symbol}`);
   });
   
   ws.on('message', async (data) => {
@@ -82,17 +77,8 @@ const initializeWebSocket = (symbol) => {
           });
         }
         
-        // Process price update for trading algorithm
-        try {
-          // First, get the trading pair id for this symbol
-          const tradingPair = await binanceService.getTradingPairBySymbol(symbol);
-          
-          if (tradingPair) {
-            await tradingService.processPriceUpdate(tradingPair.id, price);
-          }
-        } catch (error) {
-          logger.error(`Error processing trading algorithm for ${symbol}:`, error);
-        }
+        // The trading algorithm processing will happen from binanceController
+        // We don't directly import tradingService here to avoid circular dependencies
       }
     } catch (error) {
       logger.error(`Error processing WebSocket message for ${symbol}:`, error);
@@ -198,6 +184,9 @@ const getLatestPrice = (symbol) => {
  */
 const initializeAllWebSockets = async () => {
   try {
+    // Import services dynamically to avoid circular dependencies
+    const binanceService = require('./binanceService');
+    
     // Get all trading pairs from database
     const tradingPairs = await binanceService.getTradingPairs();
     
@@ -214,7 +203,7 @@ const initializeAllWebSockets = async () => {
     return { success: true, count: tradingPairs.length };
   } catch (error) {
     logger.error('Error initializing WebSocket connections:', error);
-    throw error;
+    return { success: false, error: error.message };
   }
 };
 
@@ -261,10 +250,29 @@ const getConnectionStatus = () => {
   return status;
 };
 
+/**
+ * Broadcast price update to all clients
+ */
+const broadcastPriceUpdate = (symbol, price) => {
+  const io = global.io;
+  
+  if (!io) {
+    logger.warn('Socket.IO instance not available for broadcasting price update');
+    return;
+  }
+  
+  io.emit('priceUpdate', {
+    symbol,
+    price,
+    timestamp: new Date().toISOString()
+  });
+};
+
 module.exports = {
   initializeWebSocket,
   closeWebSocket,
   getLatestPrice,
   initializeAllWebSockets,
-  getConnectionStatus
+  getConnectionStatus,
+  broadcastPriceUpdate
 };

@@ -1,12 +1,10 @@
 const db = require('../../config/database');
-const binanceService = require('./binanceService');
-const telegramService = require('./telegramService');
 const logger = require('../utils/logger');
 
 // Trading algorithm constants
-const PROFIT_THRESHOLD = process.env.PROFIT_THRESHOLD; // profit target setting in .env file
-const LOSS_THRESHOLD = process.env.LOSS_THRESHOLD;   // loss threshold for additional purchases setting in .env file
-const ADDITIONAL_PURCHASE_AMOUNT = process.env.ADDITIONAL_PURCHASE_AMOUNT // for additional purchases setting in .env file
+const PROFIT_THRESHOLD = parseFloat(process.env.PROFIT_THRESHOLD) || 5; // profit target setting in .env file
+const LOSS_THRESHOLD = parseFloat(process.env.LOSS_THRESHOLD) || 5;   // loss threshold for additional purchases
+const ADDITIONAL_PURCHASE_AMOUNT = parseFloat(process.env.ADDITIONAL_PURCHASE_AMOUNT) || 50; // for additional purchases
 
 /**
  * Process price update for a trading pair
@@ -16,6 +14,10 @@ exports.processPriceUpdate = async (tradingPairId, currentPrice) => {
   let conn;
   try {
     conn = await db.getConnection();
+    
+    // Dynamically import to avoid circular dependencies
+    const binanceService = require('./binanceService');
+    const telegramService = require('./telegramService');
     
     // Get trading pair information
     const tradingPair = await binanceService.getTradingPairById(tradingPairId);
@@ -61,12 +63,14 @@ exports.processPriceUpdate = async (tradingPairId, currentPrice) => {
       logger.info(`Sell condition met for ${tradingPair.symbol}: Profit ${profitPercentage.toFixed(2)}% >= ${PROFIT_THRESHOLD}%`);
       
       // Execute sell order
-      const transaction = await binanceService.executeSellAllOrder(tradingPairId);
+      const transaction = await binanceService.executeSellAllOrder(tradingPairId, {
+        reason: 'PROFIT_TARGET'
+      });
       
       // Send Telegram notification
       await telegramService.sendNotification(
         `🟢 SELL EXECUTED (Profit Target)\n` +
-        `Pair: ${tradingPair.displayName}\n` +
+        `Pair: ${tradingPair.display_name}\n` +
         `Price: $${currentPrice}\n` +
         `Quantity: ${holdings.quantity}\n` +
         `Profit: ${profitPercentage.toFixed(2)}%\n` +
@@ -86,12 +90,14 @@ exports.processPriceUpdate = async (tradingPairId, currentPrice) => {
       logger.info(`Buy condition met for ${tradingPair.symbol}: Loss ${lossPercentage.toFixed(2)}% >= ${LOSS_THRESHOLD}%`);
       
       // Execute buy order
-      const transaction = await binanceService.executeBuyOrder(tradingPairId, ADDITIONAL_PURCHASE_AMOUNT);
+      const transaction = await binanceService.executeBuyOrder(tradingPairId, ADDITIONAL_PURCHASE_AMOUNT, {
+        reason: 'DIP_STRATEGY'
+      });
       
       // Send Telegram notification
       await telegramService.sendNotification(
         `🔵 BUY EXECUTED (Dip Strategy)\n` +
-        `Pair: ${tradingPair.displayName}\n` +
+        `Pair: ${tradingPair.display_name}\n` +
         `Price: $${currentPrice}\n` +
         `Amount: $${ADDITIONAL_PURCHASE_AMOUNT}\n` +
         `Loss from last buy: ${lossPercentage.toFixed(2)}%`
@@ -115,10 +121,13 @@ exports.processPriceUpdate = async (tradingPairId, currentPrice) => {
     
     // Try to send error notification via Telegram
     try {
+      const binanceService = require('./binanceService');
+      const telegramService = require('./telegramService');
+      
       const tradingPair = await binanceService.getTradingPairById(tradingPairId);
       await telegramService.sendNotification(
         `⚠️ ERROR PROCESSING PRICE UPDATE\n` +
-        `Pair: ${tradingPair ? tradingPair.displayName : `ID: ${tradingPairId}`}\n` +
+        `Pair: ${tradingPair ? tradingPair.display_name : `ID: ${tradingPairId}`}\n` +
         `Error: ${error.message}`
       );
     } catch (notificationError) {
@@ -164,13 +173,17 @@ exports.initializeTrading = async (tradingPairId, initialInvestment) => {
     // Commit transaction
     await conn.commit();
     
+    // Dynamically import to avoid circular dependencies
+    const binanceService = require('./binanceService');
+    const telegramService = require('./telegramService');
+    
     // Get trading pair information for notification
     const tradingPair = await binanceService.getTradingPairById(tradingPairId);
     
     // Send Telegram notification
     await telegramService.sendNotification(
       `🚀 TRADING INITIALIZED\n` +
-      `Pair: ${tradingPair.displayName}\n` +
+      `Pair: ${tradingPair.display_name}\n` +
       `Initial Investment: $${initialInvestment}`
     );
     
@@ -207,13 +220,17 @@ exports.stopTrading = async (tradingPairId) => {
     // Commit transaction
     await conn.commit();
     
+    // Dynamically import to avoid circular dependencies
+    const binanceService = require('./binanceService');
+    const telegramService = require('./telegramService');
+    
     // Get trading pair information for notification
     const tradingPair = await binanceService.getTradingPairById(tradingPairId);
     
     // Send Telegram notification
     await telegramService.sendNotification(
       `⏹️ TRADING STOPPED\n` +
-      `Pair: ${tradingPair.displayName}`
+      `Pair: ${tradingPair.display_name}`
     );
     
     return { 

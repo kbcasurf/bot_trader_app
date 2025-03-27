@@ -1,6 +1,4 @@
 const websocketService = require('../services/websocketService');
-const binanceService = require('../services/binanceService');
-const tradingService = require('../services/tradingService');
 const logger = require('../utils/logger');
 
 /**
@@ -43,6 +41,9 @@ exports.handleConnection = (socket) => {
       socket.join(`tradingPair-${tradingPairId}`);
       
       // Send current data for this trading pair
+      // Import services dynamically to avoid circular dependencies
+      const binanceService = require('../services/binanceService');
+      
       const tradingPair = await binanceService.getTradingPairById(tradingPairId);
       const currentPrice = await binanceService.getCurrentPrice(tradingPair.symbol);
       const holdings = await binanceService.getHoldings(tradingPairId);
@@ -77,6 +78,10 @@ exports.handleConnection = (socket) => {
  */
 const sendInitialData = async (socket) => {
   try {
+    // Import services dynamically to avoid circular dependencies
+    const binanceService = require('../services/binanceService');
+    const tradingService = require('../services/tradingService');
+    
     // Get all trading pairs
     const tradingPairs = await binanceService.getTradingPairs();
     
@@ -124,6 +129,9 @@ exports.broadcastTransactionUpdate = async (tradingPairId, transaction) => {
   }
   
   try {
+    // Import services dynamically to avoid circular dependencies
+    const binanceService = require('../services/binanceService');
+    
     // Get updated holdings
     const holdings = await binanceService.getHoldings(tradingPairId);
     

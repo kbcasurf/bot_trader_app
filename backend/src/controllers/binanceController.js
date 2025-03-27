@@ -19,8 +19,13 @@ exports.getCurrentPrice = async (req, res, next) => {
   try {
     const { symbol } = req.params;
     
-    // First try to get price from WebSocket cache
-    let price = websocketService.getLatestPrice(symbol);
+    // First try to get price from WebSocket cache if available
+    let price = null;
+    try {
+      price = websocketService.getLatestPrice(symbol);
+    } catch (error) {
+      logger.debug(`WebSocket price not available for ${symbol}. Falling back to API.`);
+    }
     
     // If not available in WebSocket cache, fetch from Binance API
     if (!price) {
@@ -29,6 +34,7 @@ exports.getCurrentPrice = async (req, res, next) => {
     
     res.json({ symbol, price });
   } catch (error) {
+    logger.error(`Error getting current price for ${req.params.symbol}:`, error);
     next(error);
   }
 };
@@ -163,7 +169,15 @@ exports.stopTrading = async (req, res, next) => {
 // Get WebSocket connection status
 exports.getWebSocketStatus = async (req, res, next) => {
   try {
-    const status = websocketService.getConnectionStatus();
+    let status = {};
+    
+    try {
+      status = websocketService.getConnectionStatus();
+    } catch (wsError) {
+      logger.error('Error getting WebSocket connection status:', wsError);
+      status = { error: wsError.message };
+    }
+    
     res.json(status);
   } catch (error) {
     next(error);
@@ -173,7 +187,15 @@ exports.getWebSocketStatus = async (req, res, next) => {
 // Restart WebSocket connections
 exports.restartWebSockets = async (req, res, next) => {
   try {
-    const result = await websocketService.initializeAllWebSockets();
+    let result = {};
+    
+    try {
+      result = await websocketService.initializeAllWebSockets();
+    } catch (wsError) {
+      logger.error('Error restarting WebSocket connections:', wsError);
+      result = { success: false, error: wsError.message };
+    }
+    
     res.json(result);
   } catch (error) {
     next(error);
