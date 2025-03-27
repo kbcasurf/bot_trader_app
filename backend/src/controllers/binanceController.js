@@ -1,6 +1,7 @@
-const binanceService = require('../services/binanceService');
-const tradingService = require('../services/tradingService');
+// backend/src/controllers/binanceController.js
 const websocketService = require('../services/websocketService');
+const tradingService = require('../services/tradingService');
+const binanceService = require('../services/binanceService');
 const telegramService = require('../services/telegramService');
 const logger = require('../utils/logger');
 
@@ -14,25 +15,31 @@ exports.getTradingPairs = async (req, res, next) => {
   }
 };
 
-// Get current price for a symbol
+// Get current price for a symbol - WEBSOCKET ONLY, NO API FALLBACK
 exports.getCurrentPrice = async (req, res, next) => {
   try {
     const { symbol } = req.params;
     
-    // First try to get price from WebSocket cache if available
-    let price = null;
     try {
-      price = websocketService.getLatestPrice(symbol);
+      // Get price from WebSocket - only source of price data
+      const price = websocketService.getLatestPrice(symbol);
+      
+      res.json({ 
+        symbol, 
+        price,
+        source: 'websocket', 
+        timestamp: new Date().toISOString() 
+      });
     } catch (error) {
-      logger.debug(`WebSocket price not available for ${symbol}. Falling back to API.`);
+      // If WebSocket price is not available, return an error
+      logger.error(`WebSocket price not available for ${symbol}: ${error.message}`);
+      
+      return res.status(503).json({ 
+        error: 'Price data not available',
+        message: `No price data available from WebSocket for ${symbol}. Please try again later.`,
+        timestamp: new Date().toISOString()
+      });
     }
-    
-    // If not available in WebSocket cache, fetch from Binance API
-    if (!price) {
-      price = await binanceService.getCurrentPrice(symbol);
-    }
-    
-    res.json({ symbol, price });
   } catch (error) {
     logger.error(`Error getting current price for ${req.params.symbol}:`, error);
     next(error);
@@ -47,7 +54,22 @@ exports.getHoldings = async (req, res, next) => {
     
     // Get current price to calculate current value
     const tradingPair = await binanceService.getTradingPairById(tradingPairId);
-    const currentPrice = await binanceService.getCurrentPrice(tradingPair.symbol);
+    
+    let currentPrice = 0;
+    try {
+      // Try to get price from WebSocket
+      currentPrice = websocketService.getLatestPrice(tradingPair.symbol);
+    } catch (priceError) {
+      logger.error(`Could not get current price for ${tradingPair.symbol}: ${priceError.message}`);
+      // Return holdings without current value if price is not available
+      return res.json({
+        ...holdings,
+        currentPrice: null,
+        currentValue: null,
+        profitLoss: null,
+        priceError: 'WebSocket price data not available'
+      });
+    }
     
     // Add current value and profit/loss information
     const result = {
@@ -169,35 +191,21 @@ exports.stopTrading = async (req, res, next) => {
 // Get WebSocket connection status
 exports.getWebSocketStatus = async (req, res, next) => {
   try {
-    let status = {};
-    
-    try {
-      status = websocketService.getConnectionStatus();
-    } catch (wsError) {
-      logger.error('Error getting WebSocket connection status:', wsError);
-      status = { error: wsError.message };
-    }
-    
+    const status = websocketService.getConnectionStatus();
     res.json(status);
   } catch (error) {
+    logger.error('Error getting WebSocket connection status:', error);
     next(error);
   }
 };
 
-// Restart WebSocket connections
+// Restart WebSocket connection
 exports.restartWebSockets = async (req, res, next) => {
   try {
-    let result = {};
-    
-    try {
-      result = await websocketService.initializeAllWebSockets();
-    } catch (wsError) {
-      logger.error('Error restarting WebSocket connections:', wsError);
-      result = { success: false, error: wsError.message };
-    }
-    
+    const result = await websocketService.initializeAllWebSockets();
     res.json(result);
   } catch (error) {
+    logger.error('Error restarting WebSocket connections:', error);
     next(error);
   }
 };

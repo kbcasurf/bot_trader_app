@@ -263,6 +263,12 @@ exports.getSymbolInfo = async (symbol) => {
   return exchangeInfo.symbols.find(s => s.symbol === symbol);
 };
 
+
+
+
+
+
+
 /**
  * Get current price for a symbol from Binance
  */
@@ -569,9 +575,51 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
 };
 
 /**
- * Execute a sell order for a specific quantity
+ * Get current price for a symbol from WebSocket ONLY
+ * No API fallback is allowed
  */
-exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
+exports.getCurrentPrice = async (symbol) => {
+  try {
+    // Get price only from WebSocket service
+    const websocketService = require('./websocketService');
+    return websocketService.getLatestPrice(symbol);
+  } catch (error) {
+    logger.error(`Error fetching price from WebSocket for ${symbol}:`, error);
+    throw new Error(`No price available for ${symbol} from WebSocket: ${error.message}`);
+  }
+};
+
+/**
+ * Format a number according to Binance's requirements using step size
+ */
+exports.formatQuantity = async (symbol, quantity) => {
+  try {
+    const symbolInfo = await exports.getSymbolInfo(symbol);
+    
+    // Get the lot size filter
+    const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
+    
+    if (!lotSizeFilter) {
+      return quantity; // No filter found, return as is
+    }
+    
+    const stepSize = parseFloat(lotSizeFilter.stepSize);
+    
+    // Calculate the precision from the step size
+    const precision = Math.log10(1 / stepSize);
+    
+    // Format the quantity based on the precision
+    return parseFloat(quantity.toFixed(Math.floor(precision)));
+  } catch (error) {
+    logger.error(`Error formatting quantity for ${symbol}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Execute a buy order
+ */
+exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
   let conn;
   try {
     conn = await db.getConnection();
@@ -579,30 +627,30 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
     // Get trading pair information
     const tradingPair = await exports.getTradingPairById(tradingPairId);
     
-    // Get current price from Binance
-    const currentPrice = await exports.getCurrentPrice(tradingPair.symbol);
+    // Get current price from WebSocket
+    let currentPrice;
+    try {
+      const websocketService = require('./websocketService');
+      currentPrice = websocketService.getLatestPrice(tradingPair.symbol);
+    } catch (priceError) {
+      throw new Error(`Cannot execute buy order: No price available from WebSocket for ${tradingPair.symbol}`);
+    }
+    
+    // Calculate quantity based on investment amount
+    const quantity = amount / currentPrice;
     
     // Format quantity according to Binance's requirements
     const formattedQuantity = await exports.formatQuantity(tradingPair.symbol, quantity);
     
-    // Calculate total amount
-    const totalAmount = formattedQuantity * currentPrice;
-    
     // Start transaction
     await conn.beginTransaction();
-    
-    // Get current holdings for profit calculation
-    const [currentHoldings] = await conn.query(
-      'SELECT * FROM holdings WHERE trading_pair_id = ?',
-      [tradingPairId]
-    );
     
     // Insert transaction record
     const transactionResult = await conn.query(
       `INSERT INTO transactions 
        (trading_pair_id, transaction_type, quantity, price, total_amount, status, binance_order_id) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [tradingPairId, 'SELL', formattedQuantity, currentPrice, totalAmount, 'PENDING', null]
+      [tradingPairId, 'BUY', formattedQuantity, currentPrice, amount, 'PENDING', null]
     );
     
     const transactionId = transactionResult.insertId;
@@ -616,7 +664,7 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
         // Format parameters for the order
         const orderParams = {
           symbol: tradingPair.symbol,
-          side: 'SELL',
+          side: 'BUY',
           type: 'MARKET',
           quantity: formattedQuantity
         };
@@ -627,12 +675,12 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
         binanceOrderId = order.orderId;
         orderStatus = 'COMPLETED';
         
-        logger.info(`Binance SELL order executed: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
+        logger.info(`Binance BUY order executed: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
       } else {
-        logger.info(`Simulated SELL order: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}`);
+        logger.info(`Simulated BUY order: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}`);
       }
     } catch (orderError) {
-      logger.error(`Error executing Binance SELL order:`, orderError);
+      logger.error(`Error executing Binance BUY order:`, orderError);
       
       // Even if Binance order fails, we proceed with local transaction for simulation purposes
       orderStatus = 'FAILED';
@@ -640,7 +688,7 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
       // Send error notification
       await telegramService.sendErrorNotification(
         orderError, 
-        `Failed to execute SELL order for ${tradingPair.display_name}`
+        `Failed to execute BUY order for ${tradingPair.display_name}`
       );
     }
     
@@ -652,56 +700,51 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
     
     // If order failed on Binance but we're in test mode, still update holdings for simulation
     if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings || TEST_MODE) {
-      // Update holdings
-      if (currentHoldings && currentHoldings.length > 0) {
-        const remainingQuantity = Math.max(0, parseFloat(currentHoldings[0].quantity) - formattedQuantity);
+      // Update or insert holdings
+      const existingHoldings = await conn.query(
+        'SELECT * FROM holdings WHERE trading_pair_id = ?',
+        [tradingPairId]
+      );
+      
+      if (existingHoldings.length > 0) {
+        // Update existing holdings
+        const currentHoldings = existingHoldings[0];
+        const currentQuantity = parseFloat(currentHoldings.quantity);
+        const newQuantity = currentQuantity + formattedQuantity;
         
-        // If remaining quantity is zero, reset average buy price
-        if (remainingQuantity === 0) {
-          await conn.query(
-            `UPDATE holdings 
-             SET quantity = 0, average_buy_price = 0, last_buy_price = 0 
-             WHERE trading_pair_id = ?`,
-            [tradingPairId]
-          );
-        } else {
-          // Just update the quantity, keep the average buy price
-          await conn.query(
-            `UPDATE holdings 
-             SET quantity = ? 
-             WHERE trading_pair_id = ?`,
-            [remainingQuantity, tradingPairId]
-          );
-        }
+        // Calculate new average buy price
+        const currentValue = currentQuantity * parseFloat(currentHoldings.average_buy_price || 0);
+        const newValue = formattedQuantity * currentPrice;
+        const newAverageBuyPrice = (currentValue + newValue) / newQuantity;
+        
+        await conn.query(
+          `UPDATE holdings 
+           SET quantity = ?, average_buy_price = ?, last_buy_price = ? 
+           WHERE trading_pair_id = ?`,
+          [newQuantity, newAverageBuyPrice, currentPrice, tradingPairId]
+        );
+      } else {
+        // Insert new holdings
+        await conn.query(
+          `INSERT INTO holdings 
+           (trading_pair_id, quantity, average_buy_price, last_buy_price) 
+           VALUES (?, ?, ?, ?)`,
+          [tradingPairId, formattedQuantity, currentPrice, currentPrice]
+        );
       }
     }
     
     // Commit transaction
     await conn.commit();
     
-    // Calculate profit if available
-    let profit = null;
-    if (currentHoldings && currentHoldings.length > 0) {
-      const avgBuyPrice = parseFloat(currentHoldings[0].average_buy_price || 0);
-      if (avgBuyPrice > 0) {
-        const profitAmount = (currentPrice - avgBuyPrice) * formattedQuantity;
-        const profitPercentage = ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100;
-        profit = {
-          amount: profitAmount,
-          percentage: profitPercentage
-        };
-      }
-    }
-    
     // Send Telegram notification
     try {
       await telegramService.sendTradeNotification({
         tradingPair,
-        type: 'SELL',
+        type: 'BUY',
         quantity: formattedQuantity,
         price: currentPrice,
-        totalAmount,
-        profit,
+        totalAmount: amount,
         reason: options.reason || 'MANUAL'
       });
     } catch (notificationError) {
@@ -712,18 +755,17 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
     return {
       id: transactionId,
       tradingPairId: parseInt(tradingPairId),
-      type: 'SELL',
-      quantity: parseFloat(formattedQuantity),
+      type: 'BUY',
+      quantity: parseFloat(formattedQuantity.toFixed(8)),
       price: currentPrice,
-      totalAmount: parseFloat(totalAmount.toFixed(2)),
+      totalAmount: parseFloat(amount),
       status: orderStatus,
       binanceOrderId,
-      profit,
       timestamp: new Date()
     };
   } catch (error) {
     if (conn) await conn.rollback();
-    logger.error('Error executing sell order:', error);
+    logger.error('Error executing buy order:', error);
     throw error;
   } finally {
     if (conn) conn.release();

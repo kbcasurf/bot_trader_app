@@ -68,6 +68,52 @@ io.on('connection', (socket) => {
 app.set('io', io);
 global.io = io; // This ensures the websocketService can access io
 
+/**
+ * Wait for initial price data to be available from WebSocket
+ * This ensures we have price data before accepting client requests
+ */
+async function waitForInitialPriceData() {
+  const websocketService = require('./src/services/websocketService');
+  const binanceService = require('./src/services/binanceService');
+  
+  try {
+    // Get all trading pairs
+    const tradingPairs = await binanceService.getTradingPairs();
+    
+    if (tradingPairs.length === 0) {
+      logger.warn('No trading pairs found. Skipping initial price data wait.');
+      return;
+    }
+    
+    logger.info('Waiting for initial price data from WebSocket...');
+    
+    let attempts = 0;
+    const maxAttempts = 10;
+    const waitInterval = 2000; // 2 seconds between checks
+    
+    // Try to get price data for the first trading pair
+    const firstPair = tradingPairs[0];
+    
+    while (attempts < maxAttempts) {
+      try {
+        // Check if we can get price for the first pair
+        const price = websocketService.getLatestPrice(firstPair.symbol);
+        logger.info(`Initial price data received for ${firstPair.symbol}: $${price}`);
+        return; // Price data available, we can proceed
+      } catch (error) {
+        attempts++;
+        logger.info(`Waiting for initial price data (attempt ${attempts}/${maxAttempts})...`);
+        await new Promise(resolve => setTimeout(resolve, waitInterval));
+      }
+    }
+    
+    logger.warn('Timed out waiting for initial price data. Starting server anyway.');
+  } catch (error) {
+    logger.error('Error waiting for initial price data:', error);
+    // Continue with startup even if this fails
+  }
+}
+
 // Initialize database and start server
 async function startServer() {
   try {
@@ -105,10 +151,16 @@ async function startServer() {
     // Initialize Telegram bot for notifications
     await initializeTelegramService();
     
-    // Initialize WebSockets for price updates
+    // IMPORTANT: Set up WebSockets BEFORE starting the server
+    // This ensures the WebSocket connection is established and price data is flowing
+    // before any client requests come in
+    logger.info('Initializing WebSocket connection for price data...');
     await websocketController.initializeWebSockets(io);
     
-    // Start the server
+    // Wait for initial price data from WebSocket
+    await waitForInitialPriceData();
+    
+    // Start the server AFTER WebSocket is established
     server.listen(port, '0.0.0.0', () => {
       logger.info(`Server running on port ${port}`);
       

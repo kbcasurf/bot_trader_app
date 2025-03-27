@@ -1,13 +1,30 @@
 <template>
-  <div class="crypto-card">
+  <div class="crypto-card" :class="{'card-inactive': !socketConnected}">
     <div class="crypto-card-header">
       <img :src="logoPath" :alt="tradingPair.displayName" class="crypto-logo">
-      <h3 class="crypto-name">{{ tradingPair.displayName }}</h3>
-      <div class="price-display">
-        <span :class="{'price-up': priceChange > 0, 'price-down': priceChange < 0}">
-          ${{ currentPrice.toFixed(2) }}
-        </span>
+      <div class="name-price">
+        <h3 class="crypto-name">{{ tradingPair.displayName }}</h3>
+        <div class="price-display" v-if="socketConnected">
+          <span :class="{'price-up': priceChange > 0, 'price-down': priceChange < 0}">
+            ${{ currentPrice.toFixed(2) }}
+          </span>
+          <small :class="{'price-up': priceChange > 0, 'price-down': priceChange < 0}">
+            {{ priceChange > 0 ? '+' : '' }}{{ priceChange.toFixed(2) }}
+          </small>
+        </div>
+        <div class="price-display" v-else>
+          <span class="price-unavailable">Price unavailable</span>
+        </div>
       </div>
+    </div>
+
+    <div class="connection-status">
+      <span class="status-indicator" :class="{ 'status-connected': socketConnected, 'status-disconnected': !socketConnected }">
+        {{ socketConnected ? 'WebSocket Connected' : 'WebSocket Disconnected' }}
+      </span>
+      <span class="last-update" v-if="socketConnected">
+        Last update: {{ lastUpdateTime }}
+      </span>
     </div>
 
     <div class="crypto-stats">
@@ -33,12 +50,6 @@
         <span class="stat-label">Trading Status:</span>
         <span class="status-indicator" :class="{ 'status-active': tradingStatus.active }">
           {{ tradingStatus.active ? 'Active' : 'Inactive' }}
-        </span>
-      </div>
-      <div class="stat-row">
-        <span class="stat-label">Connection:</span>
-        <span class="status-indicator" :class="{ 'status-active': socketConnected, 'status-error': !socketConnected }">
-          {{ socketConnected ? 'WebSocket' : 'Polling' }}
         </span>
       </div>
     </div>
@@ -85,22 +96,33 @@
       </div>
     </div>
 
-    <button 
-      v-if="hasHoldings" 
-      @click="handleSellAll" 
-      class="action-button sell-btn"
-      :disabled="isLoading"
-    >
-      {{ isLoading ? 'Processing...' : 'Sell All' }}
-    </button>
-    <button 
-      v-else 
-      @click="handleBuy" 
-      class="action-button purchase-btn"
-      :disabled="isLoading"
-    >
-      {{ isLoading ? 'Processing...' : `Buy for $${investmentAmount}` }}
-    </button>
+    <div class="action-container">
+      <button 
+        v-if="hasHoldings" 
+        @click="handleSellAll" 
+        class="action-button sell-btn"
+        :disabled="isLoading || !socketConnected"
+      >
+        <span v-if="isLoading">Processing...</span>
+        <span v-else-if="!socketConnected">Waiting for connection...</span>
+        <span v-else>Sell All</span>
+      </button>
+      <button 
+        v-else 
+        @click="handleBuy" 
+        class="action-button purchase-btn"
+        :disabled="isLoading || !socketConnected"
+      >
+        <span v-if="isLoading">Processing...</span>
+        <span v-else-if="!socketConnected">Waiting for connection...</span>
+        <span v-else>Buy for ${{ investmentAmount }}</span>
+      </button>
+      
+      <div class="websocket-warning" v-if="!socketConnected">
+        <i class="warning-icon">⚠️</i>
+        <span>WebSocket disconnected. Trading unavailable until connection is restored.</span>
+      </div>
+    </div>
 
     <div class="transaction-history" v-if="transactions.length > 0">
       <h4>Recent Transactions</h4>
@@ -141,11 +163,12 @@ export default {
       investmentAmount: 50,
       presets: [25, 50, 100, 250, 500],
       isLoading: false,
-      priceUpdateInterval: null,
       tradingStatus: null,
       socket: null,
       socketConnected: false,
-      pollingInterval: null
+      lastUpdateTime: 'Never',
+      priceUpdateCount: 0,
+      reconnectAttempts: 0
     };
   },
   computed: {
@@ -153,16 +176,19 @@ export default {
       return this.holdings.quantity > 0;
     },
     currentValue() {
+      if (!this.socketConnected || !this.currentPrice) {
+        return this.holdings.quantity * (this.holdings.averageBuyPrice || 0);
+      }
       return this.holdings.quantity * this.currentPrice;
     },
     profitLoss() {
-      if (!this.holdings.averageBuyPrice || this.holdings.averageBuyPrice === 0) {
+      if (!this.holdings.averageBuyPrice || this.holdings.averageBuyPrice === 0 || !this.currentPrice) {
         return 0;
       }
       return ((this.currentPrice - this.holdings.averageBuyPrice) / this.holdings.averageBuyPrice) * 100;
     },
     priceChange() {
-      if (!this.lastPrice || this.lastPrice === 0) {
+      if (!this.lastPrice || this.lastPrice === 0 || !this.currentPrice) {
         return 0;
       }
       return this.currentPrice - this.lastPrice;
@@ -179,29 +205,20 @@ export default {
     }
   },
   created() {
-    this.fetchData();
+    this.fetchInitialData();
     this.connectToWebSocket();
-    this.fetchTradingStatus();
   },
   beforeUnmount() {
-    this.stopPriceUpdates();
     this.disconnectFromWebSocket();
-    
-    // Clear polling interval if it exists
-    if (this.pollingInterval) {
-      clearInterval(this.pollingInterval);
-      this.pollingInterval = null;
-    }
   },
   methods: {
-    async fetchData() {
+    async fetchInitialData() {
       try {
-        await this.fetchPrice();
         await this.fetchHoldings();
         await this.fetchTransactions();
         await this.fetchTradingStatus();
       } catch (error) {
-        console.error(`Error fetching data for ${this.tradingPair.symbol}:`, error);
+        console.error(`Error fetching initial data for ${this.tradingPair.symbol}:`, error);
       }
     },
     
@@ -241,13 +258,19 @@ export default {
         // Handle connection events
         this.socket.on('connect', () => {
           console.log(`WebSocket connected for ${this.tradingPair.symbol}`);
-          this.socket.emit('subscribeTradingPair', this.tradingPair.id);
           this.socketConnected = true;
+          this.reconnectAttempts = 0;
+          this.lastUpdateTime = this.formatTime(new Date());
           
-          // If we were polling, we can stop now
-          if (this.pollingInterval) {
-            clearInterval(this.pollingInterval);
-            this.pollingInterval = null;
+          // Subscribe to this trading pair's updates
+          this.socket.emit('subscribeTradingPair', this.tradingPair.id);
+        });
+        
+        // Handle global WebSocket status updates
+        this.socket.on('websocketStatus', (status) => {
+          this.socketConnected = status.status === 'connected';
+          if (status.lastMessageTime) {
+            this.lastUpdateTime = this.formatTime(new Date(status.lastMessageTime));
           }
         });
         
@@ -256,6 +279,9 @@ export default {
           if (data.symbol === this.tradingPair.symbol) {
             this.lastPrice = this.currentPrice;
             this.currentPrice = data.price;
+            this.lastUpdateTime = this.formatTime(new Date());
+            this.priceUpdateCount++;
+            this.socketConnected = true;
             console.log(`Price update for ${this.tradingPair.symbol}: ${data.price}`);
           }
         });
@@ -285,23 +311,17 @@ export default {
         this.socket.on('connect_error', (error) => {
           console.error(`WebSocket connection error for ${this.tradingPair.symbol}:`, error);
           this.socketConnected = false;
-          this.startPollingFallback();
+          this.reconnectAttempts++;
         });
         
         // Handle disconnect
         this.socket.on('disconnect', (reason) => {
           console.warn(`WebSocket disconnected for ${this.tradingPair.symbol}. Reason: ${reason}`);
           this.socketConnected = false;
-          
-          // Start polling if disconnected for a reason other than "io client disconnect"
-          if (reason !== 'io client disconnect') {
-            this.startPollingFallback();
-          }
         });
       } catch (error) {
         console.error(`Error initializing WebSocket for ${this.tradingPair.symbol}:`, error);
         this.socketConnected = false;
-        this.startPollingFallback();
       }
     },
     
@@ -314,6 +334,7 @@ export default {
         this.socket.off('priceUpdate');
         this.socket.off('transactionUpdate');
         this.socket.off('tradingStatusUpdate');
+        this.socket.off('websocketStatus');
         this.socket.off('connect_error');
         this.socket.off('disconnect');
         
@@ -323,45 +344,16 @@ export default {
       }
     },
     
-    startPollingFallback() {
-      // Check if polling is enabled (with fallback to true if not set)
-      const enableFallback = import.meta.env.VITE_ENABLE_FALLBACK_POLLING !== 'false';
-      if (!enableFallback) return;
-      
-      console.log(`Starting polling fallback for ${this.tradingPair.symbol}`);
-      // Clear any existing interval
-      if (this.pollingInterval) {
-        clearInterval(this.pollingInterval);
-      }
-      
-      // Set up polling interval (every 10 seconds or from environment)
-      const interval = parseInt(import.meta.env.VITE_PRICE_REFRESH_INTERVAL) || 10000;
-      this.pollingInterval = setInterval(async () => {
-        try {
-          console.log(`Polling price for ${this.tradingPair.symbol}`);
-          await this.fetchPrice();
-          await this.fetchHoldings();
-          await this.fetchTransactions();
-        } catch (error) {
-          console.error(`Error in polling fallback for ${this.tradingPair.symbol}:`, error);
-        }
-      }, interval);
-    },
-    
-    async fetchPrice() {
-      try {
-        const response = await api.getCurrentPrice(this.tradingPair.symbol);
-        this.lastPrice = this.currentPrice;
-        this.currentPrice = response.data.price;
-      } catch (error) {
-        console.error(`Error fetching price for ${this.tradingPair.symbol}:`, error);
-      }
-    },
-    
     async fetchHoldings() {
       try {
         const response = await api.getHoldings(this.tradingPair.id);
         this.holdings = response.data;
+        
+        // If we got a price from the API (which comes from WebSocket), update our local price
+        if (response.data.currentPrice) {
+          this.lastPrice = this.currentPrice;
+          this.currentPrice = response.data.currentPrice;
+        }
       } catch (error) {
         console.error(`Error fetching holdings for ${this.tradingPair.symbol}:`, error);
       }
@@ -376,39 +368,47 @@ export default {
       }
     },
     
-    stopPriceUpdates() {
-      if (this.priceUpdateInterval) {
-        clearInterval(this.priceUpdateInterval);
-      }
-    },
-    
     async handleBuy() {
-      if (this.isLoading) return;
+      if (this.isLoading || !this.socketConnected) return;
+      
+      if (!this.currentPrice) {
+        alert('Cannot execute buy order: No price data available from WebSocket.');
+        return;
+      }
       
       this.isLoading = true;
       try {
         await api.makeFirstPurchase(this.tradingPair.id, this.investmentAmount);
         // Refresh data after purchase
-        await this.fetchData();
+        await this.fetchHoldings();
+        await this.fetchTransactions();
+        await this.fetchTradingStatus();
       } catch (error) {
         console.error('Error making purchase:', error);
-        alert('Failed to make purchase. Please try again.');
+        alert('Failed to make purchase. Please try again when the WebSocket connection is established.');
       } finally {
         this.isLoading = false;
       }
     },
     
     async handleSellAll() {
-      if (this.isLoading) return;
+      if (this.isLoading || !this.socketConnected) return;
+      
+      if (!this.currentPrice) {
+        alert('Cannot execute sell order: No price data available from WebSocket.');
+        return;
+      }
       
       this.isLoading = true;
       try {
         await api.sellAll(this.tradingPair.id);
         // Refresh data after selling
-        await this.fetchData();
+        await this.fetchHoldings();
+        await this.fetchTransactions();
+        await this.fetchTradingStatus();
       } catch (error) {
         console.error('Error selling holdings:', error);
-        alert('Failed to sell holdings. Please try again.');
+        alert('Failed to sell holdings. Please try again when the WebSocket connection is established.');
       } finally {
         this.isLoading = false;
       }
@@ -417,6 +417,10 @@ export default {
     formatDate(dateString) {
       const date = new Date(dateString);
       return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    },
+    
+    formatTime(date) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
   }
 };
@@ -429,11 +433,28 @@ export default {
   padding: 20px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
   transition: transform 0.2s, box-shadow 0.2s;
+  position: relative;
+  overflow: hidden;
 }
 
 .crypto-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.card-inactive {
+  opacity: 0.9;
+  position: relative;
+}
+
+.card-inactive::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-color: #ef4444;
 }
 
 .crypto-card-header {
@@ -446,17 +467,32 @@ export default {
   width: 40px;
   height: 40px;
   margin-right: 15px;
+  border-radius: 50%;
+  background-color: #f8fafc;
+  padding: 5px;
+}
+
+.name-price {
+  flex: 1;
 }
 
 .crypto-name {
   font-size: 18px;
   font-weight: 500;
-  flex-grow: 1;
+  margin: 0 0 4px 0;
 }
 
 .price-display {
   font-size: 18px;
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.price-display small {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .price-up {
@@ -465,6 +501,50 @@ export default {
 
 .price-down {
   color: #ef4444;
+}
+
+.price-unavailable {
+  color: #64748b;
+  font-style: italic;
+  font-size: 16px;
+  font-weight: normal;
+}
+
+.connection-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  font-size: 12px;
+}
+
+.status-indicator {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background-color: #f1f5f9;
+  color: #64748b;
+}
+
+.status-connected {
+  background-color: #dcfce7;
+  color: #15803d;
+}
+
+.status-disconnected {
+  background-color: #fee2e2;
+  color: #dc2626;
+}
+
+.status-active {
+  background-color: #dcfce7;
+  color: #15803d;
+}
+
+.last-update {
+  color: #64748b;
+  font-size: 11px;
 }
 
 .crypto-stats {
@@ -491,25 +571,6 @@ export default {
 
 .profit-negative {
   color: #ef4444;
-}
-
-.status-indicator {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 3px 6px;
-  border-radius: 4px;
-  background-color: #f1f5f9;
-  color: #64748b;
-}
-
-.status-active {
-  background-color: #dcfce7;
-  color: #15803d;
-}
-
-.status-error {
-  background-color: #fee2e2;
-  color: #dc2626;
 }
 
 .investment-control {
@@ -559,6 +620,10 @@ export default {
   color: white;
 }
 
+.action-container {
+  margin-bottom: 15px;
+}
+
 .action-button {
   width: 100%;
   padding: 10px;
@@ -567,7 +632,7 @@ export default {
   font-size: 16px;
   font-weight: 500;
   cursor: pointer;
-  margin-bottom: 15px;
+  margin-bottom: 10px;
   transition: background-color 0.2s;
 }
 
@@ -592,6 +657,22 @@ export default {
 
 .sell-btn:hover:not(:disabled) {
   background-color: #dc2626;
+}
+
+.websocket-warning {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.warning-icon {
+  font-size: 14px;
 }
 
 .profit-bar {
@@ -636,5 +717,20 @@ export default {
 .transaction-sell {
   color: #ef4444;
   font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .crypto-card-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .crypto-logo {
+    margin-bottom: 10px;
+  }
+  
+  .price-display {
+    margin-top: 5px;
+  }
 }
 </style>
