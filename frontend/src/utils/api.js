@@ -1,5 +1,3 @@
-// frontend/src/utils/api.js
-
 import axios from 'axios';
 
 // Get API URL from environment variables or use default fallback
@@ -11,7 +9,7 @@ const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 10000, // 10 second timeout
+  timeout: 10000,
 });
 
 // Add request interceptor for logging

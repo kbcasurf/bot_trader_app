@@ -10,9 +10,6 @@ services:
       - backend
     env_file:
       - ./.env
-    environment:
-      - NODE_ENV=development
-      - VITE_API_URL=http://localhost:5000/api
     networks:
       - bot-network
 
@@ -43,7 +40,6 @@ services:
 
 volumes:
   crypto_data:
-
 
 networks:
   bot-network:

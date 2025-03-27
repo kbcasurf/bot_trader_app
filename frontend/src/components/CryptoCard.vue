@@ -251,7 +251,7 @@ export default {
         this.socket = io(wsUrl, {
           transports: ['websocket', 'polling'],
           reconnectionAttempts: 5,
-          reconnectionDelay: 1000
+          reconnectionDelay: 1000,
         });
         
         // Handle connection events

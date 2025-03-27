@@ -38,14 +38,13 @@ const server = http.createServer(app);
 const { Server } = require('socket.io');
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ALLOWED_ORIGINS ? process.env.CORS_ALLOWED_ORIGINS.split(',') : '*',
+    origin: '*',
     methods: ['GET', 'POST'],
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization']
+    credentials: false
   },
   transports: ['websocket', 'polling'],
-  pingTimeout: 60000, // Increase ping timeout to prevent premature disconnects
-  pingInterval: 25000 // Ping clients every 25 seconds
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
   
 io.on('connection', (socket) => {
