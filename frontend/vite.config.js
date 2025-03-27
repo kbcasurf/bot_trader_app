@@ -28,9 +28,7 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true
         }
       },
-      
-      // CORS configuration
-      cors: true,
+    
       
       // Display network URLs for easier access in Docker
       hmr: {

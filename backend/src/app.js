@@ -1,6 +1,5 @@
 // Import required modules
 const express = require('express');
-const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
@@ -18,7 +17,6 @@ const app = express();
 // Apply global middleware
 app.use(helmet()); // Security headers
 
-app.use(cors());
 app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
