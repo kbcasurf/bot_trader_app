@@ -242,8 +242,7 @@ export default {
     
     connectToWebSocket() {
       // Get WebSocket URL from environment or construct it based on API URL
-      const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || 
-                    (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000');
+      const wsUrl = import.meta.env.VITE_WEBSOCKET_URL;
       
       try {
         console.log(`Connecting to WebSocket at ${wsUrl} for ${this.tradingPair.symbol}`);

@@ -158,8 +158,7 @@ export default {
     connectToWebSocket() {
       try {
         // Get WebSocket URL from environment or construct it based on API URL
-        const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || 
-                      (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000');
+        const wsUrl = import.meta.env.VITE_WEBSOCKET_URL;
         
         console.log(`StatusPanel connecting to WebSocket at ${wsUrl}`);
         
@@ -220,7 +219,7 @@ export default {
     // Start polling if WebSocket fails
     startStatusPolling() {
       // Check if polling is enabled (with fallback to true if not set)
-      const enableFallback = import.meta.env.VITE_ENABLE_FALLBACK_POLLING !== 'false';
+      const enableFallback = import.meta.env.VITE_ENABLE_FALLBACK_POLLING;
       if (!enableFallback) return;
       
       console.log('Starting status polling fallback');
@@ -229,7 +228,7 @@ export default {
       this.clearStatusInterval();
       
       // Set up status polling interval
-      const interval = parseInt(import.meta.env.VITE_STATUS_REFRESH_INTERVAL) || 30000;
+      const interval = parseInt(import.meta.env.VITE_STATUS_REFRESH_INTERVAL);
       this.statusInterval = setInterval(() => {
         this.fetchStatus();
       }, interval);
@@ -249,7 +248,7 @@ export default {
     
     // Set up interval to refresh status
     setupStatusInterval() {
-      const interval = parseInt(import.meta.env.VITE_STATUS_REFRESH_INTERVAL) || 30000;
+      const interval = parseInt(import.meta.env.VITE_STATUS_REFRESH_INTERVAL);
       this.statusInterval = setInterval(() => {
         if (!this.socketConnected) {
           this.fetchStatus();
