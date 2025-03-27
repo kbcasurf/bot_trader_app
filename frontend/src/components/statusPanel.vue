@@ -86,6 +86,7 @@
 
 <script>
 import { api } from '../utils/api';
+import { io } from 'socket.io-client';
 
 export default {
   name: 'StatusPanel',
@@ -187,9 +188,16 @@ export default {
     
     // Connect to WebSocket for real-time updates
     connectToWebSocket() {
-      // Check if we're in a browser environment with WebSockets
-      if (typeof window !== 'undefined' && window.io) {
-        this.socket = window.io();
+      try {
+        // Get WebSocket URL from environment or use a fallback
+        const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || window.location.origin.replace(/^http/, 'ws');
+        
+        // Initialize socket with explicit URL
+        this.socket = io(wsUrl, {
+          transports: ['websocket', 'polling'],
+          reconnectionAttempts: 5,
+          reconnectionDelay: 1000
+        });
         
         // Handle global status updates
         this.socket.on('statusUpdate', (data) => {
@@ -209,20 +217,36 @@ export default {
         // Handle connection/disconnection
         this.socket.on('connect', () => {
           this.isOnline = true;
+          console.log('WebSocket connected for StatusPanel');
         });
         
-        this.socket.on('disconnect', () => {
+        this.socket.on('disconnect', (reason) => {
           this.isOnline = false;
+          console.warn('WebSocket disconnected for StatusPanel. Reason:', reason);
         });
+        
+        // Handle connection error
+        this.socket.on('connect_error', (error) => {
+          this.isOnline = false;
+          console.error('WebSocket connection error for StatusPanel:', error);
+        });
+      } catch (error) {
+        console.error('Error initializing WebSocket for StatusPanel:', error);
       }
     },
     
     // Disconnect from WebSocket
     disconnectFromWebSocket() {
       if (this.socket) {
+        // Remove all event listeners
         this.socket.off('statusUpdate');
         this.socket.off('connect');
         this.socket.off('disconnect');
+        this.socket.off('connect_error');
+        
+        // Disconnect socket
+        this.socket.disconnect();
+        this.socket = null;
       }
     }
   }

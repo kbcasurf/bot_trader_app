@@ -112,6 +112,7 @@
 
 <script>
 import { api } from '../utils/api.js';
+import { io } from 'socket.io-client';
 
 export default {
   name: 'CryptoCard',
@@ -210,9 +211,16 @@ export default {
     },
     
     connectToWebSocket() {
-      // Check if we're in a browser environment with WebSockets
-      if (typeof window !== 'undefined' && window.io) {
-        this.socket = window.io();
+      // Get WebSocket URL from environment or use a fallback
+      const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || window.location.origin.replace(/^http/, 'ws');
+      
+      try {
+        // Initialize socket with explicit URL
+        this.socket = io(wsUrl, {
+          transports: ['websocket', 'polling'],
+          reconnectionAttempts: 5,
+          reconnectionDelay: 1000
+        });
         
         // Subscribe to updates for this trading pair
         this.socket.emit('subscribeTradingPair', this.tradingPair.id);
@@ -245,6 +253,18 @@ export default {
             this.tradingStatus = data.status;
           }
         });
+        
+        // Handle connection errors
+        this.socket.on('connect_error', (error) => {
+          console.error(`WebSocket connection error for ${this.tradingPair.symbol}:`, error);
+        });
+        
+        // Handle disconnect
+        this.socket.on('disconnect', (reason) => {
+          console.warn(`WebSocket disconnected for ${this.tradingPair.symbol}. Reason: ${reason}`);
+        });
+      } catch (error) {
+        console.error(`Error initializing WebSocket for ${this.tradingPair.symbol}:`, error);
       }
     },
     
@@ -257,6 +277,11 @@ export default {
         this.socket.off('priceUpdate');
         this.socket.off('transactionUpdate');
         this.socket.off('tradingStatusUpdate');
+        this.socket.off('connect_error');
+        this.socket.off('disconnect');
+        
+        // Disconnect socket
+        this.socket.disconnect();
       }
     },
     
