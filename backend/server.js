@@ -126,11 +126,23 @@ async function initializeDatabase() {
     `, [process.env.DB_NAME || 'crypto_trading_bot']);
     
     // Fix for the tables.map issue - ensure we're correctly accessing the result
-    const tableNames = Array.isArray(tablesResult) 
-      ? tablesResult[0].map(row => row.table_name)
-      : tablesResult && typeof tablesResult === 'object' 
-        ? Object.values(tablesResult).map(row => row.table_name) 
-        : [];
+    // MariaDB sometimes returns results in different formats based on server version
+    let tableNames = [];
+    
+    if (Array.isArray(tablesResult)) {
+      // If tablesResult is an array of rows
+      tableNames = tablesResult.map(row => row.table_name);
+    } else if (tablesResult && typeof tablesResult === 'object') {
+      // If tablesResult is an object with rows
+      if (Array.isArray(tablesResult.rows)) {
+        tableNames = tablesResult.rows.map(row => row.table_name);
+      } else if (tablesResult[0] && Array.isArray(tablesResult[0])) {
+        tableNames = tablesResult[0].map(row => row.table_name);
+      } else if (tablesResult[0]) {
+        // Handle case where first item is not an array
+        tableNames = Object.values(tablesResult).map(row => row.table_name);
+      }
+    }
     
     // If all tables exist, we can skip initialization
     const allTablesExist = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history']
@@ -230,9 +242,14 @@ async function initializeDatabase() {
     
     // Seed initial data if trading_pairs is empty
     const pairsCountResult = await conn.query('SELECT COUNT(*) as count FROM trading_pairs');
-    const pairsCount = Array.isArray(pairsCountResult) 
-      ? pairsCountResult[0][0].count 
-      : pairsCountResult && pairsCountResult.count;
+    
+    // Handle different result formats for count query
+    let pairsCount = 0;
+    if (Array.isArray(pairsCountResult) && pairsCountResult[0]) {
+      pairsCount = pairsCountResult[0][0]?.count || pairsCountResult[0]?.count || 0;
+    } else if (pairsCountResult && typeof pairsCountResult === 'object') {
+      pairsCount = pairsCountResult[0]?.count || pairsCountResult?.count || 0;
+    }
     
     if (pairsCount === 0) {
       logger.info('Seeding trading pairs...');
@@ -249,9 +266,14 @@ async function initializeDatabase() {
       
       // Initialize holdings with zero quantity for each trading pair
       const pairsResult = await conn.query('SELECT id FROM trading_pairs');
-      const pairs = Array.isArray(pairsResult) 
-        ? pairsResult[0] 
-        : pairsResult;
+      
+      // Handle different result formats for the pairs query
+      let pairs = null;
+      if (Array.isArray(pairsResult)) {
+        pairs = pairsResult[0];
+      } else if (pairsResult && typeof pairsResult === 'object') {
+        pairs = pairsResult;
+      }
       
       if (pairs) {
         const pairsArray = Array.isArray(pairs) ? pairs : Object.values(pairs);
