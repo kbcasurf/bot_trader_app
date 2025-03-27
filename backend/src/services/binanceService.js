@@ -1,6 +1,6 @@
-const Binance = require('node-binance-api');
 const crypto = require('crypto');
 const axios = require('axios');
+const querystring = require('querystring');
 const db = require('../../config/database');
 const logger = require('../utils/logger');
 const telegramService = require('./telegramService');
@@ -9,26 +9,167 @@ const telegramService = require('./telegramService');
 const API_KEY = process.env.BINANCE_API_KEY;
 const API_SECRET = process.env.BINANCE_API_SECRET;
 const API_URL = process.env.BINANCE_API_URL || 'https://testnet.binance.vision';
+const WEBSOCKET_URL = process.env.BINANCE_WEBSOCKET_URL || 'wss://testnet.binance.vision/ws/';
+const RECV_WINDOW = process.env.BINANCE_RECV_WINDOW || 5000;
+const TEST_MODE = process.env.NODE_ENV !== 'production' || process.env.BINANCE_TEST_MODE === 'true';
 
-// Initialize Binance API client
-const binance = new Binance().options({
-  APIKEY: API_KEY,
-  APISECRET: API_SECRET,
-  urls: {
-    base: API_URL
-  },
-  // Enable test mode for Phase 2 (disable in production)
-  test: true
-});
+// Cache for symbol information
+let symbolInfoCache = null;
+let symbolInfoCacheTime = 0;
+const CACHE_DURATION = 3600000; // 1 hour cache validity
 
 /**
- * Utility function to sign a request for Binance API
+ * Creates a signature for a request using HMAC SHA256
+ * @param {string} queryString - The query string to sign
+ * @returns {string} - The hexadecimal digest of the HMAC
  */
-const signRequest = (queryString) => {
+const createSignature = (queryString) => {
   return crypto
     .createHmac('sha256', API_SECRET)
     .update(queryString)
     .digest('hex');
+};
+
+/**
+ * Adds timestamp and signature to parameters
+ * @param {Object} params - The parameters to sign
+ * @returns {Object} - The signed parameters
+ */
+const signRequest = (params = {}) => {
+  // Add timestamp if not present
+  const paramsCopy = { ...params };
+  if (!paramsCopy.timestamp) {
+    paramsCopy.timestamp = Date.now();
+  }
+  
+  // Add recvWindow if not present
+  if (!paramsCopy.recvWindow) {
+    paramsCopy.recvWindow = RECV_WINDOW;
+  }
+  
+  // Convert params to query string
+  const queryString = querystring.stringify(paramsCopy);
+  
+  // Generate signature
+  const signature = createSignature(queryString);
+  
+  // Add signature to params
+  paramsCopy.signature = signature;
+  
+  return paramsCopy;
+};
+
+/**
+ * Makes a secure API request to Binance
+ * @param {string} method - The HTTP method
+ * @param {string} endpoint - The API endpoint
+ * @param {Object} params - The request parameters
+ * @returns {Promise} - The request promise
+ */
+const makeRequest = async (method, endpoint, params = {}) => {
+  // Skip actual API calls in simulation mode if needed
+  if (TEST_MODE && endpoint !== '/api/v3/exchangeInfo' && endpoint !== '/api/v3/ticker/price') {
+    logger.debug(`[TEST MODE] Skipping real API call to ${endpoint}`);
+    return simulateResponse(endpoint, params);
+  }
+
+  // Determine if this is a secure endpoint
+  const isSecureEndpoint = 
+    endpoint.includes('/api/v3/account') || 
+    endpoint.includes('/api/v3/order') ||
+    endpoint.includes('/api/v3/myTrades') ||
+    endpoint.includes('/api/v3/openOrders');
+  
+  // For secure endpoints, sign the request
+  const requestParams = isSecureEndpoint ? signRequest(params) : params;
+  
+  // Prepare headers
+  const headers = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  
+  // Add API key header for secure endpoints
+  if (isSecureEndpoint) {
+    headers['X-MBX-APIKEY'] = API_KEY;
+  }
+  
+  try {
+    let response;
+    const url = `${API_URL}${endpoint}`;
+    
+    logger.debug(`Making ${method} request to ${endpoint}`, { params: requestParams });
+    
+    // Make request based on method
+    if (method === 'GET') {
+      response = await axios.get(url, { 
+        params: requestParams,
+        headers 
+      });
+    } else if (method === 'POST') {
+      response = await axios.post(url, querystring.stringify(requestParams), { headers });
+    } else if (method === 'DELETE') {
+      response = await axios.delete(url, { 
+        params: requestParams,
+        headers 
+      });
+    }
+    
+    logger.debug(`Successful response from ${endpoint}`);
+    return response.data;
+  } catch (error) {
+    // Handle specific Binance error codes
+    if (error.response) {
+      const { status, data } = error.response;
+      
+      if (status === 401) {
+        logger.error('Binance API authentication error: Invalid API key');
+      } else if (status === 403) {
+        logger.error('Binance API authorization error: WAF limit violated');
+      } else if (status === 418) {
+        logger.error('Binance API IP auto-ban: Too many requests after 429');
+      } else if (status === 429) {
+        logger.error('Binance API rate limit exceeded', { 
+          retryAfter: error.response.headers['retry-after'] 
+        });
+      }
+      
+      throw {
+        status,
+        code: data.code,
+        message: data.msg,
+        url: endpoint,
+        params: requestParams
+      };
+    }
+    
+    logger.error(`Error in Binance API request to ${endpoint}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Simulates responses for testing without calling the actual API
+ */
+const simulateResponse = (endpoint, params) => {
+  if (endpoint === '/api/v3/order' || endpoint === '/api/v3/order/test') {
+    // Simulate order response
+    return {
+      symbol: params.symbol,
+      orderId: Math.floor(Math.random() * 1000000),
+      clientOrderId: params.newClientOrderId || `sim_${Date.now()}`,
+      transactTime: Date.now(),
+      price: params.price || "0.00000000",
+      origQty: params.quantity,
+      executedQty: params.quantity,
+      status: "FILLED",
+      timeInForce: params.timeInForce || "GTC",
+      type: params.type,
+      side: params.side
+    };
+  }
+  
+  // Default simulated response
+  return { success: true, simulated: true };
 };
 
 /**
@@ -89,6 +230,40 @@ exports.getTradingPairBySymbol = async (symbol) => {
 };
 
 /**
+ * Get cached or fresh exchange information from Binance
+ */
+exports.getExchangeInfo = async () => {
+  try {
+    const now = Date.now();
+    
+    // Return cached info if still valid
+    if (symbolInfoCache && (now - symbolInfoCacheTime < CACHE_DURATION)) {
+      return symbolInfoCache;
+    }
+    
+    // Otherwise, fetch fresh data
+    const exchangeInfo = await makeRequest('GET', '/api/v3/exchangeInfo');
+    
+    // Cache the result
+    symbolInfoCache = exchangeInfo;
+    symbolInfoCacheTime = now;
+    
+    return exchangeInfo;
+  } catch (error) {
+    logger.error('Error fetching exchange info from Binance:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get symbol information from exchange info
+ */
+exports.getSymbolInfo = async (symbol) => {
+  const exchangeInfo = await exports.getExchangeInfo();
+  return exchangeInfo.symbols.find(s => s.symbol === symbol);
+};
+
+/**
  * Get current price for a symbol from Binance
  */
 exports.getCurrentPrice = async (symbol) => {
@@ -96,8 +271,8 @@ exports.getCurrentPrice = async (symbol) => {
     // In Phase 2, we'll use Binance API for real price data but with some error handling
     try {
       // Try getting price from Binance API
-      const ticker = await binance.prices(symbol);
-      return parseFloat(ticker[symbol]);
+      const ticker = await makeRequest('GET', '/api/v3/ticker/price', { symbol });
+      return parseFloat(ticker.price);
     } catch (apiError) {
       logger.error(`Error fetching price from Binance API for ${symbol}:`, apiError);
       
@@ -148,6 +323,33 @@ function getPrecision(price) {
   if (price < 1000) return 2;
   return 2;
 }
+
+/**
+ * Format a number according to Binance's requirements using step size
+ */
+exports.formatQuantity = async (symbol, quantity) => {
+  try {
+    const symbolInfo = await exports.getSymbolInfo(symbol);
+    
+    // Get the lot size filter
+    const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
+    
+    if (!lotSizeFilter) {
+      return quantity; // No filter found, return as is
+    }
+    
+    const stepSize = parseFloat(lotSizeFilter.stepSize);
+    
+    // Calculate the precision from the step size
+    const precision = Math.log10(1 / stepSize);
+    
+    // Format the quantity based on the precision
+    return parseFloat(quantity.toFixed(Math.floor(precision)));
+  } catch (error) {
+    logger.error(`Error formatting quantity for ${symbol}:`, error);
+    throw error;
+  }
+};
 
 /**
  * Get holdings for a trading pair
@@ -233,6 +435,9 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
     // Calculate quantity based on investment amount
     const quantity = amount / currentPrice;
     
+    // Format quantity according to Binance's requirements
+    const formattedQuantity = await exports.formatQuantity(tradingPair.symbol, quantity);
+    
     // Start transaction
     await conn.beginTransaction();
     
@@ -241,7 +446,7 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
       `INSERT INTO transactions 
        (trading_pair_id, transaction_type, quantity, price, total_amount, status, binance_order_id) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [tradingPairId, 'BUY', quantity, currentPrice, amount, 'PENDING', null]
+      [tradingPairId, 'BUY', formattedQuantity, currentPrice, amount, 'PENDING', null]
     );
     
     const transactionId = transactionResult.insertId;
@@ -251,29 +456,24 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
     let orderStatus = 'COMPLETED'; // Default for test mode
     
     try {
-      if (!options.skipBinanceOrder) {
-        // Format symbol and quantity according to Binance requirements
-        const formattedSymbol = tradingPair.symbol;
-        
-        // Get symbol info for precision
-        const exchangeInfo = await binance.exchangeInfo();
-        const symbolInfo = exchangeInfo.symbols.find(s => s.symbol === formattedSymbol);
-        
-        // Format quantity with proper precision
-        const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
-        const stepSize = parseFloat(lotSizeFilter.stepSize);
-        const precision = Math.log10(1 / stepSize);
-        const formattedQuantity = parseFloat(quantity.toFixed(Math.floor(precision)));
+      if (!options.skipBinanceOrder && !TEST_MODE) {
+        // Format parameters for the order
+        const orderParams = {
+          symbol: tradingPair.symbol,
+          side: 'BUY',
+          type: 'MARKET',
+          quantity: formattedQuantity
+        };
         
         // Execute market order
-        const order = await binance.marketBuy(formattedSymbol, formattedQuantity);
+        const order = await makeRequest('POST', '/api/v3/order', orderParams);
         
         binanceOrderId = order.orderId;
         orderStatus = 'COMPLETED';
         
-        logger.info(`Binance BUY order executed: ${tradingPair.symbol}, ${quantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
+        logger.info(`Binance BUY order executed: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
       } else {
-        logger.info(`Simulated BUY order: ${tradingPair.symbol}, ${quantity}, $${currentPrice}`);
+        logger.info(`Simulated BUY order: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}`);
       }
     } catch (orderError) {
       logger.error(`Error executing Binance BUY order:`, orderError);
@@ -284,7 +484,7 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
       // Send error notification
       await telegramService.sendErrorNotification(
         orderError, 
-        `Failed to execute BUY order for ${tradingPair.displayName}`
+        `Failed to execute BUY order for ${tradingPair.display_name}`
       );
     }
     
@@ -295,7 +495,7 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
     );
     
     // If order failed on Binance but we're in test mode, still update holdings for simulation
-    if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings) {
+    if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings || TEST_MODE) {
       // Update or insert holdings
       const existingHoldings = await conn.query(
         'SELECT * FROM holdings WHERE trading_pair_id = ?',
@@ -306,11 +506,11 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
         // Update existing holdings
         const currentHoldings = existingHoldings[0];
         const currentQuantity = parseFloat(currentHoldings.quantity);
-        const newQuantity = currentQuantity + quantity;
+        const newQuantity = currentQuantity + formattedQuantity;
         
         // Calculate new average buy price
         const currentValue = currentQuantity * parseFloat(currentHoldings.average_buy_price || 0);
-        const newValue = quantity * currentPrice;
+        const newValue = formattedQuantity * currentPrice;
         const newAverageBuyPrice = (currentValue + newValue) / newQuantity;
         
         await conn.query(
@@ -325,7 +525,7 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
           `INSERT INTO holdings 
            (trading_pair_id, quantity, average_buy_price, last_buy_price) 
            VALUES (?, ?, ?, ?)`,
-          [tradingPairId, quantity, currentPrice, currentPrice]
+          [tradingPairId, formattedQuantity, currentPrice, currentPrice]
         );
       }
     }
@@ -338,7 +538,7 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
       await telegramService.sendTradeNotification({
         tradingPair,
         type: 'BUY',
-        quantity,
+        quantity: formattedQuantity,
         price: currentPrice,
         totalAmount: amount,
         reason: options.reason || 'MANUAL'
@@ -352,7 +552,7 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
       id: transactionId,
       tradingPairId: parseInt(tradingPairId),
       type: 'BUY',
-      quantity: parseFloat(quantity.toFixed(8)),
+      quantity: parseFloat(formattedQuantity.toFixed(8)),
       price: currentPrice,
       totalAmount: parseFloat(amount),
       status: orderStatus,
@@ -382,18 +582,27 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
     // Get current price from Binance
     const currentPrice = await exports.getCurrentPrice(tradingPair.symbol);
     
+    // Format quantity according to Binance's requirements
+    const formattedQuantity = await exports.formatQuantity(tradingPair.symbol, quantity);
+    
     // Calculate total amount
-    const totalAmount = quantity * currentPrice;
+    const totalAmount = formattedQuantity * currentPrice;
     
     // Start transaction
     await conn.beginTransaction();
+    
+    // Get current holdings for profit calculation
+    const [currentHoldings] = await conn.query(
+      'SELECT * FROM holdings WHERE trading_pair_id = ?',
+      [tradingPairId]
+    );
     
     // Insert transaction record
     const transactionResult = await conn.query(
       `INSERT INTO transactions 
        (trading_pair_id, transaction_type, quantity, price, total_amount, status, binance_order_id) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [tradingPairId, 'SELL', quantity, currentPrice, totalAmount, 'PENDING', null]
+      [tradingPairId, 'SELL', formattedQuantity, currentPrice, totalAmount, 'PENDING', null]
     );
     
     const transactionId = transactionResult.insertId;
@@ -403,29 +612,24 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
     let orderStatus = 'COMPLETED'; // Default for test mode
     
     try {
-      if (!options.skipBinanceOrder) {
-        // Format symbol and quantity according to Binance requirements
-        const formattedSymbol = tradingPair.symbol;
-        
-        // Get symbol info for precision
-        const exchangeInfo = await binance.exchangeInfo();
-        const symbolInfo = exchangeInfo.symbols.find(s => s.symbol === formattedSymbol);
-        
-        // Format quantity with proper precision
-        const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
-        const stepSize = parseFloat(lotSizeFilter.stepSize);
-        const precision = Math.log10(1 / stepSize);
-        const formattedQuantity = parseFloat(quantity.toFixed(Math.floor(precision)));
+      if (!options.skipBinanceOrder && !TEST_MODE) {
+        // Format parameters for the order
+        const orderParams = {
+          symbol: tradingPair.symbol,
+          side: 'SELL',
+          type: 'MARKET',
+          quantity: formattedQuantity
+        };
         
         // Execute market order
-        const order = await binance.marketSell(formattedSymbol, formattedQuantity);
+        const order = await makeRequest('POST', '/api/v3/order', orderParams);
         
         binanceOrderId = order.orderId;
         orderStatus = 'COMPLETED';
         
-        logger.info(`Binance SELL order executed: ${tradingPair.symbol}, ${quantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
+        logger.info(`Binance SELL order executed: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
       } else {
-        logger.info(`Simulated SELL order: ${tradingPair.symbol}, ${quantity}, $${currentPrice}`);
+        logger.info(`Simulated SELL order: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}`);
       }
     } catch (orderError) {
       logger.error(`Error executing Binance SELL order:`, orderError);
@@ -436,7 +640,7 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
       // Send error notification
       await telegramService.sendErrorNotification(
         orderError, 
-        `Failed to execute SELL order for ${tradingPair.displayName}`
+        `Failed to execute SELL order for ${tradingPair.display_name}`
       );
     }
     
@@ -447,15 +651,10 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
     );
     
     // If order failed on Binance but we're in test mode, still update holdings for simulation
-    if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings) {
+    if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings || TEST_MODE) {
       // Update holdings
-      const [currentHoldings] = await conn.query(
-        'SELECT * FROM holdings WHERE trading_pair_id = ?',
-        [tradingPairId]
-      );
-      
-      if (currentHoldings.length > 0) {
-        const remainingQuantity = Math.max(0, parseFloat(currentHoldings[0].quantity) - quantity);
+      if (currentHoldings && currentHoldings.length > 0) {
+        const remainingQuantity = Math.max(0, parseFloat(currentHoldings[0].quantity) - formattedQuantity);
         
         // If remaining quantity is zero, reset average buy price
         if (remainingQuantity === 0) {
@@ -482,20 +681,16 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
     
     // Calculate profit if available
     let profit = null;
-    try {
-      if (currentHoldings && currentHoldings.length > 0) {
-        const avgBuyPrice = parseFloat(currentHoldings[0].average_buy_price || 0);
-        if (avgBuyPrice > 0) {
-          const profitAmount = (currentPrice - avgBuyPrice) * quantity;
-          const profitPercentage = ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100;
-          profit = {
-            amount: profitAmount,
-            percentage: profitPercentage
-          };
-        }
+    if (currentHoldings && currentHoldings.length > 0) {
+      const avgBuyPrice = parseFloat(currentHoldings[0].average_buy_price || 0);
+      if (avgBuyPrice > 0) {
+        const profitAmount = (currentPrice - avgBuyPrice) * formattedQuantity;
+        const profitPercentage = ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100;
+        profit = {
+          amount: profitAmount,
+          percentage: profitPercentage
+        };
       }
-    } catch (profitError) {
-      logger.error('Error calculating profit:', profitError);
     }
     
     // Send Telegram notification
@@ -503,7 +698,7 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
       await telegramService.sendTradeNotification({
         tradingPair,
         type: 'SELL',
-        quantity,
+        quantity: formattedQuantity,
         price: currentPrice,
         totalAmount,
         profit,
@@ -518,7 +713,7 @@ exports.executeSellOrder = async (tradingPairId, quantity, options = {}) => {
       id: transactionId,
       tradingPairId: parseInt(tradingPairId),
       type: 'SELL',
-      quantity: parseFloat(quantity),
+      quantity: parseFloat(formattedQuantity),
       price: currentPrice,
       totalAmount: parseFloat(totalAmount.toFixed(2)),
       status: orderStatus,
@@ -569,7 +764,26 @@ exports.executeSellAllOrder = async (tradingPairId, options = {}) => {
  */
 exports.getAccountBalance = async () => {
   try {
-    const balances = await binance.balance();
+    if (TEST_MODE) {
+      logger.info('Using simulated account balance in test mode');
+      return {
+        USDT: { available: '10000.00', onOrder: '0.00' },
+        BTC: { available: '0.5', onOrder: '0.00' },
+        SOL: { available: '10.0', onOrder: '0.00' }
+      };
+    }
+    
+    const account = await makeRequest('GET', '/api/v3/account');
+    
+    // Format balances into a more usable structure
+    const balances = {};
+    account.balances.forEach(balance => {
+      balances[balance.asset] = {
+        available: balance.free,
+        onOrder: balance.locked
+      };
+    });
+    
     return balances;
   } catch (error) {
     logger.error('Error fetching account balance from Binance:', error);
@@ -582,7 +796,7 @@ exports.getAccountBalance = async () => {
  */
 exports.getSupportedSymbols = async () => {
   try {
-    const exchangeInfo = await binance.exchangeInfo();
+    const exchangeInfo = await exports.getExchangeInfo();
     return exchangeInfo.symbols.map(symbol => ({
       symbol: symbol.symbol,
       baseAsset: symbol.baseAsset,
@@ -595,3 +809,31 @@ exports.getSupportedSymbols = async () => {
     throw error;
   }
 };
+
+/**
+ * Test the connection to Binance API
+ */
+exports.testConnectivity = async () => {
+  try {
+    return await makeRequest('GET', '/api/v3/ping');
+  } catch (error) {
+    logger.error('Error testing connectivity to Binance API:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get the Binance server time
+ */
+exports.getServerTime = async () => {
+  try {
+    const response = await makeRequest('GET', '/api/v3/time');
+    return response.serverTime;
+  } catch (error) {
+    logger.error('Error getting Binance server time:', error);
+    throw error;
+  }
+};
+
+// Export WebSocket base URL for other modules
+exports.WEBSOCKET_URL = WEBSOCKET_URL;
