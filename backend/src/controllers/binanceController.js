@@ -1,5 +1,8 @@
 const binanceService = require('../services/binanceService');
+const tradingService = require('../services/tradingService');
+const websocketService = require('../services/websocketService');
 const telegramService = require('../services/telegramService');
+const logger = require('../utils/logger');
 
 // Get all supported trading pairs
 exports.getTradingPairs = async (req, res, next) => {
@@ -15,7 +18,15 @@ exports.getTradingPairs = async (req, res, next) => {
 exports.getCurrentPrice = async (req, res, next) => {
   try {
     const { symbol } = req.params;
-    const price = await binanceService.getCurrentPrice(symbol);
+    
+    // First try to get price from WebSocket cache
+    let price = websocketService.getLatestPrice(symbol);
+    
+    // If not available in WebSocket cache, fetch from Binance API
+    if (!price) {
+      price = await binanceService.getCurrentPrice(symbol);
+    }
+    
     res.json({ symbol, price });
   } catch (error) {
     next(error);
@@ -27,7 +38,22 @@ exports.getHoldings = async (req, res, next) => {
   try {
     const { tradingPairId } = req.params;
     const holdings = await binanceService.getHoldings(tradingPairId);
-    res.json(holdings);
+    
+    // Get current price to calculate current value
+    const tradingPair = await binanceService.getTradingPairById(tradingPairId);
+    const currentPrice = await binanceService.getCurrentPrice(tradingPair.symbol);
+    
+    // Add current value and profit/loss information
+    const result = {
+      ...holdings,
+      currentPrice,
+      currentValue: holdings.quantity * currentPrice,
+      profitLoss: holdings.averageBuyPrice > 0 
+        ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100 
+        : 0
+    };
+    
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -55,16 +81,12 @@ exports.buyOrder = async (req, res, next) => {
     
     const transaction = await binanceService.executeBuyOrder(tradingPairId, amount);
     
-    // Send notification via Telegram
-    const tradingPair = await binanceService.getTradingPairById(tradingPairId);
-    await telegramService.sendNotification(
-      `✅ BUY Order Executed\n` +
-      `Pair: ${tradingPair.displayName}\n` +
-      `Amount: $${amount}\n` +
-      `Quantity: ${transaction.quantity}\n` +
-      `Price: $${transaction.price}\n` +
-      `Time: ${new Date().toLocaleString()}`
-    );
+    // Initialize trading if this is the first purchase
+    try {
+      await tradingService.initializeTrading(tradingPairId, amount);
+    } catch (initError) {
+      logger.error(`Error initializing trading for pair ${tradingPairId}:`, initError);
+    }
     
     res.json(transaction);
   } catch (error) {
@@ -81,20 +103,78 @@ exports.sellAllOrder = async (req, res, next) => {
       return res.status(400).json({ error: 'Trading pair ID is required' });
     }
     
-    const transaction = await binanceService.executeSellAllOrder(tradingPairId);
+    const transaction = await binanceService.executeSellAllOrder(tradingPairId, { reason: 'MANUAL_SELL_ALL' });
     
-    // Send notification via Telegram
-    const tradingPair = await binanceService.getTradingPairById(tradingPairId);
-    await telegramService.sendNotification(
-      `🔴 SELL ALL Order Executed\n` +
-      `Pair: ${tradingPair.displayName}\n` +
-      `Quantity: ${transaction.quantity}\n` +
-      `Price: ${transaction.price}\n` +
-      `Total Amount: ${(transaction.quantity * transaction.price).toFixed(2)}\n` +
-      `Time: ${new Date().toLocaleString()}`
-    );
+    // Stop trading for this pair
+    try {
+      await tradingService.stopTrading(tradingPairId);
+    } catch (stopError) {
+      logger.error(`Error stopping trading for pair ${tradingPairId}:`, stopError);
+    }
     
     res.json(transaction);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get trading status for all pairs
+exports.getTradingStatus = async (req, res, next) => {
+  try {
+    const status = await tradingService.getTradingStatus();
+    res.json(status);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Start trading for a pair
+exports.startTrading = async (req, res, next) => {
+  try {
+    const { tradingPairId, initialInvestment } = req.body;
+    
+    if (!tradingPairId || !initialInvestment) {
+      return res.status(400).json({ error: 'Trading pair ID and initial investment are required' });
+    }
+    
+    const result = await tradingService.initializeTrading(tradingPairId, initialInvestment);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Stop trading for a pair
+exports.stopTrading = async (req, res, next) => {
+  try {
+    const { tradingPairId } = req.body;
+    
+    if (!tradingPairId) {
+      return res.status(400).json({ error: 'Trading pair ID is required' });
+    }
+    
+    const result = await tradingService.stopTrading(tradingPairId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get WebSocket connection status
+exports.getWebSocketStatus = async (req, res, next) => {
+  try {
+    const status = websocketService.getConnectionStatus();
+    res.json(status);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Restart WebSocket connections
+exports.restartWebSockets = async (req, res, next) => {
+  try {
+    const result = await websocketService.initializeAllWebSockets();
+    res.json(result);
   } catch (error) {
     next(error);
   }

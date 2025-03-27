@@ -1,5 +1,7 @@
 <template>
   <div>
+    <StatusPanel />
+    
     <div v-if="loading" class="loading">Loading trading pairs...</div>
     <div v-else class="crypto-grid">
       <CryptoCard 
@@ -13,12 +15,14 @@
 
 <script>
 import CryptoCard from './CryptoCard.vue';
-import axios from 'axios';
+import StatusPanel from './StatusPanel.vue';
+import { api } from '../utils/api';
 
 export default {
   name: 'Dashboard',
   components: {
-    CryptoCard
+    CryptoCard,
+    StatusPanel
   },
   data() {
     return {
@@ -33,21 +37,24 @@ export default {
   methods: {
     async fetchTradingPairs() {
       try {
-        // In Phase 1, we'll use hardcoded data instead of making an API call
-        // In later phases, this will be replaced with a real API call
-        this.tradingPairs = [
-          { id: 1, symbol: 'BTCUSDT', displayName: 'BTC/USDT', logoUrl: '/placeholder.png' },
-          { id: 2, symbol: 'SOLUSDT', displayName: 'SOL/USDT', logoUrl: '/placeholder.png' },
-          { id: 3, symbol: 'XRPUSDT', displayName: 'XRP/USDT', logoUrl: '/placeholder.png' },
-          { id: 4, symbol: 'PENDLEUSDT', displayName: 'PENDLE/USDT', logoUrl: '/placeholder.png' },
-          { id: 5, symbol: 'DOGEUSDT', displayName: 'DOGE/USDT', logoUrl: '/placeholder.png' },
-          { id: 6, symbol: 'NEARUSDT', displayName: 'NEAR/USDT', logoUrl: '/placeholder.png' }
-        ];
+        // In Phase 2, we use the real API endpoint
+        const response = await api.getTradingPairs();
+        this.tradingPairs = response.data;
         this.loading = false;
       } catch (error) {
         this.error = error.message;
         this.loading = false;
         console.error('Error fetching trading pairs:', error);
+        
+        // Fallback to hardcoded data if API fails
+        this.tradingPairs = [
+          { id: 1, symbol: 'BTCUSDT', displayName: 'BTC/USDT', logoUrl: '/assets/logos/btc.svg' },
+          { id: 2, symbol: 'SOLUSDT', displayName: 'SOL/USDT', logoUrl: '/assets/logos/sol.svg' },
+          { id: 3, symbol: 'XRPUSDT', displayName: 'XRP/USDT', logoUrl: '/assets/logos/xrp.svg' },
+          { id: 4, symbol: 'PENDLEUSDT', displayName: 'PENDLE/USDT', logoUrl: '/assets/logos/pendle.svg' },
+          { id: 5, symbol: 'DOGEUSDT', displayName: 'DOGE/USDT', logoUrl: '/assets/logos/doge.svg' },
+          { id: 6, symbol: 'NEARUSDT', displayName: 'NEAR/USDT', logoUrl: '/assets/logos/near.svg' }
+        ];
       }
     }
   }

@@ -29,6 +29,12 @@
           {{ profitLoss > 0 ? '+' : '' }}{{ profitLoss.toFixed(2) }}%
         </span>
       </div>
+      <div class="stat-row" v-if="tradingStatus">
+        <span class="stat-label">Trading Status:</span>
+        <span class="status-indicator" :class="{ 'status-active': tradingStatus.active }">
+          {{ tradingStatus.active ? 'Active' : 'Inactive' }}
+        </span>
+      </div>
     </div>
 
     <div class="profit-bar">
@@ -128,7 +134,9 @@ export default {
       investmentAmount: 50,
       presets: [25, 50, 100, 250, 500],
       isLoading: false,
-      priceUpdateInterval: null
+      priceUpdateInterval: null,
+      tradingStatus: null,
+      socket: null
     };
   },
   computed: {
@@ -164,9 +172,12 @@ export default {
   created() {
     this.fetchData();
     this.startPriceUpdates();
+    this.connectToWebSocket();
+    this.fetchTradingStatus();
   },
   beforeUnmount() {
     this.stopPriceUpdates();
+    this.disconnectFromWebSocket();
   },
   methods: {
     async fetchData() {
@@ -174,10 +185,81 @@ export default {
         await this.fetchPrice();
         await this.fetchHoldings();
         await this.fetchTransactions();
+        await this.fetchTradingStatus();
       } catch (error) {
         console.error(`Error fetching data for ${this.tradingPair.symbol}:`, error);
       }
     },
+    
+    async fetchTradingStatus() {
+      try {
+        const response = await api.getTradingStatus();
+        const allStatuses = response.data;
+        
+        // Find the status for this trading pair
+        const pairStatus = allStatuses.find(status => status.id === this.tradingPair.id);
+        if (pairStatus) {
+          this.tradingStatus = {
+            active: pairStatus.active || false,
+            initialInvestment: pairStatus.initial_investment || 0
+          };
+        }
+      } catch (error) {
+        console.error(`Error fetching trading status for ${this.tradingPair.symbol}:`, error);
+      }
+    },
+    
+    connectToWebSocket() {
+      // Check if we're in a browser environment with WebSockets
+      if (typeof window !== 'undefined' && window.io) {
+        this.socket = window.io();
+        
+        // Subscribe to updates for this trading pair
+        this.socket.emit('subscribeTradingPair', this.tradingPair.id);
+        
+        // Handle price updates
+        this.socket.on('priceUpdate', (data) => {
+          if (data.symbol === this.tradingPair.symbol) {
+            this.lastPrice = this.currentPrice;
+            this.currentPrice = data.price;
+          }
+        });
+        
+        // Handle transaction updates
+        this.socket.on('transactionUpdate', (data) => {
+          if (data.tradingPairId === this.tradingPair.id) {
+            // Add the new transaction to our list
+            const transaction = data.transaction;
+            this.transactions = [transaction, ...this.transactions].slice(0, 20); // Keep last 20
+            
+            // Update holdings
+            if (data.holdings) {
+              this.holdings = data.holdings;
+            }
+          }
+        });
+        
+        // Handle trading status updates
+        this.socket.on('tradingStatusUpdate', (data) => {
+          if (data.tradingPairId === this.tradingPair.id) {
+            this.tradingStatus = data.status;
+          }
+        });
+      }
+    },
+    
+    disconnectFromWebSocket() {
+      if (this.socket) {
+        // Unsubscribe from this trading pair
+        this.socket.emit('unsubscribeTradingPair', this.tradingPair.id);
+        
+        // Remove all listeners
+        this.socket.off('priceUpdate');
+        this.socket.off('transactionUpdate');
+        this.socket.off('tradingStatusUpdate');
+      }
+    },
+    
     async fetchPrice() {
       try {
         const response = await api.getCurrentPrice(this.tradingPair.symbol);
@@ -187,6 +269,7 @@ export default {
         console.error(`Error fetching price for ${this.tradingPair.symbol}:`, error);
       }
     },
+    
     async fetchHoldings() {
       try {
         const response = await api.getHoldings(this.tradingPair.id);
@@ -195,6 +278,7 @@ export default {
         console.error(`Error fetching holdings for ${this.tradingPair.symbol}:`, error);
       }
     },
+    
     async fetchTransactions() {
       try {
         const response = await api.getTransactions(this.tradingPair.id);
@@ -203,16 +287,19 @@ export default {
         console.error(`Error fetching transactions for ${this.tradingPair.symbol}:`, error);
       }
     },
+    
     startPriceUpdates() {
       this.priceUpdateInterval = setInterval(() => {
         this.fetchPrice();
       }, 10000); // Update price every 10 seconds
     },
+    
     stopPriceUpdates() {
       if (this.priceUpdateInterval) {
         clearInterval(this.priceUpdateInterval);
       }
     },
+    
     async handleBuy() {
       if (this.isLoading) return;
       
@@ -228,6 +315,7 @@ export default {
         this.isLoading = false;
       }
     },
+    
     async handleSellAll() {
       if (this.isLoading) return;
       
@@ -243,6 +331,7 @@ export default {
         this.isLoading = false;
       }
     },
+    
     formatDate(dateString) {
       const date = new Date(dateString);
       return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -320,6 +409,20 @@ export default {
 
 .profit-negative {
   color: #ef4444;
+}
+
+.status-indicator {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background-color: #f1f5f9;
+  color: #64748b;
+}
+
+.status-active {
+  background-color: #dcfce7;
+  color: #15803d;
 }
 
 .investment-control {

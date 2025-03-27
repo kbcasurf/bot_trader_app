@@ -4,6 +4,9 @@ const app = require('./src/app');
 const logger = require('./src/utils/logger');
 const db = require('./config/database');
 const dotenv = require('dotenv');
+const telegramService = require('./src/services/telegramService');
+const websocketController = require('./src/controllers/websocketController');
+
 
 // Load environment variables
 dotenv.config();
@@ -39,45 +42,11 @@ const io = new Server(server, {
     methods: ['GET', 'POST']
   }
 });
-
-// WebSocket connection handling
-io.on('connection', (socket) => {
-  logger.info(`Client connected: ${socket.id}`);
   
-  // Send initial data to client
-  const sendInitialData = async () => {
-    try {
-      // In Phase 1, we'll send mock data
-      // In later phases, this will be actual trading state from the database
-      const mockData = {
-        tradingPairs: [
-          { id: 1, symbol: 'BTCUSDT', displayName: 'BTC/USDT', isActive: true },
-          { id: 2, symbol: 'SOLUSDT', displayName: 'SOL/USDT', isActive: true },
-          { id: 3, symbol: 'XRPUSDT', displayName: 'XRP/USDT', isActive: true },
-          { id: 4, symbol: 'PENDLEUSDT', displayName: 'PENDLE/USDT', isActive: true },
-          { id: 5, symbol: 'DOGEUSDT', displayName: 'DOGE/USDT', isActive: true },
-          { id: 6, symbol: 'NEARUSDT', displayName: 'NEAR/USDT', isActive: true }
-        ],
-        settings: {
-          profitThreshold: 5,
-          lossThreshold: 5,
-          additionalPurchaseAmount: 50,
-          maxInvestmentPerSymbol: 200
-        }
-      };
-      socket.emit('initialData', mockData);
-    } catch (err) {
-      logger.error('Error fetching initial data:', err);
-    }
-  };
-  
-  sendInitialData();
-  
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    logger.info(`Client disconnected: ${socket.id}`);
+  io.on('connection', (socket) => {
+    // Handle new connection with our WebSocket controller
+    websocketController.handleConnection(socket);
   });
-});
 
 // Make io available globally
 app.set('io', io);
@@ -123,21 +92,7 @@ async function startServer() {
       // Check environment variables
       checkRequiredEnvVars();
       
-      // Initialize services
-      try {
-        setupWebSocketFeeds();
-        logger.info('WebSocket feeds established');
-      } catch (error) {
-        logger.error('Failed to setup WebSocket feeds:', error);
-      }
-      
-      // Initialize trading bot simulation (Phase 1)
-      try {
-        setupSimulation(io);
-        logger.info('Trading simulation initialized successfully');
-      } catch (error) {
-        logger.error('Failed to initialize trading simulation:', error);
-      }
+     
     });
   } catch (error) {
     logger.error('Failed to start server:', error);

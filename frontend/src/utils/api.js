@@ -44,5 +44,37 @@ export const api = {
   // Price data
   getCurrentPrice: (symbol) => {
     return apiClient.get(`/prices/${symbol}`);
+  },
+  
+  // Trading algorithm controls
+  getTradingStatus: () => {
+    return apiClient.get('/trading/status');
+  },
+  
+  startTrading: (tradingPairId, initialInvestment) => {
+    return apiClient.post('/trading/start', {
+      tradingPairId,
+      initialInvestment
+    });
+  },
+  
+  stopTrading: (tradingPairId) => {
+    return apiClient.post('/trading/stop', {
+      tradingPairId
+    });
+  },
+  
+  // WebSocket management
+  getWebSocketStatus: () => {
+    return apiClient.get('/websocket/status');
+  },
+  
+  restartWebSockets: () => {
+    return apiClient.post('/websocket/restart');
+  },
+  
+  // Telegram notifications
+  sendTestNotification: (message) => {
+    return apiClient.post('/telegram/test', { message });
   }
 };
