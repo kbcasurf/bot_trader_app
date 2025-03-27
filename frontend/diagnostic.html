@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+    <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>WebSocket Connection Test</h1>
+    <div id="status">Connecting...</div>
+    <script>
+        const status = document.getElementById('status');
+        try {
+            const socket = io('http://backend:5000', {
+                transports: ['websocket', 'polling']
+            });
+            
+            socket.on('connect', () => {
+                status.textContent = 'Connected!';
+                status.style.color = 'green';
+                console.log('Connected to WebSocket server');
+            });
+            
+            socket.on('connect_error', (err) => {
+                status.textContent = `Connection Error: ${err.message}`;
+                status.style.color = 'red';
+                console.error('Connection error:', err);
+            });
+        } catch (e) {
+            status.textContent = `Error: ${e.message}`;
+            status.style.color = 'red';
+            console.error('Error creating socket:', e);
+        }
+    </script>
+</body>
+</html>
