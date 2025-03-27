@@ -158,15 +158,9 @@ export default {
     connectToWebSocket() {
       try {
         // Get WebSocket URL from environment or construct it based on API URL
-        const wsUrl = import.meta.env.VITE_WEBSOCKET_URL;
-        
-        console.log(`StatusPanel connecting to WebSocket at ${wsUrl}`);
-        
-        // Initialize socket with explicit URL
-        this.socket = io(wsUrl, {
+        this.socket = io('/', {
           transports: ['websocket', 'polling'],
-          reconnectionAttempts: 5,
-          reconnectionDelay: 1000,
+          path: '/socket.io'
         });
         
         // Handle global status updates

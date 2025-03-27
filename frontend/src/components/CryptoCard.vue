@@ -242,17 +242,10 @@ export default {
     
     connectToWebSocket() {
       // Get WebSocket URL from environment or construct it based on API URL
-      const wsUrl = import.meta.env.VITE_WEBSOCKET_URL;
-      
-      try {
-        console.log(`Connecting to WebSocket at ${wsUrl} for ${this.tradingPair.symbol}`);
-        
-        // Initialize socket with explicit URL
-        this.socket = io(wsUrl, {
-          transports: ['websocket', 'polling'],
-          reconnectionAttempts: 5,
-          reconnectionDelay: 1000,
-        });
+      this.socket = io('/', {
+        transports: ['websocket', 'polling'],
+        path: '/socket.io'
+      });
         
         // Handle connection events
         this.socket.on('connect', () => {

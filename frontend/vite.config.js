@@ -14,21 +14,21 @@ export default defineConfig(({ mode }) => {
       
       // Configure proxy for backend API during development
       proxy: {
-        // Proxy /api requests to backend
+        // Proxy API requests
         '/api': {
-          target: env.VITE_API_URL?.replace('/api', ''),
+          target: 'http://localhost:5000',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, '/api')
+          // Don't rewrite paths - keep the /api prefix intact when forwarding
+          rewrite: (path) => path
         },
         
-        // Proxy WebSocket requests
+        // Socket.IO connections need special handling
         '/socket.io': {
-          target: env.VITE_WEBSOCKET_URL,
-          ws: true, // Enable WebSocket proxy
+          target: 'http://localhost:5000',
+          ws: true, 
           changeOrigin: true
         }
       },
-    
       
       // Display network URLs for easier access in Docker
       hmr: {
