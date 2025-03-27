@@ -2,9 +2,9 @@ const db = require('../../config/database');
 const logger = require('../utils/logger');
 
 // Trading algorithm constants
-const PROFIT_THRESHOLD = parseFloat(process.env.PROFIT_THRESHOLD) || 5; // profit target setting in .env file
-const LOSS_THRESHOLD = parseFloat(process.env.LOSS_THRESHOLD) || 5;   // loss threshold for additional purchases
-const ADDITIONAL_PURCHASE_AMOUNT = parseFloat(process.env.ADDITIONAL_PURCHASE_AMOUNT) || 50; // for additional purchases
+const PROFIT_THRESHOLD = parseFloat(process.env.PROFIT_THRESHOLD); // profit target setting in .env file
+const LOSS_THRESHOLD = parseFloat(process.env.LOSS_THRESHOLD);   // loss threshold for additional purchases
+const ADDITIONAL_PURCHASE_AMOUNT = parseFloat(process.env.ADDITIONAL_PURCHASE_AMOUNT); // for additional purchases
 
 
 /**

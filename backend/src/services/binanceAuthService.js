@@ -6,8 +6,8 @@ const logger = require('../utils/logger');
 // Environment variables
 const API_KEY = process.env.BINANCE_API_KEY;
 const API_SECRET = process.env.BINANCE_API_SECRET;
-const BASE_URL = process.env.BINANCE_API_URL || 'https://testnet.binance.vision';
-const RECV_WINDOW = process.env.BINANCE_RECV_WINDOW || 5000;
+const BASE_URL = process.env.BINANCE_API_URL;
+const RECV_WINDOW = process.env.BINANCE_RECV_WINDOW;
 
 /**
  * Creates a signature for a request using HMAC SHA256
