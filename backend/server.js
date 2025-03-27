@@ -34,23 +34,39 @@ const port = process.env.PORT || 5000;
 // Create HTTP server
 const server = http.createServer(app);
 
-// Set up WebSocket server
+// Set up WebSocket server with proper CORS
 const { Server } = require('socket.io');
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  }
+    origin: process.env.CORS_ALLOWED_ORIGINS ? process.env.CORS_ALLOWED_ORIGINS.split(',') : '*',
+    methods: ['GET', 'POST'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization']
+  },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000, // Increase ping timeout to prevent premature disconnects
+  pingInterval: 25000 // Ping clients every 25 seconds
 });
   
 io.on('connection', (socket) => {
   // Handle new connection with our WebSocket controller
   websocketController.handleConnection(socket);
   logger.info(`New client connected: ${socket.id}`);
+
+  // Log disconnections
+  socket.on('disconnect', (reason) => {
+    logger.info(`Client disconnected: ${socket.id}, reason: ${reason}`);
+  });
+
+  // Handle connection errors
+  socket.on('error', (error) => {
+    logger.error(`Socket error for client ${socket.id}:`, error);
+  });
 });
 
 // Make io available globally
 app.set('io', io);
+global.io = io; // This ensures the websocketService can access io
 
 // Initialize database and start server
 async function startServer() {
@@ -125,28 +141,24 @@ async function initializeDatabase() {
       AND table_name IN ('trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history')
     `, [process.env.DB_NAME || 'crypto_trading_bot']);
     
-    // Fix for the tables.map issue - ensure we're correctly accessing the result
-    // MariaDB sometimes returns results in different formats based on server version
+    // Handle different result formats safely
     let tableNames = [];
     
     if (Array.isArray(tablesResult)) {
-      // If tablesResult is an array of rows
-      tableNames = tablesResult.map(row => row.table_name);
+      tableNames = tablesResult.map(row => row.table_name || row.TABLE_NAME);
     } else if (tablesResult && typeof tablesResult === 'object') {
-      // If tablesResult is an object with rows
       if (Array.isArray(tablesResult.rows)) {
-        tableNames = tablesResult.rows.map(row => row.table_name);
+        tableNames = tablesResult.rows.map(row => row.table_name || row.TABLE_NAME);
       } else if (tablesResult[0] && Array.isArray(tablesResult[0])) {
-        tableNames = tablesResult[0].map(row => row.table_name);
+        tableNames = tablesResult[0].map(row => row.table_name || row.TABLE_NAME);
       } else if (tablesResult[0]) {
-        // Handle case where first item is not an array
-        tableNames = Object.values(tablesResult).map(row => row.table_name);
+        tableNames = Object.values(tablesResult).map(row => row.table_name || row.TABLE_NAME);
       }
     }
     
     // If all tables exist, we can skip initialization
-    const allTablesExist = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history']
-      .every(table => tableNames.includes(table));
+    const requiredTables = ['trading_pairs', 'trading_configurations', 'transactions', 'holdings', 'price_history'];
+    const allTablesExist = requiredTables.every(table => tableNames.includes(table));
     
     if (allTablesExist) {
       logger.info('All required database tables already exist');
@@ -246,9 +258,9 @@ async function initializeDatabase() {
     // Handle different result formats for count query
     let pairsCount = 0;
     if (Array.isArray(pairsCountResult) && pairsCountResult[0]) {
-      pairsCount = pairsCountResult[0][0]?.count || pairsCountResult[0]?.count || 0;
+      pairsCount = pairsCountResult[0].count || (pairsCountResult[0][0] && pairsCountResult[0][0].count) || 0;
     } else if (pairsCountResult && typeof pairsCountResult === 'object') {
-      pairsCount = pairsCountResult[0]?.count || pairsCountResult?.count || 0;
+      pairsCount = pairsCountResult.count || (pairsCountResult[0] && pairsCountResult[0].count) || 0;
     }
     
     if (pairsCount === 0) {
@@ -268,23 +280,18 @@ async function initializeDatabase() {
       const pairsResult = await conn.query('SELECT id FROM trading_pairs');
       
       // Handle different result formats for the pairs query
-      let pairs = null;
-      if (Array.isArray(pairsResult)) {
-        pairs = pairsResult[0];
-      } else if (pairsResult && typeof pairsResult === 'object') {
-        pairs = pairsResult;
+      const pairsArray = Array.isArray(pairsResult) ? 
+                        pairsResult : 
+                        (Array.isArray(pairsResult[0]) ? pairsResult[0] : Object.values(pairsResult));
+      
+      for (const pair of pairsArray) {
+        const pairId = pair.id || (typeof pair === 'object' ? Object.values(pair)[0] : pair);
+        await conn.query(`
+          INSERT INTO holdings (trading_pair_id, quantity) VALUES (?, 0)
+        `, [pairId]);
       }
       
-      if (pairs) {
-        const pairsArray = Array.isArray(pairs) ? pairs : Object.values(pairs);
-        for (const pair of pairsArray) {
-          await conn.query(`
-            INSERT INTO holdings (trading_pair_id, quantity) VALUES (?, 0)
-          `, [pair.id]);
-        }
-        
-        logger.info('Seeded trading pairs and initialized holdings');
-      }
+      logger.info('Seeded trading pairs and initialized holdings');
     }
     
     conn.release();
@@ -303,6 +310,7 @@ async function initializeTelegramService() {
       const success = await telegramService.initializeBot();
       if (success) {
         logger.info('Telegram notification service initialized successfully');
+        await telegramService.sendNotification('🚀 Trading Bot server started and ready to trade!');
       } else {
         logger.warn('Failed to initialize Telegram notification service');
       }
@@ -400,8 +408,9 @@ process.on('unhandledRejection', (reason, promise) => {
   process.exit(1);
 });
 
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received, shutting down gracefully');
+// Common shutdown function to avoid code duplication
+async function gracefulShutdown(signal) {
+  logger.info(`${signal} received, shutting down gracefully`);
   
   // Clear simulation interval if it exists
   if (global.simulationInterval) {
@@ -419,7 +428,7 @@ process.on('SIGTERM', async () => {
   // Stop Telegram bot if running
   const bot = telegramService.getBot();
   if (bot) {
-    bot.stop('SIGTERM');
+    bot.stop(signal);
     logger.info('Telegram bot stopped');
   }
   
@@ -434,40 +443,8 @@ process.on('SIGTERM', async () => {
     logger.error('Forced shutdown after timeout');
     process.exit(1);
   }, 10000);
-});
+}
 
-process.on('SIGINT', async () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  
-  // Clear simulation interval if it exists
-  if (global.simulationInterval) {
-    clearInterval(global.simulationInterval);
-  }
-  
-  // Close database connection
-  try {
-    await db.end();
-    logger.info('Database connections closed');
-  } catch (error) {
-    logger.error('Error closing database connections:', error);
-  }
-  
-  // Stop Telegram bot if running
-  const bot = telegramService.getBot();
-  if (bot) {
-    bot.stop('SIGINT');
-    logger.info('Telegram bot stopped');
-  }
-  
-  // Close server
-  server.close(() => {
-    logger.info('Server closed');
-    process.exit(0);
-  });
-  
-  // Force exit after timeout
-  setTimeout(() => {
-    logger.error('Forced shutdown after timeout');
-    process.exit(1);
-  }, 10000);
-});
+// Handle termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

@@ -35,6 +35,12 @@
           {{ tradingStatus.active ? 'Active' : 'Inactive' }}
         </span>
       </div>
+      <div class="stat-row">
+        <span class="stat-label">Connection:</span>
+        <span class="status-indicator" :class="{ 'status-active': socketConnected, 'status-error': !socketConnected }">
+          {{ socketConnected ? 'WebSocket' : 'Polling' }}
+        </span>
+      </div>
     </div>
 
     <div class="profit-bar">
@@ -137,7 +143,9 @@ export default {
       isLoading: false,
       priceUpdateInterval: null,
       tradingStatus: null,
-      socket: null
+      socket: null,
+      socketConnected: false,
+      pollingInterval: null
     };
   },
   computed: {
@@ -172,13 +180,18 @@ export default {
   },
   created() {
     this.fetchData();
-    this.startPriceUpdates();
     this.connectToWebSocket();
     this.fetchTradingStatus();
   },
   beforeUnmount() {
     this.stopPriceUpdates();
     this.disconnectFromWebSocket();
+    
+    // Clear polling interval if it exists
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
   },
   methods: {
     async fetchData() {
@@ -211,10 +224,13 @@ export default {
     },
     
     connectToWebSocket() {
-      // Get WebSocket URL from environment or use a fallback
-      const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || window.location.origin.replace(/^http/, 'ws');
+      // Get WebSocket URL from environment or construct it based on API URL
+      const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || 
+                    (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000');
       
       try {
+        console.log(`Connecting to WebSocket at ${wsUrl} for ${this.tradingPair.symbol}`);
+        
         // Initialize socket with explicit URL
         this.socket = io(wsUrl, {
           transports: ['websocket', 'polling'],
@@ -222,14 +238,25 @@ export default {
           reconnectionDelay: 1000
         });
         
-        // Subscribe to updates for this trading pair
-        this.socket.emit('subscribeTradingPair', this.tradingPair.id);
+        // Handle connection events
+        this.socket.on('connect', () => {
+          console.log(`WebSocket connected for ${this.tradingPair.symbol}`);
+          this.socket.emit('subscribeTradingPair', this.tradingPair.id);
+          this.socketConnected = true;
+          
+          // If we were polling, we can stop now
+          if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+          }
+        });
         
         // Handle price updates
         this.socket.on('priceUpdate', (data) => {
           if (data.symbol === this.tradingPair.symbol) {
             this.lastPrice = this.currentPrice;
             this.currentPrice = data.price;
+            console.log(`Price update for ${this.tradingPair.symbol}: ${data.price}`);
           }
         });
         
@@ -257,14 +284,24 @@ export default {
         // Handle connection errors
         this.socket.on('connect_error', (error) => {
           console.error(`WebSocket connection error for ${this.tradingPair.symbol}:`, error);
+          this.socketConnected = false;
+          this.startPollingFallback();
         });
         
         // Handle disconnect
         this.socket.on('disconnect', (reason) => {
           console.warn(`WebSocket disconnected for ${this.tradingPair.symbol}. Reason: ${reason}`);
+          this.socketConnected = false;
+          
+          // Start polling if disconnected for a reason other than "io client disconnect"
+          if (reason !== 'io client disconnect') {
+            this.startPollingFallback();
+          }
         });
       } catch (error) {
         console.error(`Error initializing WebSocket for ${this.tradingPair.symbol}:`, error);
+        this.socketConnected = false;
+        this.startPollingFallback();
       }
     },
     
@@ -282,7 +319,33 @@ export default {
         
         // Disconnect socket
         this.socket.disconnect();
+        this.socketConnected = false;
       }
+    },
+    
+    startPollingFallback() {
+      // Check if polling is enabled (with fallback to true if not set)
+      const enableFallback = import.meta.env.VITE_ENABLE_FALLBACK_POLLING !== 'false';
+      if (!enableFallback) return;
+      
+      console.log(`Starting polling fallback for ${this.tradingPair.symbol}`);
+      // Clear any existing interval
+      if (this.pollingInterval) {
+        clearInterval(this.pollingInterval);
+      }
+      
+      // Set up polling interval (every 10 seconds or from environment)
+      const interval = parseInt(import.meta.env.VITE_PRICE_REFRESH_INTERVAL) || 10000;
+      this.pollingInterval = setInterval(async () => {
+        try {
+          console.log(`Polling price for ${this.tradingPair.symbol}`);
+          await this.fetchPrice();
+          await this.fetchHoldings();
+          await this.fetchTransactions();
+        } catch (error) {
+          console.error(`Error in polling fallback for ${this.tradingPair.symbol}:`, error);
+        }
+      }, interval);
     },
     
     async fetchPrice() {
@@ -311,12 +374,6 @@ export default {
       } catch (error) {
         console.error(`Error fetching transactions for ${this.tradingPair.symbol}:`, error);
       }
-    },
-    
-    startPriceUpdates() {
-      this.priceUpdateInterval = setInterval(() => {
-        this.fetchPrice();
-      }, 10000); // Update price every 10 seconds
     },
     
     stopPriceUpdates() {
@@ -448,6 +505,11 @@ export default {
 .status-active {
   background-color: #dcfce7;
   color: #15803d;
+}
+
+.status-error {
+  background-color: #fee2e2;
+  color: #dc2626;
 }
 
 .investment-control {

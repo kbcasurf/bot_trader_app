@@ -180,6 +180,23 @@ const getLatestPrice = (symbol) => {
 };
 
 /**
+ * Get status of all WebSocket connections
+ */
+const getConnectionStatus = () => {
+  const status = {};
+  
+  activeConnections.forEach((connection, symbol) => {
+    status[symbol] = {
+      status: connection.status || 'unknown',
+      lastMessageTime: connection.lastMessageTime ? new Date(connection.lastMessageTime).toISOString() : null,
+      reconnectAttempts: connection.reconnectAttempts || 0
+    };
+  });
+  
+  return status;
+};
+
+/**
  * Initialize WebSocket connections for all supported trading pairs
  */
 const initializeAllWebSockets = async () => {
@@ -231,23 +248,6 @@ const setupConnectionStatusChecker = () => {
       }
     });
   }, 60000);
-};
-
-/**
- * Get status of all WebSocket connections
- */
-const getConnectionStatus = () => {
-  const status = {};
-  
-  activeConnections.forEach((connection, symbol) => {
-    status[symbol] = {
-      status: connection.status,
-      lastMessageTime: connection.lastMessageTime ? new Date(connection.lastMessageTime).toISOString() : null,
-      reconnectAttempts: connection.reconnectAttempts || 0
-    };
-  });
-  
-  return status;
 };
 
 /**

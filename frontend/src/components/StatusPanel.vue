@@ -61,6 +61,22 @@
           </div>
         </div>
         
+        <div class="connection-status-section status-section">
+          <h3>Connection Status</h3>
+          <div class="connection-info">
+            <div class="connection-type">
+              <span class="detail-label">Type:</span>
+              <span class="detail-value status-indicator" :class="{ 'status-active': socketConnected, 'status-error': !socketConnected }">
+                {{ socketConnected ? 'WebSocket' : 'HTTP Polling' }}
+              </span>
+            </div>
+            <div class="last-update">
+              <span class="detail-label">Last Update:</span>
+              <span class="detail-value">{{ lastUpdateTime }}</span>
+            </div>
+          </div>
+        </div>
+        
         <div class="status-section">
           <h3>Telegram Notifications</h3>
           <div class="notification-test">
@@ -100,13 +116,15 @@ export default {
       isSendingNotification: false,
       testMessage: 'Test notification from Trading Bot',
       statusInterval: null,
-      socket: null
+      socket: null,
+      socketConnected: false,
+      lastUpdateTime: 'Never'
     };
   },
   created() {
     this.fetchStatus();
-    this.setupStatusInterval();
     this.connectToWebSocket();
+    this.setupStatusInterval();
   },
   beforeUnmount() {
     this.clearStatusInterval();
@@ -127,6 +145,7 @@ export default {
         
         // If we got data, the server is online
         this.isOnline = true;
+        this.lastUpdateTime = new Date().toLocaleTimeString();
       } catch (error) {
         console.error('Error fetching status:', error);
         this.isOnline = false;
@@ -135,11 +154,107 @@ export default {
       }
     },
     
-    // Set up interval to refresh status
-    setupStatusInterval() {
+    // Connect to WebSocket for real-time updates
+    connectToWebSocket() {
+      try {
+        // Get WebSocket URL from environment or construct it based on API URL
+        const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || 
+                      (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace('/api', '') : 'http://localhost:5000');
+        
+        console.log(`StatusPanel connecting to WebSocket at ${wsUrl}`);
+        
+        // Initialize socket with explicit URL
+        this.socket = io(wsUrl, {
+          transports: ['websocket', 'polling'],
+          reconnectionAttempts: 5,
+          reconnectionDelay: 1000
+        });
+        
+        // Handle global status updates
+        this.socket.on('statusUpdate', (data) => {
+          // Update relevant parts of the status
+          if (data.websocketStatus) {
+            this.websocketStatus = data.websocketStatus;
+          }
+          
+          if (data.tradingStatus) {
+            this.tradingStatus = data.tradingStatus;
+          }
+          
+          // Set online status
+          this.isOnline = true;
+          this.lastUpdateTime = new Date().toLocaleTimeString();
+        });
+        
+        // Handle connection/disconnection
+        this.socket.on('connect', () => {
+          this.isOnline = true;
+          this.socketConnected = true;
+          console.log('WebSocket connected for StatusPanel');
+          this.stopStatusPolling(); // Stop polling if it was active
+          this.lastUpdateTime = new Date().toLocaleTimeString() + ' (connected)';
+        });
+        
+        this.socket.on('disconnect', (reason) => {
+          this.isOnline = false;
+          this.socketConnected = false;
+          console.warn('WebSocket disconnected for StatusPanel. Reason:', reason);
+          this.startStatusPolling(); // Start polling on disconnect
+          this.lastUpdateTime = new Date().toLocaleTimeString() + ' (disconnected)';
+        });
+        
+        // Handle connection error
+        this.socket.on('connect_error', (error) => {
+          this.isOnline = false;
+          this.socketConnected = false;
+          console.error('WebSocket connection error for StatusPanel:', error);
+          this.startStatusPolling(); // Start polling on error
+          this.lastUpdateTime = new Date().toLocaleTimeString() + ' (error)';
+        });
+      } catch (error) {
+        console.error('Error initializing WebSocket for StatusPanel:', error);
+        this.startStatusPolling(); // Start polling if initialization fails
+      }
+    },
+    
+    // Start polling if WebSocket fails
+    startStatusPolling() {
+      // Check if polling is enabled (with fallback to true if not set)
+      const enableFallback = import.meta.env.VITE_ENABLE_FALLBACK_POLLING !== 'false';
+      if (!enableFallback) return;
+      
+      console.log('Starting status polling fallback');
+      
+      // Clear any existing interval
+      this.clearStatusInterval();
+      
+      // Set up status polling interval
+      const interval = parseInt(import.meta.env.VITE_STATUS_REFRESH_INTERVAL) || 30000;
       this.statusInterval = setInterval(() => {
         this.fetchStatus();
-      }, 30000); // Refresh every 30 seconds
+      }, interval);
+      
+      // Fetch immediately
+      this.fetchStatus();
+    },
+    
+    // Stop polling when WebSocket reconnects
+    stopStatusPolling() {
+      if (this.statusInterval) {
+        clearInterval(this.statusInterval);
+        this.statusInterval = null;
+        console.log('Status polling stopped, WebSocket connected');
+      }
+    },
+    
+    // Set up interval to refresh status
+    setupStatusInterval() {
+      const interval = parseInt(import.meta.env.VITE_STATUS_REFRESH_INTERVAL) || 30000;
+      this.statusInterval = setInterval(() => {
+        if (!this.socketConnected) {
+          this.fetchStatus();
+        }
+      }, interval);
     },
     
     // Clear status refresh interval
@@ -161,6 +276,8 @@ export default {
         setTimeout(() => {
           this.fetchStatus();
         }, 2000);
+        
+        this.lastUpdateTime = new Date().toLocaleTimeString() + ' (restarted)';
       } catch (error) {
         console.error('Error restarting WebSockets:', error);
       } finally {
@@ -186,55 +303,6 @@ export default {
       }
     },
     
-    // Connect to WebSocket for real-time updates
-    connectToWebSocket() {
-      try {
-        // Get WebSocket URL from environment or use a fallback
-        const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || window.location.origin.replace(/^http/, 'ws');
-        
-        // Initialize socket with explicit URL
-        this.socket = io(wsUrl, {
-          transports: ['websocket', 'polling'],
-          reconnectionAttempts: 5,
-          reconnectionDelay: 1000
-        });
-        
-        // Handle global status updates
-        this.socket.on('statusUpdate', (data) => {
-          // Update relevant parts of the status
-          if (data.websocketStatus) {
-            this.websocketStatus = data.websocketStatus;
-          }
-          
-          if (data.tradingStatus) {
-            this.tradingStatus = data.tradingStatus;
-          }
-          
-          // Set online status
-          this.isOnline = true;
-        });
-        
-        // Handle connection/disconnection
-        this.socket.on('connect', () => {
-          this.isOnline = true;
-          console.log('WebSocket connected for StatusPanel');
-        });
-        
-        this.socket.on('disconnect', (reason) => {
-          this.isOnline = false;
-          console.warn('WebSocket disconnected for StatusPanel. Reason:', reason);
-        });
-        
-        // Handle connection error
-        this.socket.on('connect_error', (error) => {
-          this.isOnline = false;
-          console.error('WebSocket connection error for StatusPanel:', error);
-        });
-      } catch (error) {
-        console.error('Error initializing WebSocket for StatusPanel:', error);
-      }
-    },
-    
     // Disconnect from WebSocket
     disconnectFromWebSocket() {
       if (this.socket) {
@@ -247,6 +315,7 @@ export default {
         // Disconnect socket
         this.socket.disconnect();
         this.socket = null;
+        this.socketConnected = false;
       }
     }
   }
@@ -289,6 +358,11 @@ export default {
 .status-online {
   background-color: #dcfce7;
   color: #15803d;
+}
+
+.status-error {
+  background-color: #fee2e2;
+  color: #dc2626;
 }
 
 .panel-content {
@@ -416,6 +490,25 @@ export default {
 
 .detail-value {
   font-weight: 500;
+}
+
+.connection-status-section {
+  background-color: #f8fafc;
+  border-radius: 6px;
+  padding: 15px;
+}
+
+.connection-info {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.connection-type, .last-update {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .action-button {

@@ -20,14 +20,15 @@ app.use(helmet()); // Security headers
 
 // Configure CORS with specific options
 const corsOptions = {
-  origin: process.env.CORS_ALLOWED_ORIGINS,
+  origin: process.env.CORS_ALLOWED_ORIGINS ? process.env.CORS_ALLOWED_ORIGINS.split(',') : '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   optionsSuccessStatus: 200
 };
 
-app.use(cors(corsOptions));app.use(express.json()); // Parse JSON bodies
+app.use(cors(corsOptions));
+app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
 // Request logging
@@ -61,4 +62,5 @@ app.use((req, res, next) => {
 // Global error handler
 app.use(errorHandler);
 
+// Export the app for use in server.js
 module.exports = app;
