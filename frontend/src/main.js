@@ -30,15 +30,14 @@ const store = createStore({
   actions: {
     async fetchTradingPairs({ commit }) {
       try {
-        const response = await fetch(`${import.meta.env.VITE_API_URL}/trading-pairs`);
-        const data = await response.json();
-        commit('setTradingPairs', data);
-        return data;
+        // Use simple relative path
+        const response = await fetch('/api/trading-pairs');
+        // ...rest of the code
       } catch (error) {
         console.error('Error fetching trading pairs:', error);
-        return [];
       }
     },
+    
     async fetchHoldings({ commit }, symbol) {
       try {
         const response = await fetch(`${import.meta.env.VITE_API_URL}/holdings/${symbol}`);

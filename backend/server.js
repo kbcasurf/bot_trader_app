@@ -37,6 +37,10 @@ const server = http.createServer(app);
 // Set up WebSocket server with proper CORS
 const { Server } = require('socket.io');
 const io = new Server(server, {
+  cors: {
+    origin: '*', 
+    methods: ['GET', 'POST']
+  },
   transports: ['websocket', 'polling'],
   pingTimeout: 60000,
   pingInterval: 25000

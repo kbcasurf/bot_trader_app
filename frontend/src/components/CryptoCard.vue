@@ -241,16 +241,12 @@ export default {
     },
     
     connectToWebSocket() {
-      try {
-        console.log(`Connecting to WebSocket for ${this.tradingPair.symbol}`);
-        
-        // Initialize socket with relative path
-        this.socket = io('/', {
-          transports: ['websocket', 'polling'],
-          path: '/socket.io',
-          reconnectionAttempts: 5,
-          reconnectionDelay: 1000
-        });
+  try {
+    // Initialize socket with relative path
+    this.socket = io('/', {
+      transports: ['websocket', 'polling'],
+      path: '/socket.io'
+    });
         
         // Handle connection events
         this.socket.on('connect', () => {
@@ -317,10 +313,9 @@ export default {
           this.socketConnected = false;
         });
       } catch (error) {
-        console.error(`Error initializing WebSocket for ${this.tradingPair.symbol}:`, error);
-        this.socketConnected = false;
-      }
-    },
+    console.error('Error initializing WebSocket:', error);
+  }
+},
     
     disconnectFromWebSocket() {
       if (this.socket) {

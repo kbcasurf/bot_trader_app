@@ -113,9 +113,11 @@ const sendInitialData = async (socket) => {
  * Broadcast price update to all clients
  */
 exports.broadcastPriceUpdate = (symbol, price) => {
-  websocketService.broadcastPriceUpdate(symbol, price);
+  const io = global.io;
+  if (!io) return;
+  
+  io.emit('priceUpdate', { symbol, price, timestamp: new Date().toISOString() });
 };
-
 /**
  * Broadcast transaction update to all clients
  */

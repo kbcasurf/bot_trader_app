@@ -180,8 +180,8 @@ export default {
         });
         
         // Handle connection/disconnection
-        this.socket.on('connect', () => {
-          this.isOnline = true;
+         this.socket.on('connect', () => {
+          console.log(`WebSocket connected for ${this.tradingPair.symbol}`);
           this.socketConnected = true;
           console.log('WebSocket connected for StatusPanel');
           this.stopStatusPolling(); // Stop polling if it was active
@@ -204,11 +204,11 @@ export default {
           this.startStatusPolling(); // Start polling on error
           this.lastUpdateTime = new Date().toLocaleTimeString() + ' (error)';
         });
-      } catch (error) {
-        console.error('Error initializing WebSocket for StatusPanel:', error);
-        this.startStatusPolling(); // Start polling if initialization fails
-      }
-    },
+       } 
+        } catch (error) {
+    console.error('Error initializing WebSocket:', error);
+  }
+},
     
     // Start polling if WebSocket fails
     startStatusPolling() {
