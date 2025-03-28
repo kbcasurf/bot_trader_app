@@ -2,7 +2,7 @@ import { io } from 'socket.io-client';
 
 // Initialize socket connection to backend
 // Use a relative path to ensure it works with the proxy
-const socket = io('/', {
+export const socket = io('/', {
     reconnection: true,
     reconnectionAttempts: 10,
     reconnectionDelay: 1000,
