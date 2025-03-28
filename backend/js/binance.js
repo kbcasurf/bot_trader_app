@@ -11,8 +11,8 @@ const API_KEY = process.env.BINANCE_API_KEY;
 const API_SECRET = process.env.BINANCE_API_SECRET;
 
 // Binance API base URLs
-const BASE_URL = 'https://testnet.binance.vision/api';
-const WS_BASE_URL = 'wss://stream.binance.com:9443/ws';
+const BASE_URL = process.env.BINANCE_API_URL;
+const WS_BASE_URL = process.env.BINANCE_WEBSOCKET_URL;
 
 // Socket.io connections
 const socketConnections = {};
