@@ -1,5 +1,5 @@
 // Get socket instance from main.js or create a new one if needed
-import { socket } from './main.js';
+import { socket } from '../main.js';
 
 // Track trading status
 let tradingActive = false;
