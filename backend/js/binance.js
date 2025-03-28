@@ -4,7 +4,7 @@ const dotenv = require('dotenv');
 const { io } = require('socket.io-client');
 
 // Load environment variables
-dotenv.config({ path: '../../.env' });
+dotenv.config({ path: '/app/.env' });
 
 // Binance API credentials
 const API_KEY = process.env.BINANCE_API_KEY;

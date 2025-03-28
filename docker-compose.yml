@@ -11,7 +11,7 @@ services:
     depends_on:
       - backend
     networks:
-      - crypto-bot-network
+      - bot-network
 
   # Backend service
   backend:
@@ -34,7 +34,7 @@ services:
     depends_on:
       - database
     networks:
-      - crypto-bot-network
+      - bot-network
 
   # Database service
   database:

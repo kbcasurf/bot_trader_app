@@ -2,7 +2,7 @@ const { Telegraf } = require('telegraf');
 const dotenv = require('dotenv');
 
 // Load environment variables
-dotenv.config({ path: '../../.env' });
+dotenv.config({ path: '/app/.env' });
 
 // Telegram Bot credentials
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;

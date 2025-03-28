@@ -6,7 +6,7 @@ const dotenv = require('dotenv');
 const mariadb = require('mariadb');
 
 // Load environment variables
-dotenv.config({ path: '../.env' });
+dotenv.config({ path: '/app/.env' });
 
 // Import custom modules
 const telegramBot = require('./js/telegram');

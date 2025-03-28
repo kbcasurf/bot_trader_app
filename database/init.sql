@@ -1,12 +1,12 @@
 -- Create database if it doesn't exist
-CREATE DATABASE IF NOT EXISTS ${DB_NAME};
+CREATE DATABASE IF NOT EXISTS crypto_trading_bot;
 
 -- Use the database
-USE ${DB_NAME};
+USE crypto_trading_bot;
 
 -- Create user if it doesn't exist
-CREATE USER IF NOT EXISTS ${DB_USER}@'%' IDENTIFIED BY ${DB_PASSWORD};
+CREATE USER IF NOT EXISTS 'trading_bot_user'@'%' IDENTIFIED BY 'mariadb_secret';
 
 -- Grant privileges
-GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO ${DB_USER}@'%';
+GRANT ALL PRIVILEGES ON crypto_trading_bot.* TO 'trading_bot_user'@'%';
 FLUSH PRIVILEGES;
