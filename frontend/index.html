@@ -3,92 +3,441 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Trading Bot</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Socket.IO Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        #status, #events, #requests {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            min-height: 50px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .connected {
+            color: green;
+        }
+        .disconnected {
+            color: red;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .config-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .config-option {
+            margin-bottom: 10px;
+        }
+        .config-option label {
+            display: inline-block;
+            width: 150px;
+        }
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+            margin-bottom: 20px;
+        }
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            transition: 0.3s;
+            color: black;
+        }
+        .tab button:hover {
+            background-color: #ddd;
+        }
+        .tab button.active {
+            background-color: #ccc;
+        }
+        .tabcontent {
+            display: none;
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            border-top: none;
+        }
+        #debugPanel {
+            display: block;
+        }
+    </style>
 </head>
 <body>
-    <header>
-        <h1>Cryptocurrency Trading Bot</h1>
-        <p>Automatically trade crypto with predefined strategies</p>
-    </header>
-
-    <div class="status-section">
-        <div class="status-card" id="connection-status">
-            <h3><a href="frontend/socket-test.html">Connection Status</a></h3>
-            <div class="status-indicator">
-                <div class="status-dot" id="backend-status-dot"></div>
-                <span id="backend-status-text">Backend: Connecting...</span>
-            </div>
-            <div class="status-indicator">
-                <div class="status-dot" id="db-status-dot"></div>
-                <span id="db-status-text">Database: Connecting...</span>
-            </div>
+    <h1>Socket.IO Connection Test</h1>
+    
+    <div class="tab">
+        <button class="tablinks active" onclick="openTab(event, 'debugPanel')">Debug Panel</button>
+        <button class="tablinks" onclick="openTab(event, 'configPanel')">Connection Config</button>
+        <button class="tablinks" onclick="openTab(event, 'networkPanel')">Network Log</button>
+    </div>
+    
+    <div id="debugPanel" class="tabcontent">
+        <div>
+            <h2>Connection Status</h2>
+            <div id="status" class="disconnected">Disconnected</div>
         </div>
-        <div class="status-card" id="api-status">
-            <h3>API Status</h3>
-            <div class="status-indicator">
-                <div class="status-dot" id="binance-status-dot"></div>
-                <span id="binance-status-text">Binance: Connecting...</span>
-            </div>
-            <div class="status-indicator">
-                <div class="status-dot" id="telegram-status-dot"></div>
-                <span id="telegram-status-text">Telegram: Connecting...</span>
-            </div>
+        
+        <div>
+            <h2>Connection Controls</h2>
+            <button id="connect">Connect</button>
+            <button id="disconnect">Disconnect</button>
+            <button id="send-test">Send Test Message</button>
+            <button id="clear-log">Clear Log</button>
+        </div>
+        
+        <div>
+            <h2>Events Log</h2>
+            <div id="events"></div>
         </div>
     </div>
-
-    <!-- Trading Status Section -->
-    <div class="trading-status">
-        <h3>Trading Status</h3>
-        <div class="status-indicator">
-            <div class="status-dot" id="trading-status-dot"></div>
-            <span id="trading-status-text">Trading: Unknown</span>
+    
+    <div id="configPanel" class="tabcontent">
+        <div class="config-section">
+            <h2>Connection Configuration</h2>
+            <div class="config-option">
+                <label for="connectionUrl">URL:</label>
+                <input type="text" id="connectionUrl" value="http://localhost:3000" style="width: 300px;">
+            </div>
+            <div class="config-option">
+                <label for="socketPath">Socket.IO Path:</label>
+                <input type="text" id="socketPath" value="/socket.io/" style="width: 300px;">
+            </div>
+            <div class="config-option">
+                <label>Transport Method:</label>
+                <input type="checkbox" id="transportPolling" checked> <label for="transportPolling">Polling</label>
+                <input type="checkbox" id="transportWebsocket"> <label for="transportWebsocket">WebSocket</label>
+            </div>
+            <div class="config-option">
+                <label for="reconnectAttempts">Reconnect Attempts:</label>
+                <input type="number" id="reconnectAttempts" value="3" min="1" max="10">
+            </div>
+            <div class="config-option">
+                <label for="connectionTimeout">Timeout (ms):</label>
+                <input type="number" id="connectionTimeout" value="20000" min="1000" max="60000" step="1000">
+            </div>
+            <div class="config-option">
+                <label for="autoConnect">Auto Connect:</label>
+                <input type="checkbox" id="autoConnect">
+            </div>
+            <div class="config-option">
+                <label for="forceNew">Force New Connection:</label>
+                <input type="checkbox" id="forceNew" checked>
+            </div>
+            <div class="config-option">
+                <button id="save-config">Save Configuration</button>
+                <button id="reset-config">Reset to Defaults</button>
+            </div>
         </div>
     </div>
-
-    <div class="crypto-grid">
-        <!-- This is just a sample card as a placeholder -->
-        <div class="crypto-card" id="btc-card">
-            <div class="crypto-header">
-                <h3>BTC/USDT</h3>
-                <span class="current-price" id="btc-price">Price: $0.00</span>
-            </div>
-            <div class="investment-slider">
-                <label for="btc-investment">Investment Amount:</label>
-                <div class="slider-presets">
-                    <button class="preset-btn" data-value="50">$50</button>
-                    <button class="preset-btn active" data-value="100">$100</button>
-                    <button class="preset-btn" data-value="150">$150</button>
-                    <button class="preset-btn" data-value="200">$200</button>
-                </div>
-                <input type="hidden" id="btc-investment" value="100">
-            </div>
-            <button class="action-btn first-purchase" id="btc-first-purchase">First Purchase</button>
-            <div class="holdings">
-                <p>Current holdings: <span id="btc-holdings">0.00 BTC</span></p>
-            </div>
-            <div class="profit-loss-bar">
-                <div class="bar-fill" id="btc-profit-bar" style="width: 50%;"></div>
-            </div>
-            <p class="profit-loss-text">Profit/Loss: <span id="btc-profit-text">0.00%</span></p>
-            <div class="transaction-history">
-                <h4>Transaction History</h4>
-                <ul id="btc-history">
-                    <li class="no-transactions">No transactions yet</li>
-                </ul>
-            </div>
-            <button class="action-btn sell-all" id="btc-sell-all">Sell All</button>
+    
+    <div id="networkPanel" class="tabcontent">
+        <div>
+            <h2>Network Requests</h2>
+            <button id="clear-requests">Clear Requests</button>
+            <div id="requests"></div>
         </div>
     </div>
-
-    <div class="test-actions">
-        <h3>Test Actions</h3>
-        <button id="test-telegram">Test Telegram Notification</button>
-        <button id="test-binance-stream">Test Binance Stream</button>
-    </div>
-
-    <script src="./js/dashboard.js" type="module"></script>
-    <script src="./js/cryptoBoard.js" type="module"></script>
-    <script src="./main.js" type="module"></script>
+    
+    <!-- Import Socket.IO client (CDN) -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <script>
+        // Global socket object
+        let socket = null;
+        
+        // DOM elements
+        const statusEl = document.getElementById('status');
+        const eventsEl = document.getElementById('events');
+        const requestsEl = document.getElementById('requests');
+        const connectBtn = document.getElementById('connect');
+        const disconnectBtn = document.getElementById('disconnect');
+        const sendTestBtn = document.getElementById('send-test');
+        const clearLogBtn = document.getElementById('clear-log');
+        const clearRequestsBtn = document.getElementById('clear-requests');
+        const saveConfigBtn = document.getElementById('save-config');
+        const resetConfigBtn = document.getElementById('reset-config');
+        
+        // Config elements
+        const connectionUrlInput = document.getElementById('connectionUrl');
+        const socketPathInput = document.getElementById('socketPath');
+        const transportPollingCheckbox = document.getElementById('transportPolling');
+        const transportWebsocketCheckbox = document.getElementById('transportWebsocket');
+        const reconnectAttemptsInput = document.getElementById('reconnectAttempts');
+        const connectionTimeoutInput = document.getElementById('connectionTimeout');
+        const autoConnectCheckbox = document.getElementById('autoConnect');
+        const forceNewCheckbox = document.getElementById('forceNew');
+        
+        // Default configuration
+        const defaultConfig = {
+            url: 'http://localhost:3000',
+            path: '/socket.io/',
+            transports: ['polling'],
+            reconnectionAttempts: 3,
+            timeout: 20000,
+            autoConnect: false,
+            forceNew: true
+        };
+        
+        // Current configuration
+        let currentConfig = {...defaultConfig};
+        
+        // Tab functionality
+        function openTab(evt, tabName) {
+            let i, tabcontent, tablinks;
+            
+            tabcontent = document.getElementsByClassName("tabcontent");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+            
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+            
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+        
+        // Initialize UI with default values
+        function initializeUI() {
+            connectionUrlInput.value = currentConfig.url;
+            socketPathInput.value = currentConfig.path;
+            transportPollingCheckbox.checked = currentConfig.transports.includes('polling');
+            transportWebsocketCheckbox.checked = currentConfig.transports.includes('websocket');
+            reconnectAttemptsInput.value = currentConfig.reconnectionAttempts;
+            connectionTimeoutInput.value = currentConfig.timeout;
+            autoConnectCheckbox.checked = currentConfig.autoConnect;
+            forceNewCheckbox.checked = currentConfig.forceNew;
+            
+            // Show debug panel by default
+            document.getElementById('debugPanel').style.display = 'block';
+        }
+        
+        // Get configuration from UI
+        function getConfigFromUI() {
+            const transports = [];
+            if (transportPollingCheckbox.checked) transports.push('polling');
+            if (transportWebsocketCheckbox.checked) transports.push('websocket');
+            
+            return {
+                url: connectionUrlInput.value.trim(),
+                path: socketPathInput.value.trim(),
+                transports: transports.length > 0 ? transports : ['polling'],
+                reconnectionAttempts: parseInt(reconnectAttemptsInput.value, 10),
+                timeout: parseInt(connectionTimeoutInput.value, 10),
+                autoConnect: autoConnectCheckbox.checked,
+                forceNew: forceNewCheckbox.checked
+            };
+        }
+        
+        // Log an event to the UI
+        function logEvent(event, data) {
+            const time = new Date().toLocaleTimeString();
+            const dataStr = data ? JSON.stringify(data) : '';
+            const logEntry = document.createElement('div');
+            logEntry.innerHTML = `<strong>${time}:</strong> ${event} ${dataStr}`;
+            eventsEl.appendChild(logEntry);
+            
+            // Scroll to bottom
+            eventsEl.scrollTop = eventsEl.scrollHeight;
+        }
+        
+        // Log network request
+        function logRequest(method, url, status, responseText) {
+            const time = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.innerHTML = `<strong>${time}:</strong> ${method} ${url} - Status: ${status} - Response: ${responseText}`;
+            requestsEl.appendChild(logEntry);
+            
+            // Scroll to bottom
+            requestsEl.scrollTop = requestsEl.scrollHeight;
+        }
+        
+        // Monitor XHR requests for Socket.IO
+        function monitorXHR() {
+            const originalXHROpen = XMLHttpRequest.prototype.open;
+            const originalXHRSend = XMLHttpRequest.prototype.send;
+            
+            XMLHttpRequest.prototype.open = function(method, url) {
+                this._method = method;
+                this._url = url;
+                return originalXHROpen.apply(this, arguments);
+            };
+            
+            XMLHttpRequest.prototype.send = function() {
+                if (this._url.includes('socket.io')) {
+                    this.addEventListener('load', function() {
+                        logRequest(this._method, this._url, this.status, this.responseText.substring(0, 100) + (this.responseText.length > 100 ? '...' : ''));
+                    });
+                    
+                    this.addEventListener('error', function() {
+                        logRequest(this._method, this._url, 'Error', 'Request failed');
+                    });
+                }
+                return originalXHRSend.apply(this, arguments);
+            };
+        }
+        
+        // Update connection status
+        function updateStatus(connected) {
+            if (connected) {
+                statusEl.className = 'connected';
+                statusEl.textContent = 'Connected';
+            } else {
+                statusEl.className = 'disconnected';
+                statusEl.textContent = 'Disconnected';
+            }
+        }
+        
+        // Create Socket.IO connection with current config
+        function createSocketIOConnection() {
+            // Disconnect existing socket if any
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+            }
+            
+            // Create connection options
+            const options = {
+                path: currentConfig.path,
+                transports: currentConfig.transports,
+                reconnectionAttempts: currentConfig.reconnectionAttempts,
+                timeout: currentConfig.timeout,
+                autoConnect: currentConfig.autoConnect,
+                forceNew: currentConfig.forceNew
+            };
+            
+            logEvent('Creating socket with config', {
+                url: currentConfig.url,
+                ...options
+            });
+            
+            // Create new socket
+            socket = io(currentConfig.url, options);
+            
+            // Socket event listeners
+            socket.on('connect', () => {
+                logEvent('Connected to server', { id: socket.id });
+                updateStatus(true);
+            });
+            
+            socket.on('disconnect', (reason) => {
+                logEvent('Disconnected from server', { reason });
+                updateStatus(false);
+            });
+            
+            socket.on('connect_error', (error) => {
+                logEvent('Connection error', { message: error.message });
+                updateStatus(false);
+            });
+            
+            // Listen for test events
+            socket.on('test-event', (data) => {
+                logEvent('Received test event', data);
+            });
+            
+            socket.on('test-response', (data) => {
+                logEvent('Received test response', data);
+            });
+            
+            return socket;
+        }
+        
+        // Button event listeners
+        connectBtn.addEventListener('click', () => {
+            if (!socket || !socket.connected) {
+                if (!socket) {
+                    socket = createSocketIOConnection();
+                }
+                
+                if (currentConfig.autoConnect === false) {
+                    socket.connect();
+                }
+                
+                logEvent('Attempting to connect to server');
+            }
+        });
+        
+        disconnectBtn.addEventListener('click', () => {
+            if (socket && socket.connected) {
+                socket.disconnect();
+                logEvent('Manually disconnected from server');
+            }
+        });
+        
+        sendTestBtn.addEventListener('click', () => {
+            if (socket && socket.connected) {
+                const testData = {
+                    timestamp: new Date().toISOString(),
+                    message: 'Hello from browser!'
+                };
+                socket.emit('test-request', testData);
+                logEvent('Sent test request', testData);
+            } else {
+                logEvent('Cannot send test: Not connected');
+            }
+        });
+        
+        clearLogBtn.addEventListener('click', () => {
+            eventsEl.innerHTML = '';
+        });
+        
+        clearRequestsBtn.addEventListener('click', () => {
+            requestsEl.innerHTML = '';
+        });
+        
+        saveConfigBtn.addEventListener('click', () => {
+            currentConfig = getConfigFromUI();
+            logEvent('Configuration updated', currentConfig);
+            
+            // Create new socket with updated config
+            createSocketIOConnection();
+        });
+        
+        resetConfigBtn.addEventListener('click', () => {
+            currentConfig = {...defaultConfig};
+            initializeUI();
+            logEvent('Configuration reset to defaults', currentConfig);
+            
+            // Create new socket with default config
+            createSocketIOConnection();
+        });
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize UI
+            initializeUI();
+            
+            // Monitor XHR for Socket.IO
+            monitorXHR();
+            
+            // Initial log entry
+            logEvent('Page loaded, click Connect to establish connection');
+        });
+    </script>
 </body>
 </html>
