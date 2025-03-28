@@ -25,7 +25,8 @@ const io = socketIo(server, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
-    }
+    },
+    path: '/socket.io'
 });
 
 // Database connection pool

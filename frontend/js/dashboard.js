@@ -1,8 +1,5 @@
-// Dashboard module for handling the overall dashboard functionality
-import { io } from 'socket.io-client';
-
 // Get socket instance from main.js or create a new one if needed
-socket = io('/');
+import { socket } from './main.js';
 
 // Track trading status
 let tradingActive = false;
