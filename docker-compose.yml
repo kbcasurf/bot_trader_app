@@ -8,6 +8,7 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+      - ./.env:/app/.env
     depends_on:
       - backend
     networks:
@@ -22,6 +23,7 @@ services:
     volumes:
       - ./backend:/app
       - /app/node_modules
+      - ./.env:/app/.env
     environment:
       - DB_HOST=database
       - DB_USER=${DB_USER}
@@ -51,6 +53,7 @@ services:
     volumes:
       - db-data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./.env:/app/.env
     networks:
       - bot-network
 

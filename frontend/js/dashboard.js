@@ -8,7 +8,7 @@ try {
     socket = io();
 } catch (e) {
     // Create new socket if not available
-    socket = io('http://localhost:3000');
+    socket = io('http://backend:3000');
 }
 
 // Function to update transaction history
