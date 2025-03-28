@@ -1,46 +1,62 @@
 services:
+  # Frontend service
   frontend:
     build: ./frontend
+    container_name: frontend
     ports:
-      - "3000:3000"
+      - "8080:80"
     volumes:
       - ./frontend:/app
       - /app/node_modules
     depends_on:
       - backend
-    env_file:
-      - ./.env
     networks:
-      - bot-network
+      - crypto-bot-network
 
+  # Backend service
   backend:
     build: ./backend
+    container_name: backend
     ports:
-      - "5000:5000"
+      - "3000:3000"
     volumes:
       - ./backend:/app
       - /app/node_modules
+    environment:
+      - DB_HOST=database
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     depends_on:
       - database
-    env_file:
-      - ./.env
     networks:
-      - bot-network      
+      - crypto-bot-network
 
+  # Database service
   database:
     build: ./database
+    container_name: database
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
     ports:
       - "3306:3306"
     volumes:
-      - crypto_data:/var/lib/mysql
-    env_file:
-      - ./.env
+      - db-data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
-      - bot-network      
+      - bot-network
 
 volumes:
-  crypto_data:
+  db-data:
 
 networks:
   bot-network:
-    driver: bridge  
+    driver: bridge
