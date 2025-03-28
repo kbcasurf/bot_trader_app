@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-// Get API URL from environment variables or use default fallback
+// Use a simple relative path for API
 const API_URL = '/api';
 
 // Create axios instance with base configuration
@@ -15,11 +15,10 @@ const apiClient = axios.create({
 // Add request interceptor for logging
 apiClient.interceptors.request.use(
   config => {
-    console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
+    // Simplified logging without environment checks
     return config;
   },
   error => {
-    console.error('API Request Error:', error);
     return Promise.reject(error);
   }
 );
@@ -27,11 +26,6 @@ apiClient.interceptors.request.use(
 // Add response interceptor for handling errors
 apiClient.interceptors.response.use(
   response => {
-    // Log successful responses if needed
-    if (import.meta.env.DEV) {
-      console.log(`API Response (${response.status}):`, 
-        response.config.url.includes('status') ? 'Status data...' : response.data);
-    }
     return response;
   },
   error => {

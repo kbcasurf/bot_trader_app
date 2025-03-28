@@ -157,7 +157,7 @@ export default {
     // Connect to WebSocket for real-time updates
     connectToWebSocket() {
       try {
-        // Get WebSocket URL from environment or construct it based on API URL
+        // Use simple relative path without environment variables
         this.socket = io('/', {
           transports: ['websocket', 'polling'],
           path: '/socket.io'
@@ -180,8 +180,7 @@ export default {
         });
         
         // Handle connection/disconnection
-         this.socket.on('connect', () => {
-          console.log(`WebSocket connected for ${this.tradingPair.symbol}`);
+        this.socket.on('connect', () => {
           this.socketConnected = true;
           console.log('WebSocket connected for StatusPanel');
           this.stopStatusPolling(); // Stop polling if it was active
@@ -204,16 +203,16 @@ export default {
           this.startStatusPolling(); // Start polling on error
           this.lastUpdateTime = new Date().toLocaleTimeString() + ' (error)';
         });
-       } 
-        } catch (error) {
-    console.error('Error initializing WebSocket:', error);
-  }
-},
+      } catch (error) {
+        console.error('Error initializing WebSocket:', error);
+      }
+    },
     
     // Start polling if WebSocket fails
     startStatusPolling() {
-      // Check if polling is enabled (with fallback to true if not set)
-      const enableFallback = import.meta.env.VITE_ENABLE_FALLBACK_POLLING;
+      // Always enable fallback polling
+      const enableFallback = true;
+      
       if (!enableFallback) return;
       
       console.log('Starting status polling fallback');
@@ -221,8 +220,8 @@ export default {
       // Clear any existing interval
       this.clearStatusInterval();
       
-      // Set up status polling interval
-      const interval = parseInt(import.meta.env.VITE_STATUS_REFRESH_INTERVAL);
+      // Use a fixed 30 second interval
+      const interval = 30000;
       this.statusInterval = setInterval(() => {
         this.fetchStatus();
       }, interval);
@@ -242,7 +241,8 @@ export default {
     
     // Set up interval to refresh status
     setupStatusInterval() {
-      const interval = parseInt(import.meta.env.VITE_STATUS_REFRESH_INTERVAL);
+      // Use a fixed 30 second interval
+      const interval = 30000;
       this.statusInterval = setInterval(() => {
         if (!this.socketConnected) {
           this.fetchStatus();

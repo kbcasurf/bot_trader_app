@@ -241,12 +241,12 @@ export default {
     },
     
     connectToWebSocket() {
-  try {
-    // Initialize socket with relative path
-    this.socket = io('/', {
-      transports: ['websocket', 'polling'],
-      path: '/socket.io'
-    });
+      try {
+        // Initialize socket with relative path
+        this.socket = io('/', {
+          transports: ['websocket', 'polling'],
+          path: '/socket.io'
+        });
         
         // Handle connection events
         this.socket.on('connect', () => {
@@ -313,9 +313,9 @@ export default {
           this.socketConnected = false;
         });
       } catch (error) {
-    console.error('Error initializing WebSocket:', error);
-  }
-},
+        console.error('Error initializing WebSocket:', error);
+      }
+    },
     
     disconnectFromWebSocket() {
       if (this.socket) {

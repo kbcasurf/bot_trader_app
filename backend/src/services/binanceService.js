@@ -11,7 +11,6 @@ const API_SECRET = process.env.BINANCE_API_SECRET;
 const API_URL = process.env.BINANCE_API_URL;
 const WEBSOCKET_URL = process.env.BINANCE_WEBSOCKET_URL;
 const RECV_WINDOW = process.env.BINANCE_RECV_WINDOW;
-const TEST_MODE = process.env.NODE_ENV;
 
 // Cache for symbol information
 let symbolInfoCache = null;
@@ -67,12 +66,6 @@ const signRequest = (params = {}) => {
  * @returns {Promise} - The request promise
  */
 const makeRequest = async (method, endpoint, params = {}) => {
-  // Skip actual API calls in simulation mode if needed
-  if (TEST_MODE && endpoint !== '/api/v3/exchangeInfo' && endpoint !== '/api/v3/ticker/price') {
-    logger.debug(`[TEST MODE] Skipping real API call to ${endpoint}`);
-    return simulateResponse(endpoint, params);
-  }
-
   // Determine if this is a secure endpoint
   const isSecureEndpoint = 
     endpoint.includes('/api/v3/account') || 
@@ -145,31 +138,6 @@ const makeRequest = async (method, endpoint, params = {}) => {
     logger.error(`Error in Binance API request to ${endpoint}:`, error);
     throw error;
   }
-};
-
-/**
- * Simulates responses for testing without calling the actual API
- */
-const simulateResponse = (endpoint, params) => {
-  if (endpoint === '/api/v3/order' || endpoint === '/api/v3/order/test') {
-    // Simulate order response
-    return {
-      symbol: params.symbol,
-      orderId: Math.floor(Math.random() * 1000000),
-      clientOrderId: params.newClientOrderId || `sim_${Date.now()}`,
-      transactTime: Date.now(),
-      price: params.price || "0.00000000",
-      origQty: params.quantity,
-      executedQty: params.quantity,
-      status: "FILLED",
-      timeInForce: params.timeInForce || "GTC",
-      type: params.type,
-      side: params.side
-    };
-  }
-  
-  // Default simulated response
-  return { success: true, simulated: true };
 };
 
 /**
@@ -263,72 +231,27 @@ exports.getSymbolInfo = async (symbol) => {
   return exchangeInfo.symbols.find(s => s.symbol === symbol);
 };
 
-
-
-
-
-
-
 /**
- * Get current price for a symbol from Binance
+ * Get current price for a symbol from WebSocket ONLY
+ * No API fallback is allowed
  */
 exports.getCurrentPrice = async (symbol) => {
   try {
-    // In Phase 2, we'll use Binance API for real price data but with some error handling
+    // Import websocketService directly
+    const websocketService = require('./websocketService');
+    
     try {
-      // Try getting price from Binance API
-      const ticker = await makeRequest('GET', '/api/v3/ticker/price', { symbol });
-      return parseFloat(ticker.price);
-    } catch (apiError) {
-      logger.error(`Error fetching price from Binance API for ${symbol}:`, apiError);
-      
-      // Try to get the most recent price from our database as fallback
-      const conn = await db.getConnection();
-      const [latestPrice] = await conn.query(
-        `SELECT price FROM price_history 
-         WHERE trading_pair_id = (SELECT id FROM trading_pairs WHERE symbol = ?) 
-         ORDER BY timestamp DESC LIMIT 1`,
-        [symbol]
-      );
-      conn.release();
-      
-      if (latestPrice && latestPrice.length > 0) {
-        logger.info(`Using cached price for ${symbol}: ${latestPrice[0].price}`);
-        return parseFloat(latestPrice[0].price);
-      }
-      
-      // If no cached price, use simulated price as last resort
-      const mockPrices = {
-        'BTCUSDT': 67500.25,
-        'SOLUSDT': 145.75,
-        'XRPUSDT': 0.55,
-        'PENDLEUSDT': 2.35,
-        'DOGEUSDT': 0.12,
-        'NEARUSDT': 4.85
-      };
-      
-      // Add some random fluctuation for simulation
-      const basePrice = mockPrices[symbol] || 100;
-      const fluctuation = (Math.random() - 0.5) * 0.02; // +/- 1% change
-      const price = basePrice * (1 + fluctuation);
-      
-      logger.warn(`Using simulated price for ${symbol}: ${price.toFixed(2)}`);
-      return parseFloat(price.toFixed(getPrecision(basePrice)));
+      const price = websocketService.getLatestPrice(symbol);
+      return price;
+    } catch (error) {
+      logger.error(`Error fetching price from WebSocket for ${symbol}:`, error);
+      throw new Error(`No price available for ${symbol} from WebSocket: ${error.message}`);
     }
   } catch (error) {
-    logger.error(`Error fetching price for ${symbol}:`, error);
+    logger.error(`Error in getCurrentPrice for ${symbol}:`, error);
     throw error;
   }
 };
-
-// Helper function for price precision
-function getPrecision(price) {
-  if (price < 0.1) return 6;
-  if (price < 1) return 5;
-  if (price < 10) return 4;
-  if (price < 1000) return 2;
-  return 2;
-}
 
 /**
  * Format a number according to Binance's requirements using step size
@@ -435,205 +358,6 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
     // Get trading pair information
     const tradingPair = await exports.getTradingPairById(tradingPairId);
     
-    // Get current price from Binance
-    const currentPrice = await exports.getCurrentPrice(tradingPair.symbol);
-    
-    // Calculate quantity based on investment amount
-    const quantity = amount / currentPrice;
-    
-    // Format quantity according to Binance's requirements
-    const formattedQuantity = await exports.formatQuantity(tradingPair.symbol, quantity);
-    
-    // Start transaction
-    await conn.beginTransaction();
-    
-    // Insert transaction record
-    const transactionResult = await conn.query(
-      `INSERT INTO transactions 
-       (trading_pair_id, transaction_type, quantity, price, total_amount, status, binance_order_id) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [tradingPairId, 'BUY', formattedQuantity, currentPrice, amount, 'PENDING', null]
-    );
-    
-    const transactionId = transactionResult.insertId;
-    
-    // Try to execute order on Binance
-    let binanceOrderId = null;
-    let orderStatus = 'COMPLETED'; // Default for test mode
-    
-    try {
-      if (!options.skipBinanceOrder && !TEST_MODE) {
-        // Format parameters for the order
-        const orderParams = {
-          symbol: tradingPair.symbol,
-          side: 'BUY',
-          type: 'MARKET',
-          quantity: formattedQuantity
-        };
-        
-        // Execute market order
-        const order = await makeRequest('POST', '/api/v3/order', orderParams);
-        
-        binanceOrderId = order.orderId;
-        orderStatus = 'COMPLETED';
-        
-        logger.info(`Binance BUY order executed: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
-      } else {
-        logger.info(`Simulated BUY order: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}`);
-      }
-    } catch (orderError) {
-      logger.error(`Error executing Binance BUY order:`, orderError);
-      
-      // Even if Binance order fails, we proceed with local transaction for simulation purposes
-      orderStatus = 'FAILED';
-      
-      // Send error notification
-      await telegramService.sendErrorNotification(
-        orderError, 
-        `Failed to execute BUY order for ${tradingPair.display_name}`
-      );
-    }
-    
-    // Update transaction status
-    await conn.query(
-      `UPDATE transactions SET status = ?, binance_order_id = ? WHERE id = ?`,
-      [orderStatus, binanceOrderId, transactionId]
-    );
-    
-    // If order failed on Binance but we're in test mode, still update holdings for simulation
-    if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings || TEST_MODE) {
-      // Update or insert holdings
-      const existingHoldings = await conn.query(
-        'SELECT * FROM holdings WHERE trading_pair_id = ?',
-        [tradingPairId]
-      );
-      
-      if (existingHoldings.length > 0) {
-        // Update existing holdings
-        const currentHoldings = existingHoldings[0];
-        const currentQuantity = parseFloat(currentHoldings.quantity);
-        const newQuantity = currentQuantity + formattedQuantity;
-        
-        // Calculate new average buy price
-        const currentValue = currentQuantity * parseFloat(currentHoldings.average_buy_price || 0);
-        const newValue = formattedQuantity * currentPrice;
-        const newAverageBuyPrice = (currentValue + newValue) / newQuantity;
-        
-        await conn.query(
-          `UPDATE holdings 
-           SET quantity = ?, average_buy_price = ?, last_buy_price = ? 
-           WHERE trading_pair_id = ?`,
-          [newQuantity, newAverageBuyPrice, currentPrice, tradingPairId]
-        );
-      } else {
-        // Insert new holdings
-        await conn.query(
-          `INSERT INTO holdings 
-           (trading_pair_id, quantity, average_buy_price, last_buy_price) 
-           VALUES (?, ?, ?, ?)`,
-          [tradingPairId, formattedQuantity, currentPrice, currentPrice]
-        );
-      }
-    }
-    
-    // Commit transaction
-    await conn.commit();
-    
-    // Send Telegram notification
-    try {
-      await telegramService.sendTradeNotification({
-        tradingPair,
-        type: 'BUY',
-        quantity: formattedQuantity,
-        price: currentPrice,
-        totalAmount: amount,
-        reason: options.reason || 'MANUAL'
-      });
-    } catch (notificationError) {
-      logger.error('Failed to send trade notification:', notificationError);
-    }
-    
-    // Return transaction details
-    return {
-      id: transactionId,
-      tradingPairId: parseInt(tradingPairId),
-      type: 'BUY',
-      quantity: parseFloat(formattedQuantity.toFixed(8)),
-      price: currentPrice,
-      totalAmount: parseFloat(amount),
-      status: orderStatus,
-      binanceOrderId,
-      timestamp: new Date()
-    };
-  } catch (error) {
-    if (conn) await conn.rollback();
-    logger.error('Error executing buy order:', error);
-    throw error;
-  } finally {
-    if (conn) conn.release();
-  }
-};
-
-/**
- * Get current price for a symbol from WebSocket ONLY
- * No API fallback is allowed
- */
-exports.getCurrentPrice = async (symbol) => {
-  try {
-    // Import websocketService directly
-    const websocketService = require('./websocketService');
-    
-    try {
-      const price = websocketService.getLatestPrice(symbol);
-      return price;
-    } catch (error) {
-      logger.error(`Error fetching price from WebSocket for ${symbol}:`, error);
-      throw new Error(`No price available for ${symbol} from WebSocket: ${error.message}`);
-    }
-  } catch (error) {
-    logger.error(`Error in getCurrentPrice for ${symbol}:`, error);
-    throw error;
-  }
-};
-
-/**
- * Format a number according to Binance's requirements using step size
- */
-exports.formatQuantity = async (symbol, quantity) => {
-  try {
-    const symbolInfo = await exports.getSymbolInfo(symbol);
-    
-    // Get the lot size filter
-    const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
-    
-    if (!lotSizeFilter) {
-      return quantity; // No filter found, return as is
-    }
-    
-    const stepSize = parseFloat(lotSizeFilter.stepSize);
-    
-    // Calculate the precision from the step size
-    const precision = Math.log10(1 / stepSize);
-    
-    // Format the quantity based on the precision
-    return parseFloat(quantity.toFixed(Math.floor(precision)));
-  } catch (error) {
-    logger.error(`Error formatting quantity for ${symbol}:`, error);
-    throw error;
-  }
-};
-
-/**
- * Execute a buy order
- */
-exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
-  let conn;
-  try {
-    conn = await db.getConnection();
-    
-    // Get trading pair information
-    const tradingPair = await exports.getTradingPairById(tradingPairId);
-    
     // Get current price from WebSocket
     let currentPrice;
     try {
@@ -664,10 +388,10 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
     
     // Try to execute order on Binance
     let binanceOrderId = null;
-    let orderStatus = 'COMPLETED'; // Default for test mode
+    let orderStatus = 'COMPLETED';
     
     try {
-      if (!options.skipBinanceOrder && !TEST_MODE) {
+      if (!options.skipBinanceOrder) {
         // Format parameters for the order
         const orderParams = {
           symbol: tradingPair.symbol,
@@ -684,12 +408,11 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
         
         logger.info(`Binance BUY order executed: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
       } else {
-        logger.info(`Simulated BUY order: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}`);
+        logger.info(`BUY order skipped: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}`);
       }
     } catch (orderError) {
       logger.error(`Error executing Binance BUY order:`, orderError);
       
-      // Even if Binance order fails, we proceed with local transaction for simulation purposes
       orderStatus = 'FAILED';
       
       // Send error notification
@@ -705,8 +428,8 @@ exports.executeBuyOrder = async (tradingPairId, amount, options = {}) => {
       [orderStatus, binanceOrderId, transactionId]
     );
     
-    // If order failed on Binance but we're in test mode, still update holdings for simulation
-    if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings || TEST_MODE) {
+    // If order completed or we need to force update holdings
+    if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings) {
       // Update or insert holdings
       const existingHoldings = await conn.query(
         'SELECT * FROM holdings WHERE trading_pair_id = ?',
@@ -796,15 +519,132 @@ exports.executeSellAllOrder = async (tradingPairId, options = {}) => {
     if (holdings.quantity <= 0) {
       throw new Error('No holdings to sell');
     }
+
+    // Get current price from WebSocket
+    let currentPrice;
+    try {
+      const websocketService = require('./websocketService');
+      currentPrice = websocketService.getLatestPrice(tradingPair.symbol);
+    } catch (priceError) {
+      throw new Error(`Cannot execute sell order: No price available from WebSocket for ${tradingPair.symbol}`);
+    }
     
-    // Execute sell order with all holdings
-    return await exports.executeSellOrder(tradingPairId, holdings.quantity, {
-      ...options,
-      reason: options.reason || 'MANUAL_SELL_ALL'
-    });
+    // Start transaction
+    await conn.beginTransaction();
+    
+    // Calculate total value
+    const totalAmount = holdings.quantity * currentPrice;
+    
+    // Insert transaction record
+    const transactionResult = await conn.query(
+      `INSERT INTO transactions 
+       (trading_pair_id, transaction_type, quantity, price, total_amount, status, binance_order_id) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [tradingPairId, 'SELL', holdings.quantity, currentPrice, totalAmount, 'PENDING', null]
+    );
+    
+    const transactionId = transactionResult.insertId;
+    
+    // Try to execute order on Binance
+    let binanceOrderId = null;
+    let orderStatus = 'COMPLETED';
+    
+    try {
+      if (!options.skipBinanceOrder) {
+        // Format quantity according to Binance's requirements
+        const formattedQuantity = await exports.formatQuantity(tradingPair.symbol, holdings.quantity);
+        
+        // Format parameters for the order
+        const orderParams = {
+          symbol: tradingPair.symbol,
+          side: 'SELL',
+          type: 'MARKET',
+          quantity: formattedQuantity
+        };
+        
+        // Execute market order
+        const order = await makeRequest('POST', '/api/v3/order', orderParams);
+        
+        binanceOrderId = order.orderId;
+        orderStatus = 'COMPLETED';
+        
+        logger.info(`Binance SELL order executed: ${tradingPair.symbol}, ${formattedQuantity}, $${currentPrice}, OrderID: ${binanceOrderId}`);
+      } else {
+        logger.info(`SELL order skipped: ${tradingPair.symbol}, ${holdings.quantity}, $${currentPrice}`);
+      }
+    } catch (orderError) {
+      logger.error(`Error executing Binance SELL order:`, orderError);
+      
+      orderStatus = 'FAILED';
+      
+      // Send error notification
+      await telegramService.sendErrorNotification(
+        orderError, 
+        `Failed to execute SELL order for ${tradingPair.display_name}`
+      );
+    }
+    
+    // Update transaction status
+    await conn.query(
+      `UPDATE transactions SET status = ?, binance_order_id = ? WHERE id = ?`,
+      [orderStatus, binanceOrderId, transactionId]
+    );
+    
+    // If order completed or we need to force update holdings
+    if (orderStatus === 'COMPLETED' || options.forceUpdateHoldings) {
+      // Reset holdings
+      await conn.query(
+        `UPDATE holdings 
+         SET quantity = 0, average_buy_price = 0, last_buy_price = 0 
+         WHERE trading_pair_id = ?`,
+        [tradingPairId]
+      );
+    }
+    
+    // Commit transaction
+    await conn.commit();
+    
+    // Calculate profit/loss percentage
+    const profitLossPercentage = holdings.averageBuyPrice > 0 
+      ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100 
+      : 0;
+    
+    // Send Telegram notification
+    try {
+      await telegramService.sendTradeNotification({
+        tradingPair,
+        type: 'SELL',
+        quantity: holdings.quantity,
+        price: currentPrice,
+        totalAmount,
+        profit: {
+          amount: totalAmount - (holdings.quantity * holdings.averageBuyPrice),
+          percentage: profitLossPercentage
+        },
+        reason: options.reason || 'MANUAL_SELL_ALL'
+      });
+    } catch (notificationError) {
+      logger.error('Failed to send trade notification:', notificationError);
+    }
+    
+    // Return transaction details
+    return {
+      id: transactionId,
+      tradingPairId: parseInt(tradingPairId),
+      type: 'SELL',
+      quantity: parseFloat(holdings.quantity.toFixed(8)),
+      price: currentPrice,
+      totalAmount: parseFloat(totalAmount.toFixed(8)),
+      status: orderStatus,
+      binanceOrderId,
+      timestamp: new Date()
+    };
   } catch (error) {
+    if (conn) await conn.rollback();
     logger.error('Error executing sell all order:', error);
     throw error;
+  } finally {
+    if (conn) conn.release();
   }
 };
 
@@ -813,15 +653,6 @@ exports.executeSellAllOrder = async (tradingPairId, options = {}) => {
  */
 exports.getAccountBalance = async () => {
   try {
-    if (TEST_MODE) {
-      logger.info('Using simulated account balance in test mode');
-      return {
-        USDT: { available: '10000.00', onOrder: '0.00' },
-        BTC: { available: '0.5', onOrder: '0.00' },
-        SOL: { available: '10.0', onOrder: '0.00' }
-      };
-    }
-    
     const account = await makeRequest('GET', '/api/v3/account');
     
     // Format balances into a more usable structure
