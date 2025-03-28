@@ -37,10 +37,9 @@ const io = socketIo(server, {
         methods: ['GET', 'POST', 'OPTIONS'],
         credentials: false
     },
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
     pingTimeout: 60000,
-    pingInterval: 25000,
-    connectTimeout: 30000
+    pingInterval: 25000
 });
 
 // Debug middleware for Socket.IO connections

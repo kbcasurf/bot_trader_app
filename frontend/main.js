@@ -2,11 +2,10 @@ import { io } from 'socket.io-client';
 
 // Try to connect through the proxy with auto-discovery
 export const socket = io({
-    reconnection: true,
-    reconnectionAttempts: 15,
-    reconnectionDelay: 2000,
+    path: '/socket.io/',
+    transports: ['polling', 'websocket'],
+    reconnectionAttempts: 5,
     timeout: 20000,
-    autoConnect: true,
     forceNew: true
 });
 
