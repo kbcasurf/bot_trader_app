@@ -44,6 +44,9 @@ let systemStatus = {
     telegram: false
 };
 
+// WebSocket connection status
+let websocketConnected = false;
+
 // Test database connection
 async function testDatabaseConnection() {
     let conn;
@@ -103,6 +106,7 @@ io.on('connection', (socket) => {
     socket.emit('database-status', systemStatus.database);
     socket.emit('binance-status', systemStatus.binance);
     socket.emit('telegram-status', systemStatus.telegram);
+    socket.emit('trading-status', { active: websocketConnected });
     
     // Handle client disconnection
     socket.on('disconnect', () => {
@@ -139,27 +143,40 @@ io.on('connection', (socket) => {
             socket.emit('binance-test-result', { success: true });
         } catch (err) {
             console.error('Binance stream test error:', err);
-            socket.emit('binance-test-result', { success: false, error: err.message });
-            
-            // Fallback to polling if WebSocket fails
-            try {
-                binanceAPI.pollTickerPrice('BTCUSDT', 5000, (data) => {
-                    io.emit('price-update', {
-                        symbol: data.s,
-                        price: data.a
-                    });
-                });
-                socket.emit('binance-test-result', { success: true, message: 'Using polling fallback' });
-            } catch (pollErr) {
-                console.error('Binance polling fallback error:', pollErr);
-                socket.emit('binance-test-result', { success: false, error: pollErr.message });
-            }
+            socket.emit('binance-test-result', { 
+                success: false, 
+                error: err.message,
+                message: 'WebSocket connection failed. Trading is paused until connection is restored.'
+            });
+            websocketConnected = false;
+            io.emit('trading-status', { active: websocketConnected });
+        }
+    });
+    
+    // Listen for WebSocket status updates
+    socket.on('websocket-status', (status) => {
+        websocketConnected = status.connected;
+        io.emit('trading-status', { active: websocketConnected });
+        
+        if (!websocketConnected) {
+            console.log('WebSocket disconnected. Trading is paused until connection is restored.');
+        } else {
+            console.log('WebSocket connected. Trading has resumed.');
         }
     });
     
     // Handle first purchase
     socket.on('first-purchase', async (data) => {
         try {
+            // Check if WebSocket is connected
+            if (!websocketConnected) {
+                socket.emit('first-purchase-result', { 
+                    success: false, 
+                    error: 'Trading is paused due to WebSocket connection issues. Please try again later.'
+                });
+                return;
+            }
+            
             console.log(`First purchase request: ${JSON.stringify(data)}`);
             
             // Get current price
@@ -226,6 +243,15 @@ io.on('connection', (socket) => {
     // Handle sell all
     socket.on('sell-all', async (data) => {
         try {
+            // Check if WebSocket is connected
+            if (!websocketConnected) {
+                socket.emit('sell-all-result', { 
+                    success: false, 
+                    error: 'Trading is paused due to WebSocket connection issues. Please try again later.'
+                });
+                return;
+            }
+            
             console.log(`Sell all request: ${JSON.stringify(data)}`);
             
             // Get current holdings
@@ -372,15 +398,26 @@ function startTradingStrategy(symbol) {
         }
     };
     
-    // Try to subscribe to ticker updates using Socket.io
+    // Subscribe to ticker updates using Socket.io
     try {
-        binanceAPI.subscribeToTickerStream([symbol], priceUpdateHandler);
+        const socket = binanceAPI.subscribeToTickerStream([symbol], priceUpdateHandler);
+        
+        // Set up WebSocket status handling
+        socket.on('websocket-status', (status) => {
+            websocketConnected = status.connected;
+            io.emit('trading-status', { active: websocketConnected });
+            
+            if (!websocketConnected) {
+                console.log(`WebSocket disconnected for ${symbol}. Trading is paused until connection is restored.`);
+            } else {
+                console.log(`WebSocket connected for ${symbol}. Trading has resumed.`);
+            }
+        });
+        
     } catch (err) {
         console.error(`Error subscribing to ticker stream for ${symbol}:`, err);
-        
-        // Fallback to polling if WebSocket fails
-        console.log(`Falling back to polling for ${symbol}`);
-        binanceAPI.pollTickerPrice(symbol, 5000, priceUpdateHandler);
+        websocketConnected = false;
+        io.emit('trading-status', { active: websocketConnected });
     }
 }
 

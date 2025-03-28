@@ -174,6 +174,10 @@ function subscribeToTickerStream(symbols, callback) {
         
         socket.on('connect', () => {
             console.log(`Socket.io client connected to Binance WebSocket for ${symbols.join(', ')}`);
+            // Emit a 'websocket-status' event when connected
+            if (typeof callback === 'object' && callback.emit) {
+                callback.emit('websocket-status', { connected: true, symbols });
+            }
         });
         
         socket.on('message', (data) => {
@@ -196,10 +200,17 @@ function subscribeToTickerStream(symbols, callback) {
         
         socket.on('error', (error) => {
             console.error('Socket.io client error:', error);
+            if (typeof callback === 'object' && callback.emit) {
+                callback.emit('websocket-status', { connected: false, error: error.message, symbols });
+            }
         });
         
         socket.on('disconnect', () => {
             console.log(`Socket.io client disconnected from Binance WebSocket for ${symbols.join(', ')}`);
+            
+            if (typeof callback === 'object' && callback.emit) {
+                callback.emit('websocket-status', { connected: false, symbols });
+            }
             
             // Attempt to reconnect after a delay
             setTimeout(() => {
@@ -230,34 +241,6 @@ function unsubscribeFromTickerStream(symbols, socket) {
     }
 }
 
-// Alternative implementation using HTTP polling for price updates
-// This is a fallback in case WebSocket connections are problematic
-async function pollTickerPrice(symbol, interval, callback) {
-    try {
-        const priceData = await getTickerPrice(symbol);
-        callback({
-            s: symbol,
-            a: priceData.price,
-            b: priceData.price,
-            A: '0',
-            B: '0',
-            u: Date.now()
-        });
-        
-        // Schedule next poll
-        setTimeout(() => {
-            pollTickerPrice(symbol, interval, callback);
-        }, interval);
-    } catch (error) {
-        console.error(`Error polling price for ${symbol}:`, error);
-        
-        // Retry after a longer interval
-        setTimeout(() => {
-            pollTickerPrice(symbol, interval, callback);
-        }, interval * 2);
-    }
-}
-
 module.exports = {
     testConnection,
     getAccountInfo,
@@ -266,6 +249,5 @@ module.exports = {
     createMarketSellOrder,
     setupBinanceSocketServer,
     subscribeToTickerStream,
-    unsubscribeFromTickerStream,
-    pollTickerPrice
+    unsubscribeFromTickerStream
 };

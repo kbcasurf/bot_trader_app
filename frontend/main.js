@@ -1,7 +1,7 @@
 import { io } from 'socket.io-client';
 
 // Initialize socket connection to backend
-const socket = io('http://localhost:3000');
+const socket = io('http://backend:3000');
 
 // Connection status elements
 const backendStatusDot = document.getElementById('backend-status-dot');
@@ -12,6 +12,10 @@ const binanceStatusDot = document.getElementById('binance-status-dot');
 const binanceStatusText = document.getElementById('binance-status-text');
 const telegramStatusDot = document.getElementById('telegram-status-dot');
 const telegramStatusText = document.getElementById('telegram-status-text');
+
+// Trading status elements
+const tradingStatusDot = document.getElementById('trading-status-dot');
+const tradingStatusText = document.getElementById('trading-status-text');
 
 // Test buttons
 const testTelegramBtn = document.getElementById('test-telegram');
@@ -35,6 +39,9 @@ socket.on('disconnect', () => {
     updateStatusIndicator(dbStatusDot, dbStatusText, 'Database', false);
     updateStatusIndicator(binanceStatusDot, binanceStatusText, 'Binance', false);
     updateStatusIndicator(telegramStatusDot, telegramStatusText, 'Telegram', false);
+    
+    // Update trading status
+    updateTradingStatus(false);
 });
 
 // Backend service status events
@@ -50,6 +57,11 @@ socket.on('telegram-status', (isConnected) => {
     updateStatusIndicator(telegramStatusDot, telegramStatusText, 'Telegram', isConnected);
 });
 
+// Trading status update
+socket.on('trading-status', (status) => {
+    updateTradingStatus(status.active);
+});
+
 // Price update from Binance
 socket.on('price-update', (data) => {
     console.log('Price update:', data);
@@ -58,6 +70,19 @@ socket.on('price-update', (data) => {
     const priceElement = document.getElementById(`${data.symbol.toLowerCase()}-price`);
     if (priceElement) {
         priceElement.textContent = `Price: $${parseFloat(data.price).toFixed(2)}`;
+    }
+});
+
+// Transaction and operation results
+socket.on('first-purchase-result', (result) => {
+    if (!result.success) {
+        alert(`Purchase failed: ${result.error}`);
+    }
+});
+
+socket.on('sell-all-result', (result) => {
+    if (!result.success) {
+        alert(`Sell failed: ${result.error}`);
     }
 });
 
@@ -81,6 +106,43 @@ function updateStatusIndicator(dotElement, textElement, serviceName, isConnected
         dotElement.classList.add('disconnected');
         textElement.textContent = `${serviceName}: Disconnected`;
     }
+}
+
+// Helper function to update trading status and enable/disable buttons
+function updateTradingStatus(isActive) {
+    if (isActive) {
+        tradingStatusDot.classList.add('connected');
+        tradingStatusDot.classList.remove('disconnected');
+        tradingStatusText.textContent = 'Trading: Active';
+        
+        // Enable trading buttons
+        enableTradingButtons();
+    } else {
+        tradingStatusDot.classList.remove('connected');
+        tradingStatusDot.classList.add('disconnected');
+        tradingStatusText.textContent = 'Trading: Paused (WebSocket disconnected)';
+        
+        // Disable trading buttons
+        disableTradingButtons();
+    }
+}
+
+// Helper function to disable trading buttons
+function disableTradingButtons() {
+    const tradingButtons = document.querySelectorAll('.first-purchase, .sell-all');
+    tradingButtons.forEach(button => {
+        button.disabled = true;
+        button.classList.add('disabled');
+    });
+}
+
+// Helper function to enable trading buttons
+function enableTradingButtons() {
+    const tradingButtons = document.querySelectorAll('.first-purchase, .sell-all');
+    tradingButtons.forEach(button => {
+        button.disabled = false;
+        button.classList.remove('disabled');
+    });
 }
 
 // Investment preset buttons functionality
