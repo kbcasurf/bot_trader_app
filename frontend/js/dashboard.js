@@ -2,14 +2,7 @@
 import { io } from 'socket.io-client';
 
 // Get socket instance from main.js or create a new one if needed
-let socket;
-try {
-    // Try to get existing socket
-    socket = io();
-} catch (e) {
-    // Create new socket if not available
-    socket = io('http://backend:3000');
-}
+socket = io('/');
 
 // Track trading status
 let tradingActive = false;

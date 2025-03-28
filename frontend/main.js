@@ -1,7 +1,12 @@
 import { io } from 'socket.io-client';
 
 // Initialize socket connection to backend
-const socket = io('http://backend:3000');
+// Use a relative path to ensure it works with the proxy
+const socket = io('/', {
+    reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 1000
+});
 
 // Connection status elements
 const backendStatusDot = document.getElementById('backend-status-dot');
@@ -27,6 +32,16 @@ socket.on('connect', () => {
     backendStatusDot.classList.add('connected');
     backendStatusDot.classList.remove('disconnected');
     backendStatusText.textContent = 'Backend: Connected';
+    
+    // Request system status after connection
+    socket.emit('get-system-status');
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Connection error:', error);
+    backendStatusDot.classList.remove('connected');
+    backendStatusDot.classList.add('disconnected');
+    backendStatusText.textContent = 'Backend: Connection Error';
 });
 
 socket.on('disconnect', () => {
@@ -77,12 +92,16 @@ socket.on('price-update', (data) => {
 socket.on('first-purchase-result', (result) => {
     if (!result.success) {
         alert(`Purchase failed: ${result.error}`);
+    } else {
+        console.log('Purchase successful');
     }
 });
 
 socket.on('sell-all-result', (result) => {
     if (!result.success) {
         alert(`Sell failed: ${result.error}`);
+    } else {
+        console.log('Sell successful');
     }
 });
 
@@ -172,6 +191,8 @@ firstPurchaseButtons.forEach(button => {
         const symbol = card.id.replace('-card', '').toUpperCase() + 'USDT';
         const investment = card.querySelector('input[type="hidden"]').value;
         
+        console.log(`Initiating first purchase for ${symbol} with investment ${investment}`);
+        
         // Emit first purchase event to backend
         socket.emit('first-purchase', {
             symbol: symbol,
@@ -186,6 +207,8 @@ sellAllButtons.forEach(button => {
     button.addEventListener('click', function() {
         const card = this.closest('.crypto-card');
         const symbol = card.id.replace('-card', '').toUpperCase() + 'USDT';
+        
+        console.log(`Initiating sell all for ${symbol}`);
         
         // Emit sell all event to backend
         socket.emit('sell-all', {
