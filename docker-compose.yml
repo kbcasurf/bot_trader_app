@@ -9,6 +9,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
       - ./.env:/app/.env
+    environment:
+      - VITE_BACKEND_URL=http://backend:3000
     depends_on:
       - backend
     networks:
@@ -33,7 +35,7 @@ services:
       - BINANCE_API_SECRET=${BINANCE_API_SECRET}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-      - VITE_BACKEND_URL=http://backend:3000
+      - CORS_ORIGIN=http://frontend:80
  
     depends_on:
       - database

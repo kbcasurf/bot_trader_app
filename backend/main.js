@@ -23,10 +23,11 @@ app.use(express.json());
 // Initialize Socket.io with CORS settings
 const io = socketIo(server, {
     cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
+        origin: ["http://frontend", "http://localhost:8080", "*"],
+        methods: ["GET", "POST"],
+        credentials: false
     },
-    path: '/socket.io'
+    transports: ['websocket', 'polling']
 });
 
 // Database connection pool

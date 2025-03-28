@@ -1,12 +1,13 @@
 import { io } from 'socket.io-client';
 
 // Initialize socket connection to backend
-// Use a relative path to ensure it works with the proxy
-export const socket = io('/', {
+// Connect directly to the backend service
+export const socket = io('http://backend:3000', {
     reconnection: true,
     reconnectionAttempts: 10,
     reconnectionDelay: 1000,
-    path: '/socket.io'
+    transports: ['websocket', 'polling'],
+    withCredentials: false
 });
 
 // Connection status elements
