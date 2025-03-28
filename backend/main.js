@@ -26,6 +26,11 @@ app.get('/health', (req, res) => {
     res.status(200).send('OK');
 });
 
+// Add a simple endpoint
+app.get('/', (req, res) => {
+    res.send('Backend is running!');
+});
+
 // Add middleware to parse JSON payloads
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -458,8 +463,8 @@ function startTradingStrategy(symbol) {
 }
 
 // Start the server
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+const PORT = process.env.PORT;
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     
     // Test connections on startup
