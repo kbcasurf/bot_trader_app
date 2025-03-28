@@ -12,10 +12,9 @@ const apiClient = axios.create({
   timeout: 10000,
 });
 
-// Add request interceptor for logging
+// Add request interceptor
 apiClient.interceptors.request.use(
   config => {
-    // Simplified logging without environment checks
     return config;
   },
   error => {
@@ -29,16 +28,6 @@ apiClient.interceptors.response.use(
     return response;
   },
   error => {
-    if (error.response) {
-      // Server responded with an error status
-      console.error(`API Error ${error.response.status}:`, error.response.data);
-    } else if (error.request) {
-      // Request was made but no response
-      console.error('API No Response Error:', error.request);
-    } else {
-      // Something else happened
-      console.error('API Error:', error.message);
-    }
     return Promise.reject(error);
   }
 );
@@ -61,7 +50,6 @@ const retryRequest = async (apiCall, maxRetries = 3, delay = 1000) => {
       if (retries >= maxRetries) {
         throw error;
       }
-      console.log(`Retrying request (${retries}/${maxRetries}) after ${delay}ms...`);
       await new Promise(resolve => setTimeout(resolve, delay));
       // Increase delay for next retry (exponential backoff)
       delay *= 2;

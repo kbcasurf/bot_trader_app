@@ -28,7 +28,7 @@ function checkRequiredEnvVars() {
   }
 }
 
-// Get port from environment or default to 5000
+// Get port from environment
 const port = process.env.PORT;
 
 // Create HTTP server
@@ -165,12 +165,6 @@ async function startServer() {
       
       // Check environment variables
       checkRequiredEnvVars();
-      
-      // Set up simulated price feed for Phase 2
-      if (process.env.NODE_ENV !== 'production') {
-        setupSimulation(io);
-        logger.info('Running in simulation mode with generated price data');
-      }
     });
   } catch (error) {
     logger.error('Failed to start server:', error);
@@ -373,78 +367,6 @@ async function initializeTelegramService() {
   }
 }
 
-// Setup trading simulation for development and testing
-function setupSimulation(io) {
-  // Base prices for each symbol (these will fluctuate)
-  const basePrices = {
-    'BTCUSDT': 66000,
-    'SOLUSDT': 145, 
-    'XRPUSDT': 0.55,
-    'PENDLEUSDT': 2.35,
-    'DOGEUSDT': 0.12,
-    'NEARUSDT': 4.85
-  };
-  
-  // Keep track of current prices
-  const currentPrices = { ...basePrices };
-  
-  // Simulate price changes every 10 seconds
-  const simulationInterval = setInterval(() => {
-    // Generate price updates with realistic volatility for each symbol
-    const updates = Object.keys(basePrices).map(symbol => {
-      // Calculate volatility based on the price (higher priced assets have higher absolute changes)
-      const volatilityFactor = Math.max(0.005, Math.min(0.02, 0.01 * Math.sqrt(basePrices[symbol] / 10)));
-      
-      // Random factor between -1 and 1, with slight bias toward price reverting to base
-      const randomFactor = (Math.random() * 2 - 1) * 0.7 + 
-                          ((basePrices[symbol] - currentPrices[symbol]) / basePrices[symbol]) * 0.3;
-      
-      // Calculate new price with random change
-      const priceChange = currentPrices[symbol] * volatilityFactor * randomFactor;
-      const newPrice = Math.max(currentPrices[symbol] + priceChange, basePrices[symbol] * 0.5);
-      
-      // Update current price
-      currentPrices[symbol] = newPrice;
-      
-      return {
-        symbol,
-        price: newPrice,
-        timestamp: new Date().toISOString()
-      };
-    });
-    
-    // Emit price updates to connected clients
-    io.emit('priceUpdates', updates);
-    
-    // Process each price update with the trading algorithm
-    updates.forEach(async update => {
-      try {
-        // Find the trading pair ID for this symbol
-        const conn = await db.getConnection();
-        const [pairResult] = await conn.query('SELECT id FROM trading_pairs WHERE symbol = ?', [update.symbol]);
-        conn.release();
-        
-        if (pairResult && pairResult.length > 0) {
-          const tradingPairId = pairResult[0].id;
-          
-          // Process the price update with the trading algorithm
-          await tradingService.processPriceUpdate(tradingPairId, update.price);
-          
-          // Also broadcast individual price update for WebSocket subscribers
-          websocketController.broadcastPriceUpdate(update.symbol, update.price);
-        }
-      } catch (error) {
-        logger.error(`Error processing simulated price update for ${update.symbol}:`, error);
-      }
-    });
-    
-    logger.debug('Simulated price updates sent:', updates.map(u => `${u.symbol}: $${u.price.toFixed(2)}`).join(', '));
-  }, 10000); // Every 10 seconds
-  
-  // Store the interval for cleanup
-  global.simulationInterval = simulationInterval;
-}
-
 // Start server
 startServer();
 
@@ -462,11 +384,6 @@ process.on('unhandledRejection', (reason, promise) => {
 // Common shutdown function to avoid code duplication
 async function gracefulShutdown(signal) {
   logger.info(`${signal} received, shutting down gracefully`);
-  
-  // Clear simulation interval if it exists
-  if (global.simulationInterval) {
-    clearInterval(global.simulationInterval);
-  }
   
   // Close database connection
   try {

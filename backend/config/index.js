@@ -3,8 +3,7 @@ const helmet = require('helmet');
 const dotenv = require('dotenv');
 const path = require('path');
 const apiRoutes = require('../src/routes/api');
-
-
+const logger = require('../src/utils/logger');
 
 // Load environment variables
 dotenv.config();
@@ -26,20 +25,22 @@ app.get('/', (req, res) => {
   res.send('Cryptocurrency Trading Bot API is running');
 });
 
-// Error handling middleware
+// Error handling middleware - production safe version
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  // Log the error internally for troubleshooting
+  logger.error('Server error:', err);
+  
+  // Send a generic error response without exposing details
   res.status(500).json({
     error: {
-      message: 'Something went wrong on the server',
-      details: process.env.NODE_ENV ? err.message : undefined
+      message: 'Something went wrong on the server'
     }
   });
 });
 
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info(`Server running on port ${PORT}`);
 });
 
-module.exports = config;
+module.exports = app;
