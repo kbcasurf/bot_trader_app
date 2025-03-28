@@ -1,7 +1,9 @@
 services:
   # Frontend service
   frontend:
-    build: ./frontend
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: frontend
     ports:
       - "8080:80"
@@ -10,15 +12,23 @@ services:
       - /app/node_modules
       - ./.env:/app/.env
     environment:
-      - VITE_BACKEND_URL=http://backend:3000
+      - NODE_ENV=development
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - bot-network
 
   # Backend service
   backend:
-    build: ./backend
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: backend
     ports:
       - "3000:3000"
@@ -27,6 +37,7 @@ services:
       - /app/node_modules
       - ./.env:/app/.env
     environment:
+      - NODE_ENV=development
       - DB_HOST=database
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
@@ -35,10 +46,14 @@ services:
       - BINANCE_API_SECRET=${BINANCE_API_SECRET}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-      - CORS_ORIGIN=http://frontend:80
- 
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - database
+      database:
+        condition: service_healthy
     networks:
       - bot-network
 
@@ -57,12 +72,18 @@ services:
     volumes:
       - db-data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./.env:/app/.env
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: mysqladmin ping -h localhost -u ${DB_USER} -p${DB_PASSWORD}
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - bot-network
 
 volumes:
   db-data:
+    driver: local
 
 networks:
   bot-network:
