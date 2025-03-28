@@ -20,7 +20,7 @@ const socketConnections = {};
 // Test Binance API connection
 async function testConnection() {
     try {
-        const response = await axios.get(`${BASE_URL}/v3/ping`);
+        const response = await axios.get(`${BASE_URL}/api/v3/ping`);
         return response.status === 200;
     } catch (error) {
         console.error('Binance API connection test failed:', error.message);

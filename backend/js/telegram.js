@@ -22,14 +22,14 @@ process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
 // Test Telegram Bot connection
 async function testConnection() {
-    try {
-        // Try to get bot info as a simple check
-        const botInfo = await bot.telegram.getMe();
-        return !!botInfo.id;
-    } catch (error) {
-        console.error('Telegram Bot connection test failed:', error.message);
-        throw error;
-    }
+  try {
+    // Try to get bot info as a simple check
+    const botInfo = await bot.telegram.getMe();
+    return !!botInfo.id;
+  } catch (error) {
+    console.error('Telegram Bot connection test failed:', error.message);
+    throw error;
+  }
 }
 
 // Send message to configured chat ID
@@ -79,3 +79,10 @@ async function sendPriceAlert(alertInfo) {
     
     return await sendMessage(message);
 }
+
+module.exports = {
+    testConnection,
+    sendMessage,
+    sendTradeNotification,
+    sendPriceAlert
+};
