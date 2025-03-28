@@ -464,7 +464,7 @@ function startTradingStrategy(symbol) {
 
 // Start the server
 const PORT = process.env.PORT;
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     
     // Test connections on startup
