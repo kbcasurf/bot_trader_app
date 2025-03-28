@@ -4,6 +4,8 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const mariadb = require('mariadb');
+const binanceAPI = require('./js/binance');
+const telegramBot = require('./js/telegram');
 
 // Load environment variables
 dotenv.config({ path: '/app/.env' });
