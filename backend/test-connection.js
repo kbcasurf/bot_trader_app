@@ -6,23 +6,22 @@ const cors = require('cors');
 
 // Create a simple Express app for testing
 const app = express();
+const server = http.createServer(app);
+
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Add a simple endpoint
-app.get('/', (req, res) => {
-    res.send('Backend is running!');
-});
-
 app.get('/health', (req, res) => {
     res.status(200).send('OK');
 });
 
-// Create HTTP server
-const server = http.createServer(app);
+// Add a simple endpoint
+app.get('/', (req, res) => {
+    res.send('Backend is running!');
+});
 
 // Initialize Socket.IO
 const io = socketIo(server, {
