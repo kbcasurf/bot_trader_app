@@ -70,7 +70,7 @@ io.on('connection', (socket) => {
     socket.on('disconnect', (reason) => {
         console.log(`Client ${socket.id} disconnected. Reason: ${reason}`);
     });
-});
+
 
     // Handle manual price updates
     socket.on('manual-price-update', (data) => {
@@ -90,7 +90,7 @@ io.on('connection', (socket) => {
         
         console.log(`Manual price update for ${data.symbol} to ${data.price} broadcast to all clients`);
     });
-
+});
 
 // Database connection pool
 const pool = mariadb.createPool({
