@@ -190,43 +190,44 @@ function subscribeToTickerStream(symbols, callback) {
 
         socket.on('message', (data) => {
             try {
-                // Log the raw message (but not too much)
-                const dataForLogging = typeof data === 'string' 
-                    ? (data.length > 200 ? data.substring(0, 200) + '...' : data)
-                    : JSON.stringify(data).substring(0, 200) + '...';
-                console.log('Raw message from Binance:', dataForLogging);
+                // Log the raw message for debugging
+                console.log('Raw WebSocket message received:', 
+                    typeof data === 'string' ? data.substring(0, 100) + '...' : 'non-string data');
                 
-                // Parse the data if it's a string
-                const parsedData = typeof data === 'string' ? JSON.parse(data) : data;
+                // Parse data if it's a string
+                let parsedData = data;
+                if (typeof data === 'string') {
+                    parsedData = JSON.parse(data);
+                }
                 
-                // Log the structure for debugging
-                console.log('Binance data structure:', Object.keys(parsedData));
+                // Simple logging of the structure
+                console.log('Message structure:', Object.keys(parsedData));
                 
-                // Handle different possible data structures from Binance
-                let symbolData;
+                // Extract price data - Binance typically uses one of these structures
+                let symbol, price;
                 
+                // Handle different Binance WebSocket data formats
                 if (parsedData.data) {
                     // Format: { data: { s: "BTCUSDT", ... } }
-                    symbolData = parsedData.data;
-                    console.log('Using data property:', symbolData);
-                } else if (parsedData.stream && parsedData.data) {
-                    // Format: { stream: "...", data: { ... } }
-                    symbolData = parsedData.data;
-                    console.log('Using stream.data property:', symbolData);
+                    symbol = parsedData.data.s || parsedData.data.symbol;
+                    price = parsedData.data.c || parsedData.data.p || parsedData.data.price || parsedData.data.lastPrice;
                 } else if (parsedData.s) {
                     // Format: { s: "BTCUSDT", ... }
-                    symbolData = parsedData;
-                    console.log('Using top-level properties:', symbolData);
-                } else {
-                    console.warn('Unknown Binance data format:', parsedData);
+                    symbol = parsedData.s;
+                    price = parsedData.c || parsedData.p || parsedData.lastPrice;
+                } else if (parsedData.stream && parsedData.data) {
+                    // Format: { stream: "...", data: { ... } }
+                    symbol = parsedData.data.s || parsedData.data.symbol;
+                    price = parsedData.data.c || parsedData.data.p || parsedData.data.price;
+                }
+                
+                // If we couldn't extract the necessary data, log and return
+                if (!symbol || !price) {
+                    console.warn('Could not extract symbol or price from message:', parsedData);
                     return;
                 }
                 
-                // Extract the symbol and price
-                const symbol = symbolData.s || symbolData.symbol || "UNKNOWN";
-                const price = symbolData.a || symbolData.p || symbolData.price || symbolData.lastPrice || "0.00";
-                
-                console.log(`Extracted data - Symbol: ${symbol}, Price: ${price}`);
+                console.log(`Successfully extracted data - Symbol: ${symbol}, Price: ${price}`);
                 
                 // Create a simplified data object for our app
                 const simplifiedData = {
@@ -234,51 +235,65 @@ function subscribeToTickerStream(symbols, callback) {
                     price: price
                 };
                 
-                // Forward the data based on callback type
+                // Forward the data to the callback
                 if (typeof callback === 'object' && callback.emit) {
                     callback.emit('price-update', simplifiedData);
                 } else if (typeof callback === 'function') {
                     callback(simplifiedData);
                 }
             } catch (error) {
-                console.error('Error handling WebSocket message:', error);
+                console.error('Error handling WebSocket message:', error.message);
+                if (typeof data === 'string') {
+                    console.error('Raw data (first 200 chars):', data.substring(0, 200));
+                }
             }
         });
-        
+    }   
+}
 
 
 
 
         socket.on('error', (error) => {
-            console.error('Socket.io client error:', error);
+            console.error('Binance WebSocket error:', error.message);
             if (typeof callback === 'object' && callback.emit) {
-                callback.emit('websocket-status', { connected: false, error: error.message, symbols });
+                callback.emit('websocket-status', { 
+                    connected: false, 
+                    error: error.message, 
+                    symbols 
+                });
             }
         });
+
         
-        socket.on('disconnect', () => {
-            console.log(`Socket.io client disconnected from Binance WebSocket for ${symbols.join(', ')}`);
+        socket.on('disconnect', (reason) => {
+            console.log(`Binance WebSocket disconnected for ${symbols.join(', ')}. Reason: ${reason}`);
             
             if (typeof callback === 'object' && callback.emit) {
                 callback.emit('websocket-status', { connected: false, symbols });
             }
             
-            // Attempt to reconnect after a delay
-            setTimeout(() => {
+            // Set a reconnection timeout that increases with each attempt
+            let reconnectDelay = 5000; // Start with 5 seconds
+            const maxReconnectDelay = 60000; // Max delay of 1 minute
+            
+            const attemptReconnect = () => {
+                console.log(`Attempting to reconnect to Binance WebSocket for ${symbols.join(', ')}`);
+                
+                // Remove the old connection before attempting to reconnect
                 if (socketConnections[symbolsKey]) {
-                    console.log(`Attempting to reconnect Socket.io client for ${symbols.join(', ')}`);
                     delete socketConnections[symbolsKey];
-                    subscribeToTickerStream(symbols, callback);
                 }
-            }, 5000);
+                
+                // Create a new connection
+                subscribeToTickerStream(symbols, callback);
+                
+                // Increase the delay for next attempt (with a maximum)
+                reconnectDelay = Math.min(reconnectDelay * 1.5, maxReconnectDelay);
+            };
+            
+            setTimeout(attemptReconnect, reconnectDelay);
         });
-        
-        // Store connection reference
-        socketConnections[symbolsKey] = socket;
-    }
-    
-    return socketConnections[symbolsKey];
-}
 
 
 

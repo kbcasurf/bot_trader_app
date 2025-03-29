@@ -14,6 +14,9 @@ dotenv.config({ path: '/app/.env' });
 const app = express();
 const server = http.createServer(app);
 
+// Detailed logging mode - turn on for debugging
+const DETAILED_LOGGING = true;
+
 // Configure CORS properly
 app.use(cors({
     origin: '*',
@@ -68,6 +71,26 @@ io.on('connection', (socket) => {
         console.log(`Client ${socket.id} disconnected. Reason: ${reason}`);
     });
 });
+
+    // Handle manual price updates
+    socket.on('manual-price-update', (data) => {
+        console.log('Manual price update received:', data);
+        
+        if (!data || !data.symbol || !data.price) {
+            console.error('Invalid manual price update data:', data);
+            return;
+        }
+        
+        // Broadcast the manual price update to all clients
+        io.emit('price-update', {
+            symbol: data.symbol,
+            price: data.price,
+            source: 'manual'
+        });
+        
+        console.log(`Manual price update for ${data.symbol} to ${data.price} broadcast to all clients`);
+    });
+
 
 // Database connection pool
 const pool = mariadb.createPool({
@@ -175,44 +198,75 @@ io.on('connection', (socket) => {
 
 
 
-    // Handle Binance stream test
+
     socket.on('test-binance-stream', async () => {
-        try {
-            console.log('Received test-binance-stream request');
-            
-            binanceAPI.subscribeToTickerStream(['BTCUSDT'], (data) => {
-                console.log('Received price data from Binance:', JSON.stringify(data));
-                
-                // Make sure we're accessing the right properties based on Binance's response format
-                const symbol = data.s || (data.data && data.data.s) || 'BTCUSDT';
-                const price = data.a || (data.data && data.data.a) || data.price || '0.00';
-                
-                console.log(`Emitting price-update event: ${symbol} at $${price}`);
-                
-                io.emit('price-update', {
-                    symbol: symbol,
-                    price: price
-                });
-            });
-            
-            console.log('Binance stream subscription requested');
-            socket.emit('binance-test-result', { success: true });
-            
-            // Explicitly set WebSocket connected status to true
-            websocketConnected = true;
-            io.emit('trading-status', { active: websocketConnected });
-            console.log('Trading status updated:', { active: websocketConnected });
-        } catch (err) {
-            console.error('Binance stream test error:', err);
+    try {
+        console.log('Received test-binance-stream request');
+        
+        // First, test the connection to Binance API
+        const apiConnected = await binanceAPI.testConnection();
+        if (!apiConnected) {
             socket.emit('binance-test-result', { 
                 success: false, 
-                error: err.message,
-                message: 'WebSocket connection failed. Trading is paused until connection is restored.'
+                error: 'Cannot connect to Binance API'
             });
-            websocketConnected = false;
-            io.emit('trading-status', { active: websocketConnected });
+            return;
         }
-    });
+        
+        // Get a current price to verify API is working
+        try {
+            const tickerData = await binanceAPI.getTickerPrice('BTCUSDT');
+            console.log('Current BTCUSDT price from API:', tickerData.price);
+        } catch (err) {
+            console.warn('Could not get current price, but continuing with WebSocket test:', err.message);
+        }
+        
+        // Set up a subscription with detailed logging
+        console.log('Setting up subscription to Binance WebSocket');
+        binanceAPI.subscribeToTickerStream(['BTCUSDT'], (data) => {
+            console.log('Received price data from Binance WebSocket:', JSON.stringify(data));
+            
+            // Ensure we have the required data
+            if (!data || (!data.symbol && !data.s)) {
+                console.error('Invalid data format received from Binance:', data);
+                return;
+            }
+            
+            // Normalize the data format
+            const symbol = data.symbol || data.s;
+            const price = data.price || data.p || data.c || data.lastPrice;
+            
+            if (!symbol || !price) {
+                console.error('Missing required price data:', data);
+                return;
+            }
+            
+            console.log(`Emitting price-update event for ${symbol} at $${price}`);
+            
+            io.emit('price-update', {
+                symbol: symbol,
+                price: price
+            });
+        });
+        
+        console.log('Binance stream subscription requested');
+        socket.emit('binance-test-result', { success: true });
+        
+        // Update WebSocket connected status
+        websocketConnected = true;
+        io.emit('trading-status', { active: websocketConnected });
+        console.log('Trading status updated:', { active: websocketConnected });
+    } catch (err) {
+        console.error('Binance stream test error:', err);
+        socket.emit('binance-test-result', { 
+            success: false, 
+            error: err.message,
+            message: 'WebSocket connection failed. Trading is paused until connection is restored.'
+        });
+        websocketConnected = false;
+        io.emit('trading-status', { active: websocketConnected });
+    }
+});
     
 
 
@@ -420,6 +474,16 @@ async function getHoldings(symbol) {
         if (conn) conn.release();
     }
 }
+
+
+
+// Helper function for detailed logging
+function detailedLog(...args) {
+    if (DETAILED_LOGGING) {
+        console.log('[DETAILED]', ...args);
+    }
+}
+
 
 // Trading strategy logic
 function startTradingStrategy(symbol) {

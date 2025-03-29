@@ -105,54 +105,31 @@ socket.on('price-update', (data) => {
         return;
     }
     
-    // Try different approaches to find the price element
-    
-    // 1. Try by ID (btc-price)
+    // Extract base symbol (remove USDT)
     const baseSymbol = data.symbol.replace('USDT', '').toLowerCase();
-    let priceElement = document.getElementById(`${baseSymbol}-price`);
     
-    // 2. If not found, try by class and card ID
-    if (!priceElement) {
-        console.log(`Price element with ID ${baseSymbol}-price not found, trying alternative selectors...`);
-        const card = document.getElementById(`${baseSymbol}-card`);
-        if (card) {
-            priceElement = card.querySelector('.current-price');
-            console.log(`Found price element in card: ${priceElement ? 'Yes' : 'No'}`);
-        }
-    }
+    // Find the price element by its ID
+    const priceElement = document.getElementById(`${baseSymbol}-price`);
     
-    // 3. If still not found, try by class and content filtering
-    if (!priceElement) {
-        console.log('Trying to find price element by class...');
-        const allPriceElements = document.querySelectorAll('.current-price');
-        console.log(`Found ${allPriceElements.length} price elements by class`);
-        
-        // Look for price elements inside cards with matching symbol
-        const matchingElement = Array.from(allPriceElements).find(el => {
-            // Check if we're in a card with a matching heading
-            const parentCard = el.closest('.crypto-card');
-            if (parentCard) {
-                const heading = parentCard.querySelector('h3');
-                if (heading && heading.textContent.includes(baseSymbol.toUpperCase())) {
-                    return true;
-                }
-            }
-            return false;
-        });
-        
-        if (matchingElement) {
-            console.log('Found matching price element by card heading');
-            priceElement = matchingElement;
-        }
-    }
-    
-    // Update the price if we found an element
     if (priceElement) {
+        // Format the price with 2 decimal places
         const formattedPrice = parseFloat(data.price).toFixed(2);
-        console.log(`Updating price for ${data.symbol} to $${formattedPrice}`);
         priceElement.textContent = `Price: $${formattedPrice}`;
+        console.log(`Updated price for ${baseSymbol} to $${formattedPrice}`);
+        
+        // Also update the 'last update' text if it exists
+        const updatedElement = document.getElementById(`${baseSymbol}-updated`);
+        if (updatedElement) {
+            const now = new Date().toLocaleTimeString();
+            updatedElement.textContent = `Last update: ${now}`;
+        }
     } else {
-        console.error(`Could not find any price element for ${data.symbol}`);
+        console.error(`Could not find price element with ID ${baseSymbol}-price`);
+        
+        // Debug available elements
+        const allPriceElements = document.querySelectorAll('[id$="-price"]');
+        console.log('Available price elements:', 
+            Array.from(allPriceElements).map(el => el.id));
     }
 });
 
@@ -322,32 +299,27 @@ sellAllButtons.forEach(button => {
     });
 });
 
-// Debug HTML structure
+// Validate that all required price elements exist
 window.addEventListener('load', () => {
-    console.log('Debugging HTML structure...');
+    console.log('Validating price elements...');
     
-    // Find all crypto cards
-    const cryptoCards = document.querySelectorAll('.crypto-card');
-    console.log('Found crypto cards:', cryptoCards.length);
+    const requiredSymbols = ['btc', 'sol', 'xrp', 'doge', 'near', 'pendle'];
+    const missingElements = [];
     
-    // Print the HTML structure of each card
-    cryptoCards.forEach(card => {
-        console.log('Card ID:', card.id);
-        console.log('Card HTML:', card.innerHTML.substring(0, 500)); // First 500 chars
-        
-        // Check for price elements
-        const priceElements = card.querySelectorAll('.current-price');
-        console.log('Price elements in this card:', priceElements.length);
-        priceElements.forEach(el => {
-            console.log('Price element ID:', el.id);
-            console.log('Price element content:', el.textContent);
-        });
+    requiredSymbols.forEach(symbol => {
+        const element = document.getElementById(`${symbol}-price`);
+        if (!element) {
+            console.error(`Missing required price element: ${symbol}-price`);
+            missingElements.push(`${symbol}-price`);
+        } else {
+            console.log(`Found price element: ${symbol}-price`);
+        }
     });
     
-    // List all elements with class 'current-price'
-    const allPriceElements = document.querySelectorAll('.current-price');
-    console.log('All price elements:', allPriceElements.length);
-    Array.from(allPriceElements).forEach(el => {
-        console.log('Price element ID:', el.id, 'Content:', el.textContent);
-    });
+    if (missingElements.length > 0) {
+        console.error('Some price elements are missing!', missingElements);
+        alert(`Warning: Some price elements are missing: ${missingElements.join(', ')}. Prices may not display correctly.`);
+    } else {
+        console.log('All required price elements found.');
+    }
 });

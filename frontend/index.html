@@ -263,6 +263,19 @@
         
         const eventsEl = document.getElementById('events');
         const requestsEl = document.getElementById('requests');
+
+        // Set to false when you want real data instead of test data
+        const DEBUG_MODE = false;
+
+        // Override the debug functions when not in debug mode
+        if (!DEBUG_MODE) {
+            document.getElementById('debug-btc-element').style.display = 'none';
+            
+            // Replace the debug function with a no-op function
+            window.debugPriceElements = function() {
+                console.log('Debug mode is disabled');
+            };
+        }
         
         // Tab functionality
         function openTab(evt, tabName) {
@@ -580,55 +593,79 @@
             });
             
             document.getElementById('debug-btc-element').addEventListener('click', () => {
-                // List all price elements
-                const priceElements = document.querySelectorAll('[id$="-price"]');
-                
-                logEvent('Debugging price elements', {
-                    count: priceElements.length,
-                    elements: Array.from(priceElements).map(el => ({
-                        id: el.id,
-                        content: el.textContent
-                    }))
-                });
-                
-                // Try manually updating each price element
-                ['btc', 'sol', 'xrp', 'doge', 'near', 'pendle'].forEach(symbol => {
-                    const element = document.getElementById(`${symbol}-price`);
-                    if (element) {
-                        const testPrice = Math.floor(Math.random() * 10000);
-                        element.textContent = `Price: $${testPrice.toFixed(2)}`;
-                        
-                        const updatedElement = document.getElementById(`${symbol}-updated`);
-                        if (updatedElement) {
-                            updatedElement.textContent = `Last update: ${new Date().toLocaleTimeString()} (Test)`;
+                if (DEBUG_MODE) {
+                    // Debug code (original implementation)
+                    const priceElements = document.querySelectorAll('[id$="-price"]');
+                    
+                    logEvent('Debugging price elements', {
+                        count: priceElements.length,
+                        elements: Array.from(priceElements).map(el => ({
+                            id: el.id,
+                            content: el.textContent
+                        }))
+                    });
+                    
+                    // Generate random prices for testing
+                    ['btc', 'sol', 'xrp', 'doge', 'near', 'pendle'].forEach(symbol => {
+                        const element = document.getElementById(`${symbol}-price`);
+                        if (element) {
+                            const testPrice = Math.floor(Math.random() * 10000);
+                            element.textContent = `Price: $${testPrice.toFixed(2)}`;
+                            
+                            const updatedElement = document.getElementById(`${symbol}-updated`);
+                            if (updatedElement) {
+                                updatedElement.textContent = `Last update: ${new Date().toLocaleTimeString()} (Test)`;
+                            }
+                            
+                            logEvent(`Manually updated ${symbol} price for testing`, { price: testPrice });
                         }
-                        
-                        logEvent(`Manually updated ${symbol} price for testing`, { price: testPrice });
-                    } else {
-                        logEvent(`Could not find ${symbol} price element`, null, 'error');
-                    }
-                });
+                    });
+                } else {
+                    logEvent('Debug mode is disabled. Enable it for testing purposes.');
+                }
             });
             
+
+
+
             document.getElementById('update-price').addEventListener('click', () => {
                 const symbol = document.getElementById('manual-symbol').value;
                 const price = document.getElementById('manual-price').value;
                 
                 logEvent('Manual price update test', { symbol, price });
                 
-                if (updatePriceDisplay(symbol, price)) {
-                    // If price was updated successfully, try to simulate the event if socket is connected
+                // Extract base symbol without USDT
+                const baseSymbol = symbol.replace('USDT', '').toLowerCase();
+                const priceElement = document.getElementById(`${baseSymbol}-price`);
+                
+                if (priceElement) {
+                    // Update the price display
+                    priceElement.textContent = `Price: $${parseFloat(price).toFixed(2)}`;
+                    
+                    // Update last update time if available
+                    const updatedElement = document.getElementById(`${baseSymbol}-updated`);
+                    if (updatedElement) {
+                        updatedElement.textContent = `Last update: ${new Date().toLocaleTimeString()} (Manual)`;
+                    }
+                    
+                    logEvent(`Updated price for ${baseSymbol}`, { price });
+                    
+                    // If socket is connected, simulate the price-update event
                     if (socket && socket.connected) {
                         logEvent('Simulating price-update event');
-                        const mockData = { symbol: symbol, price: price };
-                        // Note: This is a bit of a hack to manually trigger event processing
-                        if (socket._callbacks && socket._callbacks['$price-update']) {
-                            socket._callbacks['$price-update'].forEach(callback => callback(mockData));
-                        }
+                        socket.emit('manual-price-update', { 
+                            symbol: symbol,
+                            price: price
+                        });
                     }
+                } else {
+                    logEvent(`Could not find price element with ID: ${baseSymbol}-price`, null, 'error');
                 }
             });
             
+
+
+
             document.getElementById('clear-logs').addEventListener('click', () => {
                 eventsEl.innerHTML = '';
                 requestsEl.innerHTML = '';
