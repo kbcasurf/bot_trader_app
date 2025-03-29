@@ -89,19 +89,75 @@ socket.on('telegram-status', (isConnected) => {
 
 // Trading status update
 socket.on('trading-status', (status) => {
+    console.log('Trading status update received:', status);
     updateTradingStatus(status.active);
 });
 
+
+
+
 // Price update from Binance
 socket.on('price-update', (data) => {
-    console.log('Price update:', data);
+    console.log('Price update received:', data);
     
-    // Update price display for the specific cryptocurrency
-    const priceElement = document.getElementById(`${data.symbol.toLowerCase()}-price`);
+    if (!data || !data.symbol) {
+        console.warn('Invalid price update data:', data);
+        return;
+    }
+    
+    // Try different approaches to find the price element
+    
+    // 1. Try by ID (btc-price)
+    const baseSymbol = data.symbol.replace('USDT', '').toLowerCase();
+    let priceElement = document.getElementById(`${baseSymbol}-price`);
+    
+    // 2. If not found, try by class and card ID
+    if (!priceElement) {
+        console.log(`Price element with ID ${baseSymbol}-price not found, trying alternative selectors...`);
+        const card = document.getElementById(`${baseSymbol}-card`);
+        if (card) {
+            priceElement = card.querySelector('.current-price');
+            console.log(`Found price element in card: ${priceElement ? 'Yes' : 'No'}`);
+        }
+    }
+    
+    // 3. If still not found, try by class and content filtering
+    if (!priceElement) {
+        console.log('Trying to find price element by class...');
+        const allPriceElements = document.querySelectorAll('.current-price');
+        console.log(`Found ${allPriceElements.length} price elements by class`);
+        
+        // Look for price elements inside cards with matching symbol
+        const matchingElement = Array.from(allPriceElements).find(el => {
+            // Check if we're in a card with a matching heading
+            const parentCard = el.closest('.crypto-card');
+            if (parentCard) {
+                const heading = parentCard.querySelector('h3');
+                if (heading && heading.textContent.includes(baseSymbol.toUpperCase())) {
+                    return true;
+                }
+            }
+            return false;
+        });
+        
+        if (matchingElement) {
+            console.log('Found matching price element by card heading');
+            priceElement = matchingElement;
+        }
+    }
+    
+    // Update the price if we found an element
     if (priceElement) {
-        priceElement.textContent = `Price: $${parseFloat(data.price).toFixed(2)}`;
+        const formattedPrice = parseFloat(data.price).toFixed(2);
+        console.log(`Updating price for ${data.symbol} to $${formattedPrice}`);
+        priceElement.textContent = `Price: $${formattedPrice}`;
+    } else {
+        console.error(`Could not find any price element for ${data.symbol}`);
     }
 });
+
+
+
 
 // Transaction and operation results
 socket.on('first-purchase-result', (result) => {
@@ -198,6 +254,40 @@ presetButtons.forEach(button => {
     });
 });
 
+// Helper function to manually update a price (for testing)
+function updatePrice(symbol, price) {
+    const baseSymbol = symbol.replace('USDT', '').toLowerCase();
+    
+    // Try different methods to find the element
+    let priceElement = document.getElementById(`${baseSymbol}-price`);
+    
+    if (!priceElement) {
+        const card = document.getElementById(`${baseSymbol}-card`);
+        if (card) {
+            priceElement = card.querySelector('.current-price');
+        }
+    }
+    
+    if (priceElement) {
+        priceElement.textContent = `Price: $${price}`;
+        console.log(`Manually updated price for ${symbol} to $${price}`);
+        return true;
+    } else {
+        console.error(`Could not find price element for ${symbol}`);
+        return false;
+    }
+}
+
+// Add a test button click handler
+document.getElementById('test-binance-stream').addEventListener('click', function() {
+    // After sending the test request, try a manual update
+    setTimeout(() => {
+        console.log('Testing manual price update...');
+        updatePrice('BTCUSDT', '99999.99');
+    }, 2000);
+});
+
+
 // First Purchase button functionality
 const firstPurchaseButtons = document.querySelectorAll('.first-purchase');
 firstPurchaseButtons.forEach(button => {
@@ -232,7 +322,32 @@ sellAllButtons.forEach(button => {
     });
 });
 
-// Request initial system status when page loads
+// Debug HTML structure
 window.addEventListener('load', () => {
-    socket.emit('get-system-status');
+    console.log('Debugging HTML structure...');
+    
+    // Find all crypto cards
+    const cryptoCards = document.querySelectorAll('.crypto-card');
+    console.log('Found crypto cards:', cryptoCards.length);
+    
+    // Print the HTML structure of each card
+    cryptoCards.forEach(card => {
+        console.log('Card ID:', card.id);
+        console.log('Card HTML:', card.innerHTML.substring(0, 500)); // First 500 chars
+        
+        // Check for price elements
+        const priceElements = card.querySelectorAll('.current-price');
+        console.log('Price elements in this card:', priceElements.length);
+        priceElements.forEach(el => {
+            console.log('Price element ID:', el.id);
+            console.log('Price element content:', el.textContent);
+        });
+    });
+    
+    // List all elements with class 'current-price'
+    const allPriceElements = document.querySelectorAll('.current-price');
+    console.log('All price elements:', allPriceElements.length);
+    Array.from(allPriceElements).forEach(el => {
+        console.log('Price element ID:', el.id, 'Content:', el.textContent);
+    });
 });

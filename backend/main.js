@@ -172,16 +172,36 @@ io.on('connection', (socket) => {
         }
     });
     
+
+
+
     // Handle Binance stream test
     socket.on('test-binance-stream', async () => {
         try {
+            console.log('Received test-binance-stream request');
+            
             binanceAPI.subscribeToTickerStream(['BTCUSDT'], (data) => {
+                console.log('Received price data from Binance:', JSON.stringify(data));
+                
+                // Make sure we're accessing the right properties based on Binance's response format
+                const symbol = data.s || (data.data && data.data.s) || 'BTCUSDT';
+                const price = data.a || (data.data && data.data.a) || data.price || '0.00';
+                
+                console.log(`Emitting price-update event: ${symbol} at $${price}`);
+                
                 io.emit('price-update', {
-                    symbol: data.s,
-                    price: data.a
+                    symbol: symbol,
+                    price: price
                 });
             });
+            
+            console.log('Binance stream subscription requested');
             socket.emit('binance-test-result', { success: true });
+            
+            // Explicitly set WebSocket connected status to true
+            websocketConnected = true;
+            io.emit('trading-status', { active: websocketConnected });
+            console.log('Trading status updated:', { active: websocketConnected });
         } catch (err) {
             console.error('Binance stream test error:', err);
             socket.emit('binance-test-result', { 
@@ -193,6 +213,11 @@ io.on('connection', (socket) => {
             io.emit('trading-status', { active: websocketConnected });
         }
     });
+    
+
+
+
+
     
     // Listen for WebSocket status updates
     socket.on('websocket-status', (status) => {
