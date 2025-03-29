@@ -184,9 +184,6 @@ function subscribeToTickerStream(symbols, callback) {
                 callback.emit('websocket-status', { connected: true, symbols });
             }
         });
-        
-
-
 
         socket.on('message', (data) => {
             try {
@@ -248,14 +245,9 @@ function subscribeToTickerStream(symbols, callback) {
                 }
             }
         });
-    }   
-}
-
-
-
-
+        
         socket.on('error', (error) => {
-            console.error('Binance WebSocket error:', error.message);
+            console.error('Socket.io client error:', error);
             if (typeof callback === 'object' && callback.emit) {
                 callback.emit('websocket-status', { 
                     connected: false, 
@@ -264,10 +256,9 @@ function subscribeToTickerStream(symbols, callback) {
                 });
             }
         });
-
         
         socket.on('disconnect', (reason) => {
-            console.log(`Binance WebSocket disconnected for ${symbols.join(', ')}. Reason: ${reason}`);
+            console.log(`Socket.io client disconnected from Binance WebSocket for ${symbols.join(', ')}. Reason: ${reason}`);
             
             if (typeof callback === 'object' && callback.emit) {
                 callback.emit('websocket-status', { connected: false, symbols });
@@ -294,7 +285,13 @@ function subscribeToTickerStream(symbols, callback) {
             
             setTimeout(attemptReconnect, reconnectDelay);
         });
-
+        
+        // Store connection reference
+        socketConnections[symbolsKey] = socket;
+    }
+    
+    return socketConnections[symbolsKey];
+}
 
 
 
