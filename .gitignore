@@ -4,6 +4,12 @@
 *.env
 *./.env
 ./.env.local
+./.env# Environment variables
+.env
+*.env
+*.env
+*./.env
+./.env.local
 ./.env
 ./.node_modules
 /.node_modules
