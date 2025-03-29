@@ -1,7 +1,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
-const { io } = require('socket.io-client');
+const WebSocket = require('ws');
 
 // Load environment variables
 dotenv.config({ path: '/app/.env' });
@@ -14,7 +14,7 @@ const API_SECRET = process.env.BINANCE_API_SECRET;
 const BASE_URL = process.env.BINANCE_API_URL;
 const WS_BASE_URL = process.env.BINANCE_WEBSOCKET_URL;
 
-// Socket.io connections
+// WebSocket connections
 const socketConnections = {};
 
 // Test Binance API connection
@@ -155,7 +155,6 @@ function setupBinanceSocketServer(server) {
     return binanceNsp;
 }
 
-
 async function manualConnectAndGetPrices(symbols) {
     try {
         console.log(`Manually connecting to Binance for symbols: ${symbols.join(', ')}`);
@@ -197,12 +196,11 @@ async function manualConnectAndGetPrices(symbols) {
     }
 }
 
-
-// Modified URL construction in subscribeToTickerStream function
+// Subscribe to ticker stream using native WebSocket
 function subscribeToTickerStream(symbols, callback) {
     const symbolsKey = symbols.join('-');
     
-    // Use Socket.io client to connect to Binance WebSocket
+    // Check if we already have an active connection for these symbols
     if (!socketConnections[symbolsKey]) {
         // Format symbols for stream - use ticker instead of bookTicker for more reliable price updates
         const streams = symbols.map(symbol => `${symbol.toLowerCase()}@ticker`).join('/');
@@ -210,30 +208,49 @@ function subscribeToTickerStream(symbols, callback) {
         
         console.log(`Connecting to Binance WebSocket: ${socketUrl}`);
         
-        // We'll use a custom implementation with Socket.io client to connect to Binance WebSocket
-        // and then forward the data to our Socket.io server
-        const socket = io.connect(socketUrl, {
-            transports: ['websocket'],
-            forceNew: true
-        });
+        // Create native WebSocket connection
+        const ws = new WebSocket(socketUrl);
 
-        // Modified handler for WebSocket messages in subscribeToTickerStream function
-        socket.on('message', (data) => {
+        // Initialize status properties
+        ws.isAlive = true;
+        ws.symbolsKey = symbolsKey;
+        ws.reconnectAttempts = 0;
+        ws.maxReconnectAttempts = 10;
+        ws.reconnectDelay = 5000; // Start with 5 seconds
+        ws.maxReconnectDelay = 60000; // Max delay of 1 minute
+        
+        ws.on('open', () => {
+            console.log(`WebSocket connection opened for ${symbols.join(', ')}`);
+            ws.isAlive = true;
+            ws.reconnectAttempts = 0;
+            
+            // Emit connection status if callback is a Socket.io socket
+            if (typeof callback === 'object' && callback.emit) {
+                callback.emit('websocket-status', { 
+                    connected: true, 
+                    symbols 
+                });
+            }
+            
+            // Start ping-pong for connection health check
+            startPingPong(ws);
+        });
+        
+        ws.on('message', (data) => {
             try {
                 // Log the raw message for debugging
-                console.log('Raw WebSocket message received:', 
-                    typeof data === 'string' ? data.substring(0, 100) + '...' : 'non-string data');
-                
-                // Parse data if it's a string
-                let parsedData = data;
-                if (typeof data === 'string') {
-                    parsedData = JSON.parse(data);
+                if (data) {
+                    console.log('Raw WebSocket message received:', 
+                        data.toString().substring(0, 100) + '...');
                 }
+                
+                // Parse data
+                const parsedData = JSON.parse(data.toString());
                 
                 // Simple logging of the structure
                 console.log('Message structure:', Object.keys(parsedData));
                 
-                // Extract price data - Binance typically uses one of these structures
+                // Extract price data
                 let symbol, price;
                 
                 // Handle different Binance WebSocket data formats
@@ -241,8 +258,8 @@ function subscribeToTickerStream(symbols, callback) {
                     // Format: { data: { s: "BTCUSDT", ... } }
                     if (parsedData.data.s) {
                         symbol = parsedData.data.s;
-                        // For bookTicker format
-                        price = parsedData.data.a || parsedData.data.b;
+                        // For ticker format
+                        price = parsedData.data.c || parsedData.data.a || parsedData.data.b;
                     } else if (parsedData.data.symbol) {
                         symbol = parsedData.data.symbol;
                         price = parsedData.data.price || parsedData.data.close || parsedData.data.lastPrice;
@@ -250,14 +267,14 @@ function subscribeToTickerStream(symbols, callback) {
                 } else if (parsedData.s) {
                     // Format: { s: "BTCUSDT", ... }
                     symbol = parsedData.s;
-                    // For bookTicker format
+                    // For ticker format
                     price = parsedData.a || parsedData.b || parsedData.c || parsedData.p;
                 } else if (parsedData.stream && parsedData.data) {
                     // Format: { stream: "...", data: { ... } }
                     if (parsedData.data.s) {
                         symbol = parsedData.data.s;
-                        // For bookTicker format
-                        price = parsedData.data.a || parsedData.data.b;
+                        // For ticker format
+                        price = parsedData.data.c || parsedData.data.a || parsedData.data.b;
                     } else if (parsedData.data.symbol) {
                         symbol = parsedData.data.symbol;
                         price = parsedData.data.price || parsedData.data.close || parsedData.data.lastPrice;
@@ -288,12 +305,14 @@ function subscribeToTickerStream(symbols, callback) {
                 console.error('Error handling WebSocket message:', error.message);
                 if (typeof data === 'string') {
                     console.error('Raw data (first 200 chars):', data.substring(0, 200));
+                } else if (data) {
+                    console.error('Raw data (Buffer):', data.toString().substring(0, 200));
                 }
             }
         });
         
-        socket.on('error', (error) => {
-            console.error('Socket.io client error:', error);
+        ws.on('error', (error) => {
+            console.error('WebSocket error:', error.message);
             if (typeof callback === 'object' && callback.emit) {
                 callback.emit('websocket-status', { 
                     connected: false, 
@@ -303,43 +322,89 @@ function subscribeToTickerStream(symbols, callback) {
             }
         });
         
-        socket.on('disconnect', (reason) => {
-            console.log(`Socket.io client disconnected from Binance WebSocket for ${symbols.join(', ')}. Reason: ${reason}`);
+        ws.on('close', (code, reason) => {
+            console.log(`WebSocket closed for ${symbols.join(', ')}. Code: ${code}, Reason: ${reason}`);
+            ws.isAlive = false;
             
             if (typeof callback === 'object' && callback.emit) {
                 callback.emit('websocket-status', { connected: false, symbols });
             }
             
-            // Set a reconnection timeout that increases with each attempt
-            let reconnectDelay = 5000; // Start with 5 seconds
-            const maxReconnectDelay = 60000; // Max delay of 1 minute
-            
-            const attemptReconnect = () => {
-                console.log(`Attempting to reconnect to Binance WebSocket for ${symbols.join(', ')}`);
-                
-                // Remove the old connection before attempting to reconnect
-                if (socketConnections[symbolsKey]) {
-                    delete socketConnections[symbolsKey];
-                }
-                
-                // Create a new connection
-                subscribeToTickerStream(symbols, callback);
-                
-                // Increase the delay for next attempt (with a maximum)
-                reconnectDelay = Math.min(reconnectDelay * 1.5, maxReconnectDelay);
-            };
-            
-            setTimeout(attemptReconnect, reconnectDelay);
+            // Attempt to reconnect with exponential backoff
+            handleReconnect(ws, symbols, callback);
         });
         
+        // Initialize ping timer ID
+        ws.pingTimerId = null;
+        
         // Store connection reference
-        socketConnections[symbolsKey] = socket;
+        socketConnections[symbolsKey] = ws;
     }
     
     return socketConnections[symbolsKey];
 }
 
+// Start ping-pong mechanism to keep connection alive
+function startPingPong(ws) {
+    // Clear any existing timer
+    if (ws.pingTimerId) {
+        clearInterval(ws.pingTimerId);
+    }
+    
+    // Set up ping interval
+    ws.pingTimerId = setInterval(() => {
+        if (ws.isAlive === false) {
+            clearInterval(ws.pingTimerId);
+            ws.terminate();
+            return;
+        }
+        
+        ws.isAlive = false;
+        // For Binance WebSocket, we can't send actual ping frames
+        // Instead we send a simple message that should get a response
+        // but since Binance doesn't support pings directly, we check for timeouts
+        setTimeout(() => {
+            if (ws.isAlive === false && ws.readyState === WebSocket.OPEN) {
+                console.log('WebSocket connection timed out. Reconnecting...');
+                ws.terminate();
+            }
+        }, 15000); // Wait 15s for activity before assuming connection is dead
+    }, 30000); // Check every 30s
+}
 
+// Handle reconnection with exponential backoff
+function handleReconnect(ws, symbols, callback) {
+    const symbolsKey = ws.symbolsKey;
+    
+    // Don't reconnect if we've exceeded max attempts or connection is open
+    if (ws.reconnectAttempts >= ws.maxReconnectAttempts || ws.readyState === WebSocket.OPEN) {
+        return;
+    }
+    
+    // Calculate delay with exponential backoff
+    const delay = Math.min(
+        ws.reconnectDelay * Math.pow(1.5, ws.reconnectAttempts),
+        ws.maxReconnectDelay
+    );
+    
+    console.log(`Will attempt to reconnect in ${delay}ms (attempt ${ws.reconnectAttempts + 1}/${ws.maxReconnectAttempts})`);
+    
+    // Schedule reconnection
+    setTimeout(() => {
+        console.log(`Attempting to reconnect WebSocket for ${symbols.join(', ')}`);
+        
+        // Remove the old connection before attempting to reconnect
+        if (socketConnections[symbolsKey]) {
+            delete socketConnections[symbolsKey];
+        }
+        
+        // Increment reconnect attempts counter
+        ws.reconnectAttempts++;
+        
+        // Create a new connection
+        subscribeToTickerStream(symbols, callback);
+    }, delay);
+}
 
 // Unsubscribe from ticker stream
 function unsubscribeFromTickerStream(symbols, socket) {
@@ -347,9 +412,20 @@ function unsubscribeFromTickerStream(symbols, socket) {
     const connection = socketConnections[key];
     
     if (connection) {
-        connection.disconnect();
+        // Clear ping timer if it exists
+        if (connection.pingTimerId) {
+            clearInterval(connection.pingTimerId);
+        }
+        
+        // Close the WebSocket connection
+        connection.close();
         delete socketConnections[key];
         console.log(`Unsubscribed from ticker stream for ${symbols.join(', ')}`);
+        
+        // Emit status update if socket is provided
+        if (socket && typeof socket.emit === 'function') {
+            socket.emit('websocket-status', { connected: false, symbols });
+        }
     }
 }
 

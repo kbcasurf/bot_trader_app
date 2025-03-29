@@ -71,7 +71,6 @@ io.on('connection', (socket) => {
         console.log(`Client ${socket.id} disconnected. Reason: ${reason}`);
     });
 
-
     // Handle manual price updates
     socket.on('manual-price-update', (data) => {
         console.log('Manual price update received:', data);
@@ -195,7 +194,7 @@ io.on('connection', (socket) => {
         }
     });
     
-    // Add this handler to the socket.on('connection') section in main.js
+    // Handle manual Binance API test
     socket.on('manual-binance-test', async (data) => {
         try {
             console.log('Received manual-binance-test request with data:', data);
@@ -208,7 +207,7 @@ io.on('connection', (socket) => {
                 return;
             }
             
-            // Use the new manual connect function
+            // Use the manual connect function
             const result = await binanceAPI.manualConnectAndGetPrices(data.symbols);
             
             // Send back the result
@@ -233,8 +232,7 @@ io.on('connection', (socket) => {
         }
     });
 
-
-
+    // Handle test Binance WebSocket stream
     socket.on('test-binance-stream', async () => {
         try {
             console.log('[TEST] Received test-binance-stream request');
@@ -269,14 +267,14 @@ io.on('connection', (socket) => {
                 console.log('[TEST] Received price data from Binance WebSocket:', JSON.stringify(data));
                 
                 // Ensure we have the required data
-                if (!data || (!data.symbol && !data.s)) {
+                if (!data || (!data.s && !data.symbol)) {
                     console.error('[TEST] Invalid data format received from Binance:', data);
                     return;
                 }
                 
                 // Normalize the data format
-                const symbol = data.symbol || data.s;
-                const price = data.price || data.p || data.c || data.a || data.b || data.lastPrice;
+                const symbol = data.s || data.symbol;
+                const price = data.c || data.price || data.a || data.b || data.lastPrice;
                 
                 if (!symbol || !price) {
                     console.error('[TEST] Missing required price data:', data);
@@ -296,7 +294,7 @@ io.on('connection', (socket) => {
             // Subscribe to ticker updates for testing
             console.log('[TEST] Setting up subscription to Binance WebSocket');
             const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
-            binanceAPI.subscribeToTickerStream(symbols, handlePriceUpdate);
+            const wsConnection = binanceAPI.subscribeToTickerStream(symbols, handlePriceUpdate);
             
             console.log('[TEST] Binance stream subscription requested');
             socket.emit('binance-test-result', { 
@@ -319,11 +317,6 @@ io.on('connection', (socket) => {
             io.emit('trading-status', { active: websocketConnected });
         }
     });
-    
-
-
-
-
     
     // Listen for WebSocket status updates
     socket.on('websocket-status', (status) => {
@@ -527,15 +520,12 @@ async function getHoldings(symbol) {
     }
 }
 
-
-
 // Helper function for detailed logging
 function detailedLog(...args) {
     if (DETAILED_LOGGING) {
         console.log('[DETAILED]', ...args);
     }
 }
-
 
 // Trading strategy logic
 function startTradingStrategy(symbol) {
@@ -545,7 +535,7 @@ function startTradingStrategy(symbol) {
     const priceUpdateHandler = async (data) => {
         try {
             // Get current price
-            const currentPrice = parseFloat(data.a);
+            const currentPrice = parseFloat(data.c || data.price || data.a);
             
             // Get current holdings
             const holdings = await getHoldings(symbol);
@@ -580,21 +570,13 @@ function startTradingStrategy(symbol) {
         }
     };
     
-    // Subscribe to ticker updates using Socket.io
+    // Subscribe to ticker updates using native WebSocket
     try {
-        const socket = binanceAPI.subscribeToTickerStream([symbol], priceUpdateHandler);
+        const ws = binanceAPI.subscribeToTickerStream([symbol], priceUpdateHandler);
         
-        // Set up WebSocket status handling
-        socket.on('websocket-status', (status) => {
-            websocketConnected = status.connected;
-            io.emit('trading-status', { active: websocketConnected });
-            
-            if (!websocketConnected) {
-                console.log(`WebSocket disconnected for ${symbol}. Trading is paused until connection is restored.`);
-            } else {
-                console.log(`WebSocket connected for ${symbol}. Trading has resumed.`);
-            }
-        });
+        // Set up WebSocket status handling for reconnection events
+        websocketConnected = true;
+        io.emit('trading-status', { active: websocketConnected });
         
     } catch (err) {
         console.error(`Error subscribing to ticker stream for ${symbol}:`, err);
