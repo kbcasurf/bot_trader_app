@@ -4,30 +4,69 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const mariadb = require('mariadb');
+const binanceAPI = require('./js/binance');
+const telegramBot = require('./js/telegram');
 
 // Load environment variables
 dotenv.config({ path: '/app/.env' });
-
-// Import custom modules
-const telegramBot = require('./js/telegram');
-const binanceAPI = require('./js/binance');
 
 // Initialize Express app
 const app = express();
 const server = http.createServer(app);
 
-// Configure CORS
-app.use(cors());
-app.use(express.json());
+// Configure CORS properly
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-// Initialize Socket.io with CORS settings
+// Add a health check endpoint that returns 200
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
+// Add a simple endpoint
+app.get('/', (req, res) => {
+    res.send('Backend is running!');
+});
+
+// Add middleware to parse JSON payloads
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Initialize Socket.io with proper CORS settings
 const io = socketIo(server, {
     cors: {
-        origin: ["http://frontend", "http://localhost:8080", "*"],
-        methods: ["GET", "POST"],
+        origin: '*',
+        methods: ['GET', 'POST', 'OPTIONS'],
         credentials: false
     },
-    transports: ['websocket', 'polling']
+    transports: ['polling', 'websocket'],
+    pingTimeout: 60000,
+    pingInterval: 25000
+});
+
+// Debug middleware for Socket.IO connections
+io.use((socket, next) => {
+    console.log('New Socket.IO connection attempt:', socket.id);
+    next();
+});
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+    console.log('Client connected with ID:', socket.id);
+    
+    // Send current system status to newly connected client
+    socket.emit('database-status', systemStatus.database);
+    socket.emit('binance-status', systemStatus.binance);
+    socket.emit('telegram-status', systemStatus.telegram);
+    socket.emit('trading-status', { active: websocketConnected });
+    
+    // Handle client disconnection
+    socket.on('disconnect', (reason) => {
+        console.log(`Client ${socket.id} disconnected. Reason: ${reason}`);
+    });
 });
 
 // Database connection pool
@@ -424,7 +463,7 @@ function startTradingStrategy(symbol) {
 }
 
 // Start the server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     

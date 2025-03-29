@@ -5,3 +5,14 @@
 *./.env
 ./.env.local
 ./.env
+./.node_modules
+/.node_modules
+./node_modules/*
+/node_modules/*
+./node_modules*
+/node_modules*
+
+./package.json.lock
+package.json.lock
+backend/node_modules
+frontend/node_modules

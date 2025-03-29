@@ -1,13 +1,25 @@
 import { io } from 'socket.io-client';
 
-// Initialize socket connection to backend
-// Connect directly to the backend service
-export const socket = io('http://backend:3000', {
-    reconnection: true,
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    transports: ['websocket', 'polling'],
-    withCredentials: false
+// Try to connect through the proxy with auto-discovery
+export const socket = io({
+    path: '/socket.io/',
+    transports: ['polling', 'websocket'],
+    reconnectionAttempts: 5,
+    timeout: 20000,
+    forceNew: true
+});
+
+// Log connection events for debugging
+socket.on('connect', () => {
+    console.log('Socket connected successfully');
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Socket connection error:', error.message);
+});
+
+socket.on('disconnect', (reason) => {
+    console.log('Socket disconnected. Reason:', reason);
 });
 
 // Connection status elements
