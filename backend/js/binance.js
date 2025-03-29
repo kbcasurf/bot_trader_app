@@ -155,6 +155,14 @@ function formatQuantity(quantity, symbolInfo) {
             return quantity.toString();
         }
         
+        // Ensure quantity is a number before using toFixed
+        if (typeof quantity !== 'number') {
+            quantity = parseFloat(quantity);
+            if (isNaN(quantity)) {
+                throw new Error("Invalid quantity value");
+            }
+        }
+        
         // Get the step size
         const stepSize = parseFloat(lotSizeFilter.stepSize);
         
@@ -269,7 +277,21 @@ function subscribeToTickerStream(symbols, io) {
     if (!socketConnections[symbolsKey]) {
         // Format symbols for stream - use ticker instead of bookTicker for more reliable price updates
         const streams = symbols.map(symbol => `${symbol.toLowerCase()}@ticker`).join('/');
-        const socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;
+        
+        // Determine correct WebSocket URL format based on environment
+        let socketUrl;
+        if (WS_BASE_URL.includes('testnet')) {
+            // For testnet, we need a different URL format
+            if (symbols.length === 1) {
+                socketUrl = `${WS_BASE_URL}/${symbols[0].toLowerCase()}@ticker`;
+            } else {
+                // For multiple symbols in testnet, we use the stream approach
+                socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;
+            }
+        } else {
+            // For production, we use the standard format
+            socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;
+        }
         
         console.log(`Connecting to Binance WebSocket: ${socketUrl}`);
         
@@ -411,7 +433,8 @@ function handleReconnect(ws, symbols, io) {
     const symbolsKey = ws.symbolsKey;
     
     // Don't reconnect if we've exceeded max attempts or connection is open
-    if (ws.reconnectAttempts >= ws.maxReconnectAttempts || ws.readyState === WebSocket.OPEN) {
+    if (ws.reconnectAttempts >= ws.maxReconnectAttempts || 
+        (ws.readyState !== undefined && ws.readyState === WebSocket.OPEN)) {
         return;
     }
     
@@ -435,8 +458,25 @@ function handleReconnect(ws, symbols, io) {
         // Increment reconnect attempts counter
         ws.reconnectAttempts++;
         
-        // Create a new connection
-        subscribeToTickerStream(symbols, io);
+        // Verify API connectivity before reconnecting WebSocket
+        testConnection().then(connected => {
+            if (connected) {
+                // Create a new connection
+                subscribeToTickerStream(symbols, io);
+            } else {
+                console.log('Binance API not available, delaying WebSocket reconnection');
+                // Try again later with a longer delay
+                setTimeout(() => {
+                    handleReconnect(ws, symbols, io);
+                }, ws.reconnectDelay * 2);
+            }
+        }).catch(err => {
+            console.error('Error testing connection:', err);
+            // Try again later with a longer delay
+            setTimeout(() => {
+                handleReconnect(ws, symbols, io);
+            }, ws.reconnectDelay * 2);
+        });
     }, delay);
 }
 
@@ -502,11 +542,65 @@ async function manualConnectAndGetPrices(symbols) {
     }
 }
 
+/**
+ * Close all active WebSocket connections
+ * @returns {Promise<boolean>} True if all connections were closed successfully
+ */
+async function closeAllConnections() {
+    console.log(`Closing all WebSocket connections: ${Object.keys(socketConnections).length} active connections`);
+    
+    // Make a copy of the keys to avoid modification during iteration
+    const connectionKeys = Object.keys(socketConnections);
+    
+    for (const key of connectionKeys) {
+        try {
+            console.log(`Closing WebSocket connection for ${key}`);
+            const connection = socketConnections[key];
+            
+            if (connection && connection.readyState !== undefined) {
+                // If it's a standard WebSocket
+                if (connection.readyState === WebSocket.OPEN) {
+                    connection.close(1000, "Server shutting down");
+                }
+            } else if (connection && connection.terminate) {
+                // If it's a ws library WebSocket
+                connection.terminate();
+            } else if (connection && connection.close) {
+                // Generic close method
+                connection.close();
+            }
+            
+            // Delete the connection reference
+            delete socketConnections[key];
+        } catch (error) {
+            console.error(`Error closing WebSocket for ${key}:`, error);
+        }
+    }
+    
+    // Clear any ping intervals that might be running
+    Object.values(socketConnections).forEach(conn => {
+        if (conn && conn.pingTimerId) {
+            clearInterval(conn.pingTimerId);
+        }
+    });
+    
+    return true;
+}
+
 // Execute a buy order based on USDT value
 async function executeBuyOrder(symbol, amount, amountType = 'amount') {
     try {
         let quantity = amount;
         let price;
+        
+        // Validate inputs
+        if (!symbol) {
+            throw new Error('Symbol is required');
+        }
+        
+        if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+            throw new Error('Invalid amount: must be a positive number');
+        }
         
         // If the amount is specified in USDT, calculate the quantity
         if (amountType === 'usdt') {
@@ -550,6 +644,15 @@ async function executeSellOrder(symbol, amount, amountType = 'amount') {
     try {
         let quantity = amount;
         let price;
+        
+        // Validate inputs
+        if (!symbol) {
+            throw new Error('Symbol is required');
+        }
+        
+        if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+            throw new Error('Invalid amount: must be a positive number');
+        }
         
         // If the amount is specified in USDT, calculate the quantity
         if (amountType === 'usdt') {
@@ -624,5 +727,6 @@ module.exports = {
     manualConnectAndGetPrices,
     executeBuyOrder,
     executeSellOrder,
-    initializeWebSockets
+    initializeWebSockets,
+    closeAllConnections
 };

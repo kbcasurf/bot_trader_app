@@ -17,6 +17,15 @@ const server = http.createServer(app);
 // Detailed logging mode - turn on for debugging
 const DETAILED_LOGGING = true;
 
+// Circuit breaker settings to prevent excessive trading during errors
+const CIRCUIT_BREAKER = {
+    maxErrorCount: 3,         // Max consecutive errors before breaking the circuit
+    resetTimeoutMs: 60000,    // Reset circuit breaker after 1 minute
+    errorCount: 0,            // Current error count
+    tripped: false,           // Whether circuit is tripped
+    lastErrorTime: 0          // Last error timestamp
+};
+
 // Configure CORS properly
 app.use(cors({
     origin: '*',
@@ -157,6 +166,45 @@ async function initializeWebSockets() {
     }
 }
 
+// Function to check and update the circuit breaker
+function checkCircuitBreaker(success) {
+    const now = Date.now();
+    
+    // Reset circuit breaker after timeout
+    if (CIRCUIT_BREAKER.tripped && (now - CIRCUIT_BREAKER.lastErrorTime > CIRCUIT_BREAKER.resetTimeoutMs)) {
+        console.log('Circuit breaker timeout elapsed, resetting');
+        CIRCUIT_BREAKER.tripped = false;
+        CIRCUIT_BREAKER.errorCount = 0;
+    }
+    
+    if (success) {
+        // Reset error count on success
+        CIRCUIT_BREAKER.errorCount = 0;
+    } else {
+        // Increment error count and check if circuit should trip
+        CIRCUIT_BREAKER.errorCount++;
+        CIRCUIT_BREAKER.lastErrorTime = now;
+        
+        if (CIRCUIT_BREAKER.errorCount >= CIRCUIT_BREAKER.maxErrorCount) {
+            CIRCUIT_BREAKER.tripped = true;
+            console.error(`Circuit breaker tripped after ${CIRCUIT_BREAKER.errorCount} consecutive errors.`);
+            
+            // Notify via Telegram if configured
+            if (systemStatus.telegram) {
+                telegramBot.sendMessage('⚠️ WARNING: Trading circuit breaker has been tripped due to multiple consecutive errors. Trading operations have been suspended temporarily.');
+            }
+            
+            io.emit('trading-status', { 
+                active: false, 
+                circuitBreaker: true, 
+                message: 'Trading suspended due to multiple consecutive errors'
+            });
+        }
+    }
+    
+    return CIRCUIT_BREAKER.tripped;
+}
+
 // Helper function to get transactions for a symbol
 async function getTransactions(symbol) {
     let conn;
@@ -193,6 +241,36 @@ async function getHoldings(symbol) {
     }
 }
 
+// Validate trading parameters
+function validateTradeParams(params) {
+    // Check if symbol is valid
+    if (!params || !params.symbol) {
+        return { valid: false, error: 'Missing symbol in request' };
+    }
+    
+    // Check amount value
+    if (params.amount === undefined || params.amount === null) {
+        return { valid: false, error: 'Missing amount parameter' };
+    }
+    
+    const amount = parseFloat(params.amount);
+    if (isNaN(amount) || amount <= 0) {
+        return { valid: false, error: 'Invalid amount value' };
+    }
+    
+    // Validate amountType
+    const validAmountTypes = ['amount', 'usdt'];
+    if (params.amountType && !validAmountTypes.includes(params.amountType)) {
+        return { valid: false, error: 'Invalid amountType. Must be "amount" or "usdt"' };
+    }
+    
+    return { valid: true, params: {
+        symbol: params.symbol,
+        amount: amount,
+        amountType: params.amountType || 'amount'
+    }};
+}
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
     console.log('Client connected with ID:', socket.id);
@@ -201,7 +279,10 @@ io.on('connection', (socket) => {
     socket.emit('database-status', systemStatus.database);
     socket.emit('binance-status', systemStatus.binance);
     socket.emit('telegram-status', systemStatus.telegram);
-    socket.emit('trading-status', { active: websocketConnected });
+    socket.emit('trading-status', { 
+        active: websocketConnected && !CIRCUIT_BREAKER.tripped,
+        circuitBreaker: CIRCUIT_BREAKER.tripped
+    });
     
     // Handle client disconnection
     socket.on('disconnect', (reason) => {
@@ -305,28 +386,34 @@ io.on('connection', (socket) => {
         try {
             console.log('Buy order received:', data);
             
-            if (!data || !data.symbol) {
+            // Check if circuit breaker is tripped
+            if (CIRCUIT_BREAKER.tripped) {
                 socket.emit('buy-result', { 
                     success: false, 
-                    error: 'Missing symbol in buy order request' 
+                    error: 'Trading is currently suspended due to multiple consecutive errors. Please try again later.' 
                 });
                 return;
             }
             
-            const amount = parseFloat(data.amount) || 0;
-            if (isNaN(amount) || amount <= 0) {
+            // Validate parameters
+            const validation = validateTradeParams(data);
+            if (!validation.valid) {
                 socket.emit('buy-result', { 
                     success: false, 
-                    error: 'Invalid amount for buy order' 
+                    error: validation.error
                 });
                 return;
             }
-            
-            // Default to 'amount' type if not specified
-            const amountType = data.amountType || 'amount';
             
             // Execute the buy order
-            const result = await binanceAPI.executeBuyOrder(data.symbol, amount, amountType);
+            const result = await binanceAPI.executeBuyOrder(
+                validation.params.symbol, 
+                validation.params.amount, 
+                validation.params.amountType
+            );
+            
+            // Update circuit breaker status
+            checkCircuitBreaker(result.success);
             
             // Emit the result
             socket.emit('buy-result', result);
@@ -346,7 +433,7 @@ io.on('connection', (socket) => {
                         type: 'BUY',
                         price: result.price,
                         quantity: result.amount,
-                        investment: amount,
+                        investment: validation.params.amount,
                         timestamp: Date.now()
                     });
                 }
@@ -357,7 +444,7 @@ io.on('connection', (socket) => {
                         const conn = await pool.getConnection();
                         await conn.query(
                             'INSERT INTO transactions (symbol, type, price, quantity, investment) VALUES (?, ?, ?, ?, ?)',
-                            [data.symbol, 'BUY', result.price, result.amount, amount]
+                            [data.symbol, 'BUY', result.price, result.amount, validation.params.amount]
                         );
                         
                         // Update holdings
@@ -393,6 +480,9 @@ io.on('connection', (socket) => {
                 success: false, 
                 error: error.message 
             });
+            
+            // Update circuit breaker
+            checkCircuitBreaker(false);
         }
     });
     
@@ -401,28 +491,34 @@ io.on('connection', (socket) => {
         try {
             console.log('Sell order received:', data);
             
-            if (!data || !data.symbol) {
+            // Check if circuit breaker is tripped
+            if (CIRCUIT_BREAKER.tripped) {
                 socket.emit('sell-result', { 
                     success: false, 
-                    error: 'Missing symbol in sell order request' 
+                    error: 'Trading is currently suspended due to multiple consecutive errors. Please try again later.' 
                 });
                 return;
             }
             
-            const amount = parseFloat(data.amount) || 0;
-            if (isNaN(amount) || amount <= 0) {
+            // Validate parameters
+            const validation = validateTradeParams(data);
+            if (!validation.valid) {
                 socket.emit('sell-result', { 
                     success: false, 
-                    error: 'Invalid amount for sell order' 
+                    error: validation.error
                 });
                 return;
             }
-            
-            // Default to 'amount' type if not specified
-            const amountType = data.amountType || 'amount';
             
             // Execute the sell order
-            const result = await binanceAPI.executeSellOrder(data.symbol, amount, amountType);
+            const result = await binanceAPI.executeSellOrder(
+                validation.params.symbol, 
+                validation.params.amount, 
+                validation.params.amountType
+            );
+            
+            // Update circuit breaker status
+            checkCircuitBreaker(result.success);
             
             // Emit the result
             socket.emit('sell-result', result);
@@ -442,7 +538,7 @@ io.on('connection', (socket) => {
                         type: 'SELL',
                         price: result.price,
                         quantity: result.amount,
-                        investment: amount * result.price, // Approximate value of the sale
+                        investment: validation.params.amount * result.price, // Approximate value of the sale
                         timestamp: Date.now()
                     });
                 }
@@ -453,7 +549,7 @@ io.on('connection', (socket) => {
                         const conn = await pool.getConnection();
                         await conn.query(
                             'INSERT INTO transactions (symbol, type, price, quantity, investment) VALUES (?, ?, ?, ?, ?)',
-                            [data.symbol, 'SELL', result.price, result.amount, amount * result.price]
+                            [data.symbol, 'SELL', result.price, result.amount, validation.params.amount * result.price]
                         );
                         
                         // Update holdings
@@ -489,6 +585,9 @@ io.on('connection', (socket) => {
                 success: false, 
                 error: error.message 
             });
+            
+            // Update circuit breaker
+            checkCircuitBreaker(false);
         }
     });
 
@@ -536,8 +635,14 @@ io.on('connection', (socket) => {
                 
                 // Update WebSocket connected status
                 websocketConnected = true;
-                io.emit('trading-status', { active: websocketConnected });
-                console.log('Trading status updated:', { active: websocketConnected });
+                io.emit('trading-status', { 
+                    active: websocketConnected && !CIRCUIT_BREAKER.tripped,
+                    circuitBreaker: CIRCUIT_BREAKER.tripped
+                });
+                console.log('Trading status updated:', { 
+                    active: websocketConnected && !CIRCUIT_BREAKER.tripped,
+                    circuitBreaker: CIRCUIT_BREAKER.tripped
+                });
                 
             } catch (err) {
                 console.error('Error in test-binance-stream:', err);
@@ -558,7 +663,10 @@ io.on('connection', (socket) => {
     // Listen for WebSocket status updates
     socket.on('websocket-status', (status) => {
         websocketConnected = status.connected;
-        io.emit('trading-status', { active: websocketConnected });
+        io.emit('trading-status', { 
+            active: websocketConnected && !CIRCUIT_BREAKER.tripped,
+            circuitBreaker: CIRCUIT_BREAKER.tripped
+        });
         
         if (!websocketConnected) {
             console.log('WebSocket disconnected. Trading is paused until connection is restored.');
@@ -579,6 +687,15 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Check if circuit breaker is tripped
+            if (CIRCUIT_BREAKER.tripped) {
+                socket.emit('first-purchase-result', { 
+                    success: false, 
+                    error: 'Trading is currently suspended due to multiple consecutive errors. Please try again later.' 
+                });
+                return;
+            }
+            
             console.log(`First purchase request: ${JSON.stringify(data)}`);
             
             if (!data.symbol || !data.investment) {
@@ -589,16 +706,29 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Validate investment amount
+            const investment = parseFloat(data.investment);
+            if (isNaN(investment) || investment <= 0) {
+                socket.emit('first-purchase-result', {
+                    success: false,
+                    error: 'Invalid investment amount'
+                });
+                return;
+            }
+            
             // Get current price
             const priceData = await binanceAPI.getTickerPrice(data.symbol);
             const currentPrice = parseFloat(priceData.price);
             
             // Calculate quantity based on investment amount
-            const quantity = parseFloat(data.investment) / currentPrice;
+            const quantity = investment / currentPrice;
             
             // Execute buy order
             console.log(`Executing buy order: ${quantity} ${data.symbol} at $${currentPrice}`);
-            const result = await binanceAPI.executeBuyOrder(data.symbol, data.investment, 'usdt');
+            const result = await binanceAPI.executeBuyOrder(data.symbol, investment, 'usdt');
+            
+            // Update circuit breaker status
+            checkCircuitBreaker(result.success);
             
             if (!result.success) {
                 socket.emit('first-purchase-result', {
@@ -614,7 +744,7 @@ io.on('connection', (socket) => {
                 try {
                     await conn.query(
                         'INSERT INTO transactions (symbol, type, price, quantity, investment) VALUES (?, ?, ?, ?, ?)',
-                        [data.symbol, 'BUY', currentPrice, quantity, data.investment]
+                        [data.symbol, 'BUY', currentPrice, quantity, investment]
                     );
                     
                     // Update holdings
@@ -634,7 +764,7 @@ io.on('connection', (socket) => {
                     `Symbol: ${data.symbol}\n` +
                     `Price: $${currentPrice.toFixed(2)}\n` +
                     `Quantity: ${quantity.toFixed(6)}\n` +
-                    `Investment: $${data.investment}`
+                    `Investment: $${investment}`
                 );
             }
             
@@ -657,6 +787,9 @@ io.on('connection', (socket) => {
         } catch (err) {
             console.error('First purchase error:', err);
             socket.emit('first-purchase-result', { success: false, error: err.message });
+            
+            // Update circuit breaker
+            checkCircuitBreaker(false);
         }
     });
     
@@ -668,6 +801,15 @@ io.on('connection', (socket) => {
                 socket.emit('sell-all-result', { 
                     success: false, 
                     error: 'Trading is paused due to WebSocket connection issues. Please try again later.'
+                });
+                return;
+            }
+            
+            // Check if circuit breaker is tripped
+            if (CIRCUIT_BREAKER.tripped) {
+                socket.emit('sell-all-result', { 
+                    success: false, 
+                    error: 'Trading is currently suspended due to multiple consecutive errors. Please try again later.' 
                 });
                 return;
             }
@@ -703,6 +845,9 @@ io.on('connection', (socket) => {
             // Execute sell order
             console.log(`Executing sell order: ${holdings.quantity} ${data.symbol} at $${currentPrice}`);
             const result = await binanceAPI.createMarketSellOrder(data.symbol, holdings.quantity);
+            
+            // Update circuit breaker status
+            checkCircuitBreaker(result !== null);
             
             // Store transaction in database if connected
             if (systemStatus.database) {
@@ -752,6 +897,9 @@ io.on('connection', (socket) => {
         } catch (err) {
             console.error('Sell all error:', err);
             socket.emit('sell-all-result', { success: false, error: err.message });
+            
+            // Update circuit breaker
+            checkCircuitBreaker(false);
         }
     });
 });
@@ -779,14 +927,12 @@ process.on('SIGINT', async () => {
     console.log('Shutting down server...');
     
     // Disconnect all WebSockets
-    Object.keys(socketConnections).forEach(key => {
-        try {
-            console.log(`Closing WebSocket connection for ${key}`);
-            socketConnections[key].close();
-        } catch (error) {
-            console.error(`Error closing WebSocket for ${key}:`, error);
-        }
-    });
+    try {
+        await binanceAPI.closeAllConnections();
+        console.log('All WebSocket connections closed');
+    } catch (error) {
+        console.error('Error closing WebSocket connections:', error);
+    }
     
     // Close database pool
     try {

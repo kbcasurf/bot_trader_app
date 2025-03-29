@@ -3,705 +3,92 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Trading Bot - API Test</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        
-        body {
-            background-color: #f5f8fa;
-            color: #333;
-            line-height: 1.6;
-            padding: 20px;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        header {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        h1, h2, h3 {
-            color: #2c3e50;
-            margin-bottom: 15px;
-        }
-        
-        .section {
-            background-color: white;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-bottom: 20px;
-        }
-        
-        .status-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .status-item {
-            display: flex;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        
-        .status-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-right: 10px;
-            background-color: #7f8c8d;
-        }
-        
-        .status-dot.connected {
-            background-color: #2ecc71;
-        }
-        
-        .status-dot.disconnected {
-            background-color: #e74c3c;
-        }
-        
-        .controls {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-        
-        button {
-            padding: 10px 16px;
-            background-color: #3498db;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: 500;
-            transition: background-color 0.2s;
-            margin-right: 10px;
-            margin-bottom: 10px;
-        }
-        
-        button:hover {
-            background-color: #2980b9;
-        }
-        
-        button:disabled {
-            background-color: #95a5a6;
-            cursor: not-allowed;
-        }
-        
-        button.success {
-            background-color: #2ecc71;
-        }
-        
-        button.success:hover {
-            background-color: #27ae60;
-        }
-        
-        button.danger {
-            background-color: #e74c3c;
-        }
-        
-        button.danger:hover {
-            background-color: #c0392b;
-        }
-        
-        .crypto-card {
-            background-color: white;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-bottom: 20px;
-        }
-        
-        .crypto-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #ecf0f1;
-        }
-        
-        .crypto-price {
-            font-size: 1.5rem;
-            font-weight: bold;
-            margin: 10px 0;
-        }
-        
-        .balance-info {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 15px;
-            padding: 10px;
-            background-color: #f8f9fa;
-            border-radius: 4px;
-        }
-        
-        .trade-controls {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 15px;
-        }
-        
-        .buy-btn {
-            background-color: #2ecc71;
-        }
-        
-        .sell-btn {
-            background-color: #e74c3c;
-        }
-        
-        .transaction-history {
-            max-height: 150px;
-            overflow-y: auto;
-            margin-top: 15px;
-        }
-        
-        .transaction-item {
-            padding: 8px;
-            border-bottom: 1px solid #ecf0f1;
-            font-size: 0.9rem;
-        }
-        
-        .transaction-buy {
-            color: #2ecc71;
-        }
-        
-        .transaction-sell {
-            color: #e74c3c;
-        }
-        
-        .logs-container {
-            height: 300px;
-            overflow-y: auto;
-            background-color: #2c3e50;
-            color: #ecf0f1;
-            padding: 15px;
-            border-radius: 4px;
-            font-family: monospace;
-            font-size: 0.9rem;
-        }
-        
-        .log-entry {
-            margin-bottom: 5px;
-            border-bottom: 1px solid #34495e;
-            padding-bottom: 5px;
-        }
-        
-        .log-time {
-            color: #3498db;
-            margin-right: 8px;
-        }
-        
-        .log-info {
-            color: #2ecc71;
-        }
-        
-        .log-error {
-            color: #e74c3c;
-        }
-        
-        .log-warning {
-            color: #f39c12;
-        }
-        
-        .last-update {
-            font-size: 0.8rem;
-            color: #7f8c8d;
-            margin-top: 5px;
-        }
-    </style>
+    <title>Crypto Trading Bot</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <header>
-        <h1>Crypto Trading Bot - API Test</h1>
+        <h1>Cryptocurrency Trading Bot</h1>
+        <p>Automatically trade crypto with predefined strategies</p>
     </header>
-    
-    <div class="section">
-        <h2>Connection Status</h2>
-        <div class="status-container">
-            <div class="status-item">
+
+    <div class="status-section">
+        <div class="status-card" id="connection-status">
+            <h3>Connection Status</h3>
+            <div class="status-indicator">
                 <div class="status-dot" id="backend-status-dot"></div>
-                <span id="backend-status-text">Backend: Disconnected</span>
+                <span id="backend-status-text">Backend: Connecting...</span>
             </div>
-            <div class="status-item">
+            <div class="status-indicator">
+                <div class="status-dot" id="db-status-dot"></div>
+                <span id="db-status-text">Database: Connecting...</span>
+            </div>
+        </div>
+        <div class="status-card" id="api-status">
+            <h3>API Status</h3>
+            <div class="status-indicator">
                 <div class="status-dot" id="binance-status-dot"></div>
-                <span id="binance-status-text">Binance API: Disconnected</span>
+                <span id="binance-status-text">Binance: Connecting...</span>
             </div>
-            <div class="status-item">
-                <div class="status-dot" id="websocket-status-dot"></div>
-                <span id="websocket-status-text">WebSocket: Disconnected</span>
+            <div class="status-indicator">
+                <div class="status-dot" id="telegram-status-dot"></div>
+                <span id="telegram-status-text">Telegram: Connecting...</span>
             </div>
-        </div>
-        
-        <div class="controls">
-            <button id="connect-btn">Connect to Backend</button>
-            <button id="disconnect-btn" disabled>Disconnect</button>
-            <button id="test-binance-btn">Test Binance API</button>
-            <button id="test-websocket-btn">Test WebSocket</button>
-            <button id="clear-logs-btn">Clear Logs</button>
         </div>
     </div>
-    
-    <div id="btc-card" class="crypto-card">
-        <div class="crypto-header">
-            <h3>Bitcoin (BTC)</h3>
-            <div class="status-item">
-                <div class="status-dot" id="btc-connection-dot"></div>
-                <span>Live Updates</span>
-            </div>
-        </div>
-        
-        <div class="crypto-price" id="btc-price">$0.00</div>
-        <div class="last-update" id="btc-updated">Last update: Never</div>
-        
-        <div class="balance-info">
-            <div>
-                <strong>BTC Balance:</strong>
-                <span id="btc-balance">0.00000000</span>
-            </div>
-            <div>
-                <strong>Value:</strong>
-                <span id="btc-value">$0.00</span>
-            </div>
-        </div>
-        
-        <div class="trade-controls">
-            <button class="buy-btn" id="btc-buy">Buy $50 of BTC</button>
-            <button class="sell-btn" id="btc-sell">Sell $50 of BTC</button>
-        </div>
-        
-        <h3>Transaction History</h3>
-        <div class="transaction-history" id="btc-history">
-            <div class="transaction-item">No transactions yet</div>
+
+    <!-- Trading Status Section -->
+    <div class="trading-status">
+        <h3>Trading Status</h3>
+        <div class="status-indicator">
+            <div class="status-dot" id="trading-status-dot"></div>
+            <span id="trading-status-text">Trading: Unknown</span>
         </div>
     </div>
-    
-    <div class="section">
-        <h2>Event Logs</h2>
-        <div class="logs-container" id="logs"></div>
+
+    <div class="crypto-grid">
+        <!-- This is just a sample card as a placeholder -->
+        <div class="crypto-card" id="btc-card">
+            <div class="crypto-header">
+                <h3>BTC/USDT</h3>
+                <span class="current-price" id="btc-price">Price: $0.00</span>
+            </div>
+            <div class="investment-slider">
+                <label for="btc-investment">Investment Amount:</label>
+                <div class="slider-presets">
+                    <button class="preset-btn" data-value="50">$50</button>
+                    <button class="preset-btn active" data-value="100">$100</button>
+                    <button class="preset-btn" data-value="150">$150</button>
+                    <button class="preset-btn" data-value="200">$200</button>
+                </div>
+                <input type="hidden" id="btc-investment" value="100">
+            </div>
+            <button class="action-btn first-purchase" id="btc-first-purchase">First Purchase</button>
+            <div class="holdings">
+                <p>Current holdings: <span id="btc-holdings">0.00 BTC</span></p>
+            </div>
+            <div class="profit-loss-bar">
+                <div class="bar-fill" id="btc-profit-bar" style="width: 50%;"></div>
+            </div>
+            <p class="profit-loss-text">Profit/Loss: <span id="btc-profit-text">0.00%</span></p>
+            <div class="transaction-history">
+                <h4>Transaction History</h4>
+                <ul id="btc-history">
+                    <li class="no-transactions">No transactions yet</li>
+                </ul>
+            </div>
+            <button class="action-btn sell-all" id="btc-sell-all">Sell All</button>
+        </div>
     </div>
-    
-    <!-- Socket.io Library -->
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    
-    <script>
-        // DOM Elements
-        const connectBtn = document.getElementById('connect-btn');
-        const disconnectBtn = document.getElementById('disconnect-btn');
-        const testBinanceBtn = document.getElementById('test-binance-btn');
-        const testWebsocketBtn = document.getElementById('test-websocket-btn');
-        const clearLogsBtn = document.getElementById('clear-logs-btn');
-        
-        const backendStatusDot = document.getElementById('backend-status-dot');
-        const backendStatusText = document.getElementById('backend-status-text');
-        const binanceStatusDot = document.getElementById('binance-status-dot');
-        const binanceStatusText = document.getElementById('binance-status-text');
-        const websocketStatusDot = document.getElementById('websocket-status-dot');
-        const websocketStatusText = document.getElementById('websocket-status-text');
-        const btcConnectionDot = document.getElementById('btc-connection-dot');
-        
-        const logsContainer = document.getElementById('logs');
-        const btcPriceElement = document.getElementById('btc-price');
-        const btcUpdatedElement = document.getElementById('btc-updated');
-        const btcBalanceElement = document.getElementById('btc-balance');
-        const btcValueElement = document.getElementById('btc-value');
-        const btcHistoryElement = document.getElementById('btc-history');
-        const btcBuyBtn = document.getElementById('btc-buy');
-        const btcSellBtn = document.getElementById('btc-sell');
-        
-        // Global variables
-        let socket = null;
-        let btcPrice = 0;
-        let btcBalance = 0;
-        
-        // Function to log messages
-        function log(message, data = null, type = 'info') {
-            const now = new Date().toLocaleTimeString();
-            const logEntry = document.createElement('div');
-            logEntry.className = `log-entry log-${type}`;
-            
-            const timeSpan = document.createElement('span');
-            timeSpan.className = 'log-time';
-            timeSpan.textContent = `[${now}]`;
-            
-            logEntry.appendChild(timeSpan);
-            
-            // If data is provided, format it
-            let logText = ` ${message}`;
-            if (data) {
-                try {
-                    if (typeof data === 'object') {
-                        // Limit data size in UI
-                        const stringData = JSON.stringify(data);
-                        if (stringData.length > 500) {
-                            logText += ` ${stringData.substring(0, 500)}... [truncated]`;
-                        } else {
-                            logText += ` ${stringData}`;
-                        }
-                    } else {
-                        logText += ` ${data}`;
-                    }
-                } catch (error) {
-                    logText += ` [Error stringifying data: ${error.message}]`;
-                }
-            }
-            
-            logEntry.appendChild(document.createTextNode(logText));
-            logsContainer.appendChild(logEntry);
-            logsContainer.scrollTop = logsContainer.scrollHeight;
-            
-            // Also log to console
-            console.log(`[${now}] ${message}`, data || '');
-        }
-        
-        // Function to update status indicator
-        function updateStatusIndicator(dotElement, textElement, serviceName, isConnected) {
-            if (isConnected) {
-                dotElement.classList.add('connected');
-                dotElement.classList.remove('disconnected');
-                textElement.textContent = `${serviceName}: Connected`;
-            } else {
-                dotElement.classList.remove('connected');
-                dotElement.classList.add('disconnected');
-                textElement.textContent = `${serviceName}: Disconnected`;
-            }
-        }
-        
-        // Function to update BTC price display
-        function updateBtcPrice(price) {
-            btcPrice = parseFloat(price);
-            btcPriceElement.textContent = `$${btcPrice.toFixed(2)}`;
-            btcUpdatedElement.textContent = `Last update: ${new Date().toLocaleTimeString()}`;
-            
-            // Update BTC value
-            updateBtcValue();
-            
-            // Show connection as active
-            btcConnectionDot.classList.add('connected');
-        }
-        
-        // Function to update BTC balance display
-        function updateBtcBalance(balance) {
-            btcBalance = parseFloat(balance);
-            btcBalanceElement.textContent = btcBalance.toFixed(8);
-            
-            // Update BTC value
-            updateBtcValue();
-        }
-        
-        // Function to update BTC value display (price * balance)
-        function updateBtcValue() {
-            const value = btcPrice * btcBalance;
-            btcValueElement.textContent = `$${value.toFixed(2)}`;
-        }
-        
-        // Function to add a transaction to history
-        function addTransaction(type, amount, price) {
-            // Clear the "No transactions yet" message if it exists
-            if (btcHistoryElement.textContent.includes('No transactions yet')) {
-                btcHistoryElement.innerHTML = '';
-            }
-            
-            // Create a new transaction item
-            const transactionItem = document.createElement('div');
-            transactionItem.className = `transaction-item transaction-${type.toLowerCase()}`;
-            
-            const now = new Date().toLocaleTimeString();
-            const formattedPrice = parseFloat(price).toFixed(2);
-            const formattedAmount = parseFloat(amount).toFixed(8);
-            
-            // Set the transaction text
-            transactionItem.textContent = `${now} - ${type}: ${formattedAmount} BTC at $${formattedPrice}`;
-            
-            // Add to the top of the history container
-            btcHistoryElement.insertBefore(transactionItem, btcHistoryElement.firstChild);
-        }
-        
-        // Function to connect to the backend
-        function connectToBackend() {
-            if (socket && socket.connected) {
-                log('Already connected to backend');
-                return;
-            }
-            
-            const backendUrl = 'http://localhost:3000'; // Change this to your backend URL
-            log(`Connecting to backend at ${backendUrl}`);
-            
-            try {
-                // Create Socket.IO connection
-                socket = io(backendUrl, {
-                    transports: ['polling', 'websocket'],
-                    reconnectionAttempts: 5,
-                    timeout: 20000,
-                    forceNew: true
-                });
-                
-                // Socket.IO connection events
-                socket.on('connect', () => {
-                    log('Connected to backend');
-                    updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', true);
-                    
-                    // Update button states
-                    connectBtn.disabled = true;
-                    disconnectBtn.disabled = false;
-                    
-                    // Request system status
-                    socket.emit('get-system-status');
-                });
-                
-                socket.on('connect_error', (error) => {
-                    log('Connection error', error.message, 'error');
-                    updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', false);
-                });
-                
-                socket.on('disconnect', (reason) => {
-                    log('Disconnected from backend', reason, 'warning');
-                    updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', false);
-                    
-                    // Update other status indicators
-                    updateStatusIndicator(binanceStatusDot, binanceStatusText, 'Binance API', false);
-                    updateStatusIndicator(websocketStatusDot, websocketStatusText, 'WebSocket', false);
-                    
-                    // Update button states
-                    connectBtn.disabled = false;
-                    disconnectBtn.disabled = true;
-                    
-                    // Remove BTC connection
-                    btcConnectionDot.classList.remove('connected');
-                });
-                
-                // System status events
-                socket.on('binance-status', (isConnected) => {
-                    log('Binance API status update', { connected: isConnected });
-                    updateStatusIndicator(binanceStatusDot, binanceStatusText, 'Binance API', isConnected);
-                });
-                
-                socket.on('trading-status', (status) => {
-                    log('Trading status update', status);
-                    const isActive = status.active || false;
-                    updateStatusIndicator(websocketStatusDot, websocketStatusText, 'WebSocket', isActive);
-                });
-                
-                // WebSocket status updates
-                socket.on('websocket-status', (status) => {
-                    log('WebSocket status update', status);
-                    const isConnected = status.connected || false;
-                    updateStatusIndicator(websocketStatusDot, websocketStatusText, 'WebSocket', isConnected);
-                });
-                
-                // Price updates handling
-                socket.on('price-update', (data) => {
-                    log('Price update received', data);
-                    
-                    if (!data) {
-                        log('Invalid price update data', null, 'error');
-                        return;
-                    }
-                    
-                    // Handle different price data formats
-                    let symbol = '';
-                    let price = 0;
-                    
-                    if (data.symbol) {
-                        symbol = data.symbol;
-                    } else if (data.s) {
-                        symbol = data.s;
-                    } else {
-                        log('Missing symbol in price update', data, 'error');
-                        return;
-                    }
-                    
-                    if (data.price) {
-                        price = data.price;
-                    } else if (data.p) {
-                        price = data.p;
-                    } else if (data.c) {
-                        price = data.c; // Close price from ticker
-                    } else if (data.a) {
-                        price = data.a; // Ask price from bookTicker
-                    } else if (data.b) {
-                        price = data.b; // Bid price from bookTicker
-                    } else {
-                        log('Missing price in update', data, 'error');
-                        return;
-                    }
-                    
-                    // Only update if it's BTC
-                    if (symbol.toUpperCase().includes('BTC')) {
-                        updateBtcPrice(price);
-                    }
-                });
-                
-                // Account/balance info
-                socket.on('account-info', (accountInfo) => {
-                    log('Account info received', { balances: (accountInfo && accountInfo.balances) ? accountInfo.balances.length : 0 });
-                    
-                    if (accountInfo && accountInfo.balances) {
-                        // Look for BTC balance
-                        const btcBalance = accountInfo.balances.find(b => b.asset === 'BTC');
-                        if (btcBalance) {
-                            updateBtcBalance(btcBalance.free);
-                        }
-                    }
-                });
-                
-                // Transaction results
-                socket.on('buy-result', (result) => {
-                    if (result.success) {
-                        log('Buy order successful', result);
-                        
-                        // Add transaction to history
-                        if (result.symbol && result.amount && result.price) {
-                            addTransaction('BUY', result.amount, result.price);
-                            
-                            // Update balance if provided
-                            if (result.newBalance) {
-                                updateBtcBalance(result.newBalance);
-                            }
-                        }
-                    } else {
-                        log('Buy order failed', result, 'error');
-                        alert(`Buy order failed: ${result.error || 'Unknown error'}`);
-                    }
-                });
-                
-                socket.on('sell-result', (result) => {
-                    if (result.success) {
-                        log('Sell order successful', result);
-                        
-                        // Add transaction to history
-                        if (result.symbol && result.amount && result.price) {
-                            addTransaction('SELL', result.amount, result.price);
-                            
-                            // Update balance if provided
-                            if (result.newBalance !== undefined) {
-                                updateBtcBalance(result.newBalance);
-                            }
-                        }
-                    } else {
-                        log('Sell order failed', result, 'error');
-                        alert(`Sell order failed: ${result.error || 'Unknown error'}`);
-                    }
-                });
-                
-                // Test results
-                socket.on('binance-test-result', (result) => {
-                    log('Binance test result', result, result.success ? 'info' : 'error');
-                    
-                    if (result.success && result.prices) {
-                        // Update price from test
-                        if (result.prices.BTCUSDT) {
-                            updateBtcPrice(result.prices.BTCUSDT);
-                        }
-                    }
-                });
-                
-            } catch (error) {
-                log('Error creating Socket.IO connection', error.message, 'error');
-            }
-        }
-        
-        // Function to disconnect from backend
-        function disconnectFromBackend() {
-            if (socket && socket.connected) {
-                socket.disconnect();
-                log('Manually disconnected from backend');
-                
-                // Update UI
-                connectBtn.disabled = false;
-                disconnectBtn.disabled = true;
-            } else {
-                log('Not connected to backend');
-            }
-        }
-        
-        // Function to test Binance API
-        function testBinanceApi() {
-            if (!socket || !socket.connected) {
-                log('Not connected to backend', null, 'error');
-                alert('Please connect to the backend first!');
-                return;
-            }
-            
-            log('Testing Binance API connection');
-            
-            // Request both BTC price and account info
-            socket.emit('manual-binance-test', {
-                symbols: ['BTCUSDT']
-            });
-            
-            // Also request account info
-            socket.emit('get-account-info');
-        }
-        
-        // Function to test WebSocket connection
-        function testWebSocket() {
-            if (!socket || !socket.connected) {
-                log('Not connected to backend', null, 'error');
-                alert('Please connect to the backend first!');
-                return;
-            }
-            
-            log('Testing Binance WebSocket connection');
-            socket.emit('test-binance-stream');
-        }
-        
-        // Function to handle buy BTC request
-        function buyBtc() {
-            if (!socket || !socket.connected) {
-                log('Cannot buy BTC - not connected to backend', null, 'error');
-                alert('Please connect to the backend first!');
-                return;
-            }
-            
-            log('Sending buy request for BTC');
-            socket.emit('buy-order', {
-                symbol: 'BTCUSDT',
-                amount: 50, // $50 worth of BTC
-                amountType: 'usdt' // Indicating this is a USDT amount, not BTC amount
-            });
-        }
-        
-        // Function to handle sell BTC request
-        function sellBtc() {
-            if (!socket || !socket.connected) {
-                log('Cannot sell BTC - not connected to backend', null, 'error');
-                alert('Please connect to the backend first!');
-                return;
-            }
-            
-            log('Sending sell request for BTC');
-            socket.emit('sell-order', {
-                symbol: 'BTCUSDT',
-                amount: 50, // $50 worth of BTC
-                amountType: 'usdt' // Indicating this is a USDT amount, not BTC amount
-            });
-        }
-        
-        // Event listeners
-        connectBtn.addEventListener('click', connectToBackend);
-        disconnectBtn.addEventListener('click', disconnectFromBackend);
-        testBinanceBtn.addEventListener('click', testBinanceApi);
-        testWebsocketBtn.addEventListener('click', testWebSocket);
-        clearLogsBtn.addEventListener('click', () => {
-            logsContainer.innerHTML = '';
-            log('Logs cleared');
-        });
-        btcBuyBtn.addEventListener('click', buyBtc);
-        btcSellBtn.addEventListener('click', sellBtc);
-        
-        // Initialize
-        log('Page loaded. Click "Connect to Backend" to begin testing.');
-    </script>
+
+    <div class="test-actions">
+        <h3>Test Actions</h3>
+        <button id="test-telegram">Test Telegram Notification</button>
+        <button id="test-binance-stream">Test Binance Stream</button>
+    </div>
+
+    <script src="./js/dashboard.js" type="module"></script>
+    <script src="./js/cryptoBoard.js" type="module"></script>
+    <script src="./main.js" type="module"></script>
 </body>
 </html>
