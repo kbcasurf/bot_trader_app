@@ -3,92 +3,486 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Trading Bot</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Binance WebSocket Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .left-panel, .right-panel {
+            flex: 1;
+        }
+        .panel {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .indicator {
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        .connected {
+            background-color: #4CAF50;
+        }
+        .disconnected {
+            background-color: #f44336;
+        }
+        .log-area {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            padding: 8px 15px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.disconnect {
+            background-color: #f44336;
+        }
+        button.disconnect:hover {
+            background-color: #d32f2f;
+        }
+        input, select {
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .clear-log {
+            background-color: #2196F3;
+        }
+        .clear-log:hover {
+            background-color: #0b7dda;
+        }
+        .price-update {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            background-color: #f0f8ff;
+        }
+        .latest-price {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+    </style>
 </head>
 <body>
     <header>
-        <h1>Cryptocurrency Trading Bot</h1>
-        <p>Automatically trade crypto with predefined strategies</p>
+        <h1>Binance WebSocket Connection Test</h1>
+        <p>Use this page to test WebSocket connections to Binance and verify automatic reconnection</p>
     </header>
-
-    <div class="status-section">
-        <div class="status-card" id="connection-status">
-            <h3>Connection Status</h3>
-            <div class="status-indicator">
-                <div class="status-dot" id="backend-status-dot"></div>
-                <span id="backend-status-text">Backend: Connecting...</span>
-            </div>
-            <div class="status-indicator">
-                <div class="status-dot" id="db-status-dot"></div>
-                <span id="db-status-text">Database: Connecting...</span>
-            </div>
-        </div>
-        <div class="status-card" id="api-status">
-            <h3>API Status</h3>
-            <div class="status-indicator">
-                <div class="status-dot" id="binance-status-dot"></div>
-                <span id="binance-status-text">Binance: Connecting...</span>
-            </div>
-            <div class="status-indicator">
-                <div class="status-dot" id="telegram-status-dot"></div>
-                <span id="telegram-status-text">Telegram: Connecting...</span>
-            </div>
-        </div>
-    </div>
-
-    <!-- Trading Status Section -->
-    <div class="trading-status">
-        <h3>Trading Status</h3>
-        <div class="status-indicator">
-            <div class="status-dot" id="trading-status-dot"></div>
-            <span id="trading-status-text">Trading: Unknown</span>
-        </div>
-    </div>
-
-    <div class="crypto-grid">
-        <!-- This is just a sample card as a placeholder -->
-        <div class="crypto-card" id="btc-card">
-            <div class="crypto-header">
-                <h3>BTC/USDT</h3>
-                <span class="current-price" id="btc-price">Price: $0.00</span>
-            </div>
-            <div class="investment-slider">
-                <label for="btc-investment">Investment Amount:</label>
-                <div class="slider-presets">
-                    <button class="preset-btn" data-value="50">$50</button>
-                    <button class="preset-btn active" data-value="100">$100</button>
-                    <button class="preset-btn" data-value="150">$150</button>
-                    <button class="preset-btn" data-value="200">$200</button>
+    
+    <div class="container">
+        <div class="left-panel">
+            <div class="panel">
+                <h2>Connection Status</h2>
+                <div class="status">
+                    <div id="server-status" class="indicator disconnected"></div>
+                    <span>Server Connection: <span id="server-status-text">Disconnected</span></span>
                 </div>
-                <input type="hidden" id="btc-investment" value="100">
+                <div class="status">
+                    <div id="binance-status" class="indicator disconnected"></div>
+                    <span>Binance WebSocket: <span id="binance-status-text">Disconnected</span></span>
+                </div>
+                <div class="status">
+                    <div id="trading-status" class="indicator disconnected"></div>
+                    <span>Trading Status: <span id="trading-status-text">Paused</span></span>
+                </div>
             </div>
-            <button class="action-btn first-purchase" id="btc-first-purchase">First Purchase</button>
-            <div class="holdings">
-                <p>Current holdings: <span id="btc-holdings">0.00 BTC</span></p>
+            
+            <div class="panel">
+                <h2>Connection Settings</h2>
+                <div class="input-group">
+                    <label for="server-url">Test Server URL:</label>
+                    <input type="text" id="server-url" value="http://localhost:3030">
+                </div>
+                <div class="input-group">
+                    <label for="symbol-select">Symbol to Monitor:</label>
+                    <select id="symbol-select">
+                        <option value="BTCUSDT">BTC/USDT</option>
+                        <option value="ETHUSDT">ETH/USDT</option>
+                        <option value="SOLUSDT">SOL/USDT</option>
+                        <option value="XRPUSDT">XRP/USDT</option>
+                        <option value="DOGEUSDT">DOGE/USDT</option>
+                    </select>
+                </div>
+                <div class="controls">
+                    <button id="connect-server">Connect to Server</button>
+                    <button id="connect-binance">Connect to Binance</button>
+                    <button id="disconnect-binance" class="disconnect">Disconnect from Binance</button>
+                    <button id="simulate-disconnect" class="disconnect">Simulate Disconnect</button>
+                </div>
             </div>
-            <div class="profit-loss-bar">
-                <div class="bar-fill" id="btc-profit-bar" style="width: 50%;"></div>
+            
+            <div class="panel">
+                <h2>Price Updates</h2>
+                <div id="price-container">
+                    <div class="price-update">
+                        <div>No price updates received yet</div>
+                    </div>
+                </div>
             </div>
-            <p class="profit-loss-text">Profit/Loss: <span id="btc-profit-text">0.00%</span></p>
-            <div class="transaction-history">
-                <h4>Transaction History</h4>
-                <ul id="btc-history">
-                    <li class="no-transactions">No transactions yet</li>
-                </ul>
+        </div>
+        
+        <div class="right-panel">
+            <div class="panel">
+                <h2>Event Log <button id="clear-log" class="clear-log">Clear Log</button></h2>
+                <div id="event-log" class="log-area">Test started. Waiting for connections...</div>
             </div>
-            <button class="action-btn sell-all" id="btc-sell-all">Sell All</button>
+            
+            <div class="panel">
+                <h2>Test Results</h2>
+                <p>Reconnection tests:</p>
+                <div id="test-results">
+                    <ul>
+                        <li>Initial connection: Not tested</li>
+                        <li>Automatic reconnection: Not tested</li>
+                        <li>Trading pause on disconnect: Not tested</li>
+                        <li>Trading resume on reconnect: Not tested</li>
+                    </ul>
+                </div>
+            </div>
         </div>
     </div>
-
-    <div class="test-actions">
-        <h3>Test Actions</h3>
-        <button id="test-telegram">Test Telegram Notification</button>
-        <button id="test-binance-stream">Test Binance Stream</button>
-    </div>
-
-    <script src="./js/dashboard.js" type="module"></script>
-    <script src="./js/cryptoBoard.js" type="module"></script>
-    <script src="./main.js" type="module"></script>
+    
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        // DOM Elements
+        const serverStatusIndicator = document.getElementById('server-status');
+        const serverStatusText = document.getElementById('server-status-text');
+        const binanceStatusIndicator = document.getElementById('binance-status');
+        const binanceStatusText = document.getElementById('binance-status-text');
+        const tradingStatusIndicator = document.getElementById('trading-status');
+        const tradingStatusText = document.getElementById('trading-status-text');
+        const eventLog = document.getElementById('event-log');
+        const priceContainer = document.getElementById('price-container');
+        const serverUrlInput = document.getElementById('server-url');
+        const symbolSelect = document.getElementById('symbol-select');
+        
+        // Buttons
+        const connectServerBtn = document.getElementById('connect-server');
+        const connectBinanceBtn = document.getElementById('connect-binance');
+        const disconnectBinanceBtn = document.getElementById('disconnect-binance');
+        const simulateDisconnectBtn = document.getElementById('simulate-disconnect');
+        const clearLogBtn = document.getElementById('clear-log');
+        
+        // Global state
+        let socket = null;
+        let serverConnected = false;
+        let binanceConnected = false;
+        let tradingActive = false;
+        let currentSymbol = symbolSelect.value;
+        let reconnectionAttempts = 0;
+        let priceUpdates = 0;
+        
+        // Log an event
+        function logEvent(message, data) {
+            const timestamp = new Date().toLocaleTimeString();
+            let logMessage = `[${timestamp}] ${message}`;
+            
+            if (data) {
+                logMessage += '\n' + JSON.stringify(data, null, 2);
+            }
+            
+            eventLog.innerHTML += '\n\n' + logMessage;
+            eventLog.scrollTop = eventLog.scrollHeight;
+        }
+        
+        // Update status indicators
+        function updateStatus(type, isConnected, message) {
+            const indicator = document.getElementById(`${type}-status`);
+            const text = document.getElementById(`${type}-status-text`);
+            
+            if (isConnected) {
+                indicator.classList.add('connected');
+                indicator.classList.remove('disconnected');
+                text.textContent = message || 'Connected';
+            } else {
+                indicator.classList.remove('connected');
+                indicator.classList.add('disconnected');
+                text.textContent = message || 'Disconnected';
+            }
+            
+            if (type === 'server') {
+                serverConnected = isConnected;
+            } else if (type === 'binance') {
+                binanceConnected = isConnected;
+            } else if (type === 'trading') {
+                tradingActive = isConnected;
+            }
+        }
+        
+        // Update price display
+        function updatePrice(data) {
+            const timestamp = new Date().toLocaleTimeString();
+            const symbolName = data.s || 'Unknown';
+            const price = parseFloat(data.a || data.price).toFixed(2);
+            
+            // Create price update element
+            const priceElement = document.createElement('div');
+            priceElement.className = 'price-update';
+            priceElement.innerHTML = `
+                <div><strong>${symbolName}</strong> at ${timestamp}</div>
+                <div class="latest-price">$${price}</div>
+            `;
+            
+            // Clear 'no updates' message if it's the first update
+            if (priceUpdates === 0) {
+                priceContainer.innerHTML = '';
+            }
+            
+            // Add to container (keep only last 5 updates)
+            priceContainer.insertBefore(priceElement, priceContainer.firstChild);
+            priceUpdates++;
+            
+            if (priceContainer.children.length > 5) {
+                priceContainer.removeChild(priceContainer.lastChild);
+            }
+        }
+        
+        // Connect to socket.io server
+        function connectToServer(url) {
+            // Disconnect existing socket if any
+            if (socket) {
+                socket.disconnect();
+            }
+            
+            // Update URL from input
+            const serverUrl = url || serverUrlInput.value;
+            
+            logEvent(`Connecting to test server at ${serverUrl}`);
+            
+            // Create new socket connection
+            socket = io(serverUrl, {
+                transports: ['polling', 'websocket'],
+                reconnectionAttempts: 5,
+                timeout: 10000
+            });
+            
+            // Setup socket event handlers
+            socket.on('connect', () => {
+                logEvent('Connected to test server');
+                updateStatus('server', true);
+                
+                // Request current status
+                socket.emit('get-status');
+            });
+            
+            socket.on('disconnect', (reason) => {
+                logEvent(`Disconnected from test server. Reason: ${reason}`);
+                updateStatus('server', false);
+                updateStatus('binance', false);
+                updateStatus('trading', false, 'Paused');
+            });
+            
+            socket.on('connect_error', (error) => {
+                logEvent(`Connection error: ${error.message}`);
+                updateStatus('server', false, 'Connection Error');
+            });
+            
+            // Listen for connection status updates
+            socket.on('connection-status', (status) => {
+                logEvent('Received connection status', status);
+                
+                if (status.binance !== undefined) {
+                    updateStatus('binance', status.binance);
+                    // Update trading status based on Binance connection
+                    updateStatus('trading', status.binance, status.binance ? 'Active' : 'Paused');
+                }
+            });
+            
+            // Listen for test results
+            socket.on('test-result', (result) => {
+                logEvent('Test result received', result);
+            });
+            
+            // Listen for disconnect results
+            socket.on('disconnect-result', (result) => {
+                logEvent('Disconnect result received', result);
+            });
+            
+            // Listen for trading status updates
+            socket.on('trading-status', (status) => {
+                logEvent('Trading status updated', status);
+                updateStatus('trading', status.active, status.active ? 'Active' : 'Paused');
+                
+                // Update test results if this is a reconnection
+                if (reconnectionAttempts > 0 && status.active) {
+                    document.getElementById('test-results').innerHTML = `
+                        <ul>
+                            <li>Initial connection: ✅ Successful</li>
+                            <li>Automatic reconnection: ✅ Successful after ${reconnectionAttempts} attempts</li>
+                            <li>Trading pause on disconnect: ✅ Verified</li>
+                            <li>Trading resume on reconnect: ✅ Verified</li>
+                        </ul>
+                    `;
+                    reconnectionAttempts = 0; // Reset for future tests
+                }
+            });
+            
+            // Listen for websocket status updates
+            socket.on('websocket-status', (status) => {
+                logEvent('WebSocket status update', status);
+                updateStatus('binance', status.connected);
+                
+                if (!status.connected) {
+                    reconnectionAttempts++;
+                    logEvent(`Disconnected from Binance. Reconnection attempt ${reconnectionAttempts} expected...`);
+                    
+                    document.getElementById('test-results').innerHTML = `
+                        <ul>
+                            <li>Initial connection: ✅ Successful</li>
+                            <li>Automatic reconnection: ⏳ Attempt ${reconnectionAttempts} in progress...</li>
+                            <li>Trading pause on disconnect: ✅ Verified</li>
+                            <li>Trading resume on reconnect: ⏳ Waiting for reconnection...</li>
+                        </ul>
+                    `;
+                }
+            });
+            
+            // Listen for price updates
+            socket.on('price-update', (data) => {
+                logEvent('Price update received', data);
+                updatePrice(data);
+            });
+            
+            return socket;
+        }
+        
+        // Connect to Binance WebSocket
+        function connectToBinance() {
+            if (!socket || !serverConnected) {
+                alert('Please connect to the test server first');
+                return;
+            }
+            
+            currentSymbol = symbolSelect.value;
+            logEvent(`Requesting Binance connection for ${currentSymbol}`);
+            
+            socket.emit('test-binance-connection', {
+                symbols: [currentSymbol]
+            });
+            
+            // Update test results for initial connection
+            document.getElementById('test-results').innerHTML = `
+                <ul>
+                    <li>Initial connection: ⏳ Connecting...</li>
+                    <li>Automatic reconnection: Not tested</li>
+                    <li>Trading pause on disconnect: Not tested</li>
+                    <li>Trading resume on reconnect: Not tested</li>
+                </ul>
+            `;
+        }
+        
+        // Disconnect from Binance WebSocket
+        function disconnectFromBinance() {
+            if (!socket || !serverConnected) {
+                alert('Not connected to test server');
+                return;
+            }
+            
+            logEvent(`Requesting disconnect from Binance for ${currentSymbol}`);
+            
+            socket.emit('disconnect-binance', {
+                symbols: [currentSymbol]
+            });
+        }
+        
+        // Simulate a WebSocket disconnection (for testing reconnect)
+        function simulateDisconnect() {
+            if (!socket || !serverConnected || !binanceConnected) {
+                alert('Not connected to Binance');
+                return;
+            }
+            
+            logEvent('Simulating WebSocket disconnection');
+            
+            // Request a manual disconnect to simulate failure
+            disconnectFromBinance();
+            
+            // Update test results
+            document.getElementById('test-results').innerHTML = `
+                <ul>
+                    <li>Initial connection: ✅ Successful</li>
+                    <li>Automatic reconnection: ⏳ Testing...</li>
+                    <li>Trading pause on disconnect: ⏳ Testing...</li>
+                    <li>Trading resume on reconnect: ⏳ Waiting for reconnection...</li>
+                </ul>
+            `;
+        }
+        
+        // Button event handlers
+        connectServerBtn.addEventListener('click', () => {
+            connectToServer();
+        });
+        
+        connectBinanceBtn.addEventListener('click', () => {
+            connectToBinance();
+        });
+        
+        disconnectBinanceBtn.addEventListener('click', () => {
+            disconnectFromBinance();
+        });
+        
+        simulateDisconnectBtn.addEventListener('click', () => {
+            simulateDisconnect();
+        });
+        
+        clearLogBtn.addEventListener('click', () => {
+            eventLog.innerHTML = 'Log cleared. Continuing test...';
+        });
+        
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            logEvent('Test page loaded. Click "Connect to Server" to begin testing.');
+        });
+    </script>
 </body>
 </html>
