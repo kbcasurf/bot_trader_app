@@ -18,7 +18,7 @@ export default {
   // Add optimization for production build
   build: {
     outDir: 'dist',
-    minify: 'terser',
+    minify: 'esbuild',
     sourcemap: false
   }
 }
