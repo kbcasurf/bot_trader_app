@@ -44,7 +44,7 @@ async function getAccountInfo() {
         const signature = generateSignature(queryString);
         
         const response = await axios.get(
-            `${BASE_URL}/v3/account?${queryString}&signature=${signature}`,
+            `${BASE_URL}/api/v3/account?${queryString}&signature=${signature}`,
             {
                 headers: {
                     'X-MBX-APIKEY': API_KEY
@@ -62,7 +62,7 @@ async function getAccountInfo() {
 // Get current ticker price for a symbol
 async function getTickerPrice(symbol) {
     try {
-        const response = await axios.get(`${BASE_URL}/v3/ticker/price`, {
+        const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`, {
             params: { symbol }
         });
         
@@ -73,15 +73,126 @@ async function getTickerPrice(symbol) {
     }
 }
 
-// Create a market buy order
-async function createMarketBuyOrder(symbol, quantity) {
+// Get ticker price for multiple symbols
+async function getMultipleTickers(symbols = []) {
     try {
+        // If no symbols provided, get all tickers
+        const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`);
+        
+        if (symbols.length === 0) {
+            return response.data;
+        }
+        
+        // Filter the results if symbols were provided
+        return response.data.filter(ticker => 
+            symbols.includes(ticker.symbol)
+        );
+    } catch (error) {
+        console.error('Failed to get multiple tickers:', error.message);
+        throw error;
+    }
+}
+
+// Calculate order quantity based on USDT amount
+async function calculateQuantityFromUsdt(symbol, usdtAmount) {
+    try {
+        // Get current price
+        const tickerData = await getTickerPrice(symbol);
+        const price = parseFloat(tickerData.price);
+        
+        if (isNaN(price) || price <= 0) {
+            throw new Error(`Invalid price for ${symbol}: ${price}`);
+        }
+        
+        // Calculate quantity
+        const quantity = usdtAmount / price;
+        
+        // Get symbol info to properly format quantity according to Binance's rules
+        const exchangeInfo = await getExchangeInfo(symbol);
+        
+        // Apply correct precision
+        const formattedQuantity = formatQuantity(quantity, exchangeInfo);
+        
+        return {
+            quantity: formattedQuantity, 
+            price: price,
+            rawQuantity: quantity
+        };
+    } catch (error) {
+        console.error(`Error calculating quantity for ${usdtAmount} USDT of ${symbol}:`, error);
+        throw error;
+    }
+}
+
+// Get exchange info for a symbol
+async function getExchangeInfo(symbol) {
+    try {
+        const response = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`, {
+            params: { symbol }
+        });
+        
+        // Find the symbol info
+        const symbolInfo = response.data.symbols.find(s => s.symbol === symbol);
+        if (!symbolInfo) {
+            throw new Error(`Symbol ${symbol} not found in exchange info`);
+        }
+        
+        return symbolInfo;
+    } catch (error) {
+        console.error(`Failed to get exchange info for ${symbol}:`, error.message);
+        throw error;
+    }
+}
+
+// Format quantity according to lot size filter
+function formatQuantity(quantity, symbolInfo) {
+    try {
+        // Find the LOT_SIZE filter
+        const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
+        
+        if (!lotSizeFilter) {
+            console.warn(`No LOT_SIZE filter found for ${symbolInfo.symbol}, using raw quantity`);
+            return quantity.toString();
+        }
+        
+        // Get the step size
+        const stepSize = parseFloat(lotSizeFilter.stepSize);
+        
+        // Calculate precision from step size
+        const precision = stepSize.toString().includes('.')
+            ? stepSize.toString().split('.')[1].length
+            : 0;
+        
+        // Round down to the nearest step
+        const roundedQuantity = Math.floor(quantity / stepSize) * stepSize;
+        
+        // Format to correct precision
+        return roundedQuantity.toFixed(precision);
+    } catch (error) {
+        console.error('Error formatting quantity:', error);
+        return quantity.toString();
+    }
+}
+
+// Create a market buy order
+async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
+    try {
+        let orderQuantity = quantity;
+        let price = null;
+        
+        // If isUsdtAmount is true, convert USDT amount to asset quantity
+        if (isUsdtAmount) {
+            const quantityData = await calculateQuantityFromUsdt(symbol, quantity);
+            orderQuantity = quantityData.quantity;
+            price = quantityData.price;
+        }
+        
         const timestamp = Date.now();
-        const queryString = `symbol=${symbol}&side=BUY&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
+        const queryString = `symbol=${symbol}&side=BUY&type=MARKET&quantity=${orderQuantity}&timestamp=${timestamp}`;
         const signature = generateSignature(queryString);
         
         const response = await axios.post(
-            `${BASE_URL}/v3/order?${queryString}&signature=${signature}`,
+            `${BASE_URL}/api/v3/order?${queryString}&signature=${signature}`,
             null, // No request body for GET-like POST
             {
                 headers: {
@@ -89,6 +200,11 @@ async function createMarketBuyOrder(symbol, quantity) {
                 }
             }
         );
+        
+        // Add price to response if we calculated it
+        if (price) {
+            response.data.calculatedPrice = price;
+        }
         
         return response.data;
     } catch (error) {
@@ -98,14 +214,33 @@ async function createMarketBuyOrder(symbol, quantity) {
 }
 
 // Create a market sell order
-async function createMarketSellOrder(symbol, quantity) {
+async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
     try {
+        let orderQuantity = quantity;
+        let price = null;
+        
+        // If isUsdtAmount is true, convert USDT amount to asset quantity
+        if (isUsdtAmount) {
+            const quantityData = await calculateQuantityFromUsdt(symbol, quantity);
+            orderQuantity = quantityData.quantity;
+            price = quantityData.price;
+            
+            // For sell orders, also check if we have enough balance
+            const accountInfo = await getAccountInfo();
+            const asset = symbol.replace('USDT', '');
+            const assetBalance = accountInfo.balances.find(b => b.asset === asset);
+            
+            if (!assetBalance || parseFloat(assetBalance.free) < parseFloat(orderQuantity)) {
+                throw new Error(`Insufficient ${asset} balance. Required: ${orderQuantity}, Available: ${assetBalance ? assetBalance.free : 0}`);
+            }
+        }
+        
         const timestamp = Date.now();
-        const queryString = `symbol=${symbol}&side=SELL&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
+        const queryString = `symbol=${symbol}&side=SELL&type=MARKET&quantity=${orderQuantity}&timestamp=${timestamp}`;
         const signature = generateSignature(queryString);
         
         const response = await axios.post(
-            `${BASE_URL}/v3/order?${queryString}&signature=${signature}`,
+            `${BASE_URL}/api/v3/order?${queryString}&signature=${signature}`,
             null, // No request body for GET-like POST
             {
                 headers: {
@@ -114,6 +249,11 @@ async function createMarketSellOrder(symbol, quantity) {
             }
         );
         
+        // Add price to response if we calculated it
+        if (price) {
+            response.data.calculatedPrice = price;
+        }
+        
         return response.data;
     } catch (error) {
         console.error(`Failed to create market sell order for ${symbol}:`, error.message);
@@ -121,83 +261,8 @@ async function createMarketSellOrder(symbol, quantity) {
     }
 }
 
-// Handle setting up a connection to Binance WebSocket using Socket.io server
-function setupBinanceSocketServer(server) {
-    // Create a Socket.io namespace for Binance streams
-    const binanceNsp = server.of('/binance');
-
-    binanceNsp.on('connection', (socket) => {
-        console.log('Client connected to Binance namespace');
-
-        // Handle subscription requests
-        socket.on('subscribe', (data) => {
-            const { symbols } = data;
-            if (symbols && symbols.length > 0) {
-                subscribeToTickerStream(symbols, socket);
-            }
-        });
-
-        // Handle unsubscribe requests
-        socket.on('unsubscribe', (data) => {
-            const { symbols } = data;
-            if (symbols && symbols.length > 0) {
-                unsubscribeFromTickerStream(symbols, socket);
-            }
-        });
-
-        // Clean up on disconnect
-        socket.on('disconnect', () => {
-            console.log('Client disconnected from Binance namespace');
-            // Clean up any socket-specific resources
-        });
-    });
-
-    return binanceNsp;
-}
-
-async function manualConnectAndGetPrices(symbols) {
-    try {
-        console.log(`Manually connecting to Binance for symbols: ${symbols.join(', ')}`);
-        
-        // First test connectivity
-        const connected = await testConnection();
-        if (!connected) {
-            console.error('Could not connect to Binance API.');
-            return { success: false, error: 'API connection failed' };
-        }
-        
-        // Get current prices from REST API
-        const prices = {};
-        for (const symbol of symbols) {
-            try {
-                const data = await getTickerPrice(symbol);
-                prices[symbol] = data.price;
-                console.log(`Got price for ${symbol}: ${data.price}`);
-            } catch (err) {
-                console.error(`Error getting price for ${symbol}:`, err.message);
-            }
-        }
-        
-        // Now try to set up WebSocket for real-time updates
-        const handleUpdate = (data) => {
-            console.log('WebSocket update received:', data);
-        };
-        
-        subscribeToTickerStream(symbols, handleUpdate);
-        
-        return { 
-            success: true, 
-            prices,
-            message: 'Manual connection established and WebSocket initiated'
-        };
-    } catch (err) {
-        console.error('Manual connection error:', err);
-        return { success: false, error: err.message };
-    }
-}
-
 // Subscribe to ticker stream using native WebSocket
-function subscribeToTickerStream(symbols, callback) {
+function subscribeToTickerStream(symbols, io) {
     const symbolsKey = symbols.join('-');
     
     // Check if we already have an active connection for these symbols
@@ -224,118 +289,88 @@ function subscribeToTickerStream(symbols, callback) {
             ws.isAlive = true;
             ws.reconnectAttempts = 0;
             
-            // Emit connection status if callback is a Socket.io socket
-            if (typeof callback === 'object' && callback.emit) {
-                callback.emit('websocket-status', { 
-                    connected: true, 
-                    symbols 
-                });
-            }
-            
-            // Start ping-pong for connection health check
-            startPingPong(ws);
+            // Emit connection status
+            io.emit('websocket-status', { 
+                connected: true, 
+                symbols 
+            });
         });
         
         ws.on('message', (data) => {
             try {
-                // Log the raw message for debugging
-                if (data) {
-                    console.log('Raw WebSocket message received:', 
-                        data.toString().substring(0, 100) + '...');
-                }
-                
                 // Parse data
                 const parsedData = JSON.parse(data.toString());
                 
-                // Simple logging of the structure
-                console.log('Message structure:', Object.keys(parsedData));
+                // Log summarized data to avoid console spam
+                console.log(`Received WebSocket data for stream: ${parsedData.stream || 'unknown'}`);
                 
                 // Extract price data
-                let symbol, price;
+                let symbol, price, priceChangePercent;
                 
                 // Handle different Binance WebSocket data formats
                 if (parsedData.data) {
                     // Format: { data: { s: "BTCUSDT", ... } }
                     if (parsedData.data.s) {
                         symbol = parsedData.data.s;
-                        // For ticker format
-                        price = parsedData.data.c || parsedData.data.a || parsedData.data.b;
+                        // Price and price change percentage for ticker format
+                        price = parsedData.data.c; // Last price
+                        priceChangePercent = parsedData.data.P; // Price change percent
                     } else if (parsedData.data.symbol) {
                         symbol = parsedData.data.symbol;
-                        price = parsedData.data.price || parsedData.data.close || parsedData.data.lastPrice;
+                        price = parsedData.data.price || parsedData.data.lastPrice;
+                        priceChangePercent = parsedData.data.priceChangePercent;
                     }
                 } else if (parsedData.s) {
                     // Format: { s: "BTCUSDT", ... }
                     symbol = parsedData.s;
-                    // For ticker format
-                    price = parsedData.a || parsedData.b || parsedData.c || parsedData.p;
-                } else if (parsedData.stream && parsedData.data) {
-                    // Format: { stream: "...", data: { ... } }
-                    if (parsedData.data.s) {
-                        symbol = parsedData.data.s;
-                        // For ticker format
-                        price = parsedData.data.c || parsedData.data.a || parsedData.data.b;
-                    } else if (parsedData.data.symbol) {
-                        symbol = parsedData.data.symbol;
-                        price = parsedData.data.price || parsedData.data.close || parsedData.data.lastPrice;
-                    }
+                    price = parsedData.c || parsedData.p;
+                    priceChangePercent = parsedData.P;
                 }
                 
                 // If we couldn't extract the necessary data, log and return
                 if (!symbol || !price) {
-                    console.warn('Could not extract symbol or price from message:', parsedData);
+                    console.warn('Could not extract symbol or price from message.');
                     return;
                 }
-                
-                console.log(`Successfully extracted data - Symbol: ${symbol}, Price: ${price}`);
                 
                 // Create a simplified data object for our app
                 const simplifiedData = {
                     symbol: symbol,
-                    price: price
+                    price: price,
+                    P: priceChangePercent // Include price change percent if available
                 };
                 
-                // Forward the data to the callback
-                if (typeof callback === 'object' && callback.emit) {
-                    callback.emit('price-update', simplifiedData);
-                } else if (typeof callback === 'function') {
-                    callback(simplifiedData);
-                }
+                // Emit price update
+                io.emit('price-update', simplifiedData);
             } catch (error) {
                 console.error('Error handling WebSocket message:', error.message);
-                if (typeof data === 'string') {
-                    console.error('Raw data (first 200 chars):', data.substring(0, 200));
-                } else if (data) {
-                    console.error('Raw data (Buffer):', data.toString().substring(0, 200));
-                }
             }
         });
         
         ws.on('error', (error) => {
             console.error('WebSocket error:', error.message);
-            if (typeof callback === 'object' && callback.emit) {
-                callback.emit('websocket-status', { 
-                    connected: false, 
-                    error: error.message, 
-                    symbols 
-                });
-            }
+            io.emit('websocket-status', { 
+                connected: false, 
+                error: error.message, 
+                symbols 
+            });
         });
         
         ws.on('close', (code, reason) => {
             console.log(`WebSocket closed for ${symbols.join(', ')}. Code: ${code}, Reason: ${reason}`);
             ws.isAlive = false;
             
-            if (typeof callback === 'object' && callback.emit) {
-                callback.emit('websocket-status', { connected: false, symbols });
-            }
+            io.emit('websocket-status', { connected: false, symbols });
             
             // Attempt to reconnect with exponential backoff
-            handleReconnect(ws, symbols, callback);
+            handleReconnect(ws, symbols, io);
         });
         
         // Initialize ping timer ID
         ws.pingTimerId = null;
+        
+        // Start ping-pong for connection health check
+        startPingPong(ws);
         
         // Store connection reference
         socketConnections[symbolsKey] = ws;
@@ -361,8 +396,7 @@ function startPingPong(ws) {
         
         ws.isAlive = false;
         // For Binance WebSocket, we can't send actual ping frames
-        // Instead we send a simple message that should get a response
-        // but since Binance doesn't support pings directly, we check for timeouts
+        // Instead we use a timeout to check if any messages were received
         setTimeout(() => {
             if (ws.isAlive === false && ws.readyState === WebSocket.OPEN) {
                 console.log('WebSocket connection timed out. Reconnecting...');
@@ -373,7 +407,7 @@ function startPingPong(ws) {
 }
 
 // Handle reconnection with exponential backoff
-function handleReconnect(ws, symbols, callback) {
+function handleReconnect(ws, symbols, io) {
     const symbolsKey = ws.symbolsKey;
     
     // Don't reconnect if we've exceeded max attempts or connection is open
@@ -402,12 +436,12 @@ function handleReconnect(ws, symbols, callback) {
         ws.reconnectAttempts++;
         
         // Create a new connection
-        subscribeToTickerStream(symbols, callback);
+        subscribeToTickerStream(symbols, io);
     }, delay);
 }
 
 // Unsubscribe from ticker stream
-function unsubscribeFromTickerStream(symbols, socket) {
+function unsubscribeFromTickerStream(symbols, io) {
     const key = symbols.join('-');
     const connection = socketConnections[key];
     
@@ -422,21 +456,173 @@ function unsubscribeFromTickerStream(symbols, socket) {
         delete socketConnections[key];
         console.log(`Unsubscribed from ticker stream for ${symbols.join(', ')}`);
         
-        // Emit status update if socket is provided
-        if (socket && typeof socket.emit === 'function') {
-            socket.emit('websocket-status', { connected: false, symbols });
+        // Emit status update
+        if (io) {
+            io.emit('websocket-status', { connected: false, symbols });
         }
+        return true;
+    } else {
+        console.log(`No active connection found for ${symbols.join(', ')}`);
+        return false;
     }
+}
+
+// Manually connect and get prices
+async function manualConnectAndGetPrices(symbols) {
+    try {
+        console.log(`Manually connecting to Binance for symbols: ${symbols.join(', ')}`);
+        
+        // First test connectivity
+        const connected = await testConnection();
+        if (!connected) {
+            console.error('Could not connect to Binance API.');
+            return { success: false, error: 'API connection failed' };
+        }
+        
+        // Get current prices from REST API
+        const prices = {};
+        for (const symbol of symbols) {
+            try {
+                const data = await getTickerPrice(symbol);
+                prices[symbol] = data.price;
+                console.log(`Got price for ${symbol}: ${data.price}`);
+            } catch (err) {
+                console.error(`Error getting price for ${symbol}:`, err.message);
+            }
+        }
+        
+        return { 
+            success: true, 
+            prices,
+            message: 'Manual connection established successfully'
+        };
+    } catch (err) {
+        console.error('Manual connection error:', err);
+        return { success: false, error: err.message };
+    }
+}
+
+// Execute a buy order based on USDT value
+async function executeBuyOrder(symbol, amount, amountType = 'amount') {
+    try {
+        let quantity = amount;
+        let price;
+        
+        // If the amount is specified in USDT, calculate the quantity
+        if (amountType === 'usdt') {
+            const quantityData = await calculateQuantityFromUsdt(symbol, amount);
+            quantity = quantityData.quantity;
+            price = quantityData.price;
+        } else {
+            // Get current price for reference
+            const tickerData = await getTickerPrice(symbol);
+            price = parseFloat(tickerData.price);
+        }
+        
+        // Execute the buy order
+        const result = await createMarketBuyOrder(symbol, quantity);
+        
+        // Get updated balance
+        const accountInfo = await getAccountInfo();
+        const baseAsset = symbol.replace('USDT', '');
+        const assetBalance = accountInfo.balances.find(b => b.asset === baseAsset);
+        const newBalance = assetBalance ? parseFloat(assetBalance.free) : 0;
+        
+        return {
+            success: true,
+            symbol,
+            amount: quantity,
+            price,
+            newBalance,
+            orderResult: result
+        };
+    } catch (error) {
+        console.error(`Error executing buy order for ${symbol}:`, error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+// Execute a sell order based on USDT value
+async function executeSellOrder(symbol, amount, amountType = 'amount') {
+    try {
+        let quantity = amount;
+        let price;
+        
+        // If the amount is specified in USDT, calculate the quantity
+        if (amountType === 'usdt') {
+            const quantityData = await calculateQuantityFromUsdt(symbol, amount);
+            quantity = quantityData.quantity;
+            price = quantityData.price;
+        } else {
+            // Get current price for reference
+            const tickerData = await getTickerPrice(symbol);
+            price = parseFloat(tickerData.price);
+        }
+        
+        // Get current balance to check if sufficient
+        const accountInfo = await getAccountInfo();
+        const baseAsset = symbol.replace('USDT', '');
+        const assetBalance = accountInfo.balances.find(b => b.asset === baseAsset);
+        const currentBalance = assetBalance ? parseFloat(assetBalance.free) : 0;
+        
+        if (currentBalance < parseFloat(quantity)) {
+            return {
+                success: false,
+                error: `Insufficient ${baseAsset} balance. Required: ${quantity}, Available: ${currentBalance}`
+            };
+        }
+        
+        // Execute the sell order
+        const result = await createMarketSellOrder(symbol, quantity);
+        
+        // Get updated balance
+        const updatedAccountInfo = await getAccountInfo();
+        const updatedAssetBalance = updatedAccountInfo.balances.find(b => b.asset === baseAsset);
+        const newBalance = updatedAssetBalance ? parseFloat(updatedAssetBalance.free) : 0;
+        
+        return {
+            success: true,
+            symbol,
+            amount: quantity,
+            price,
+            newBalance,
+            orderResult: result
+        };
+    } catch (error) {
+        console.error(`Error executing sell order for ${symbol}:`, error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+// Initialize WebSocket connections for the configured symbols
+function initializeWebSockets(io) {
+    // List of symbols to track
+    const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
+    
+    console.log(`Initializing WebSocket connections for ${symbols.join(', ')}`);
+    
+    // Subscribe to ticker streams
+    return subscribeToTickerStream(symbols, io);
 }
 
 module.exports = {
     testConnection,
     getAccountInfo,
     getTickerPrice,
+    getMultipleTickers,
+    calculateQuantityFromUsdt,
     createMarketBuyOrder,
     createMarketSellOrder,
-    setupBinanceSocketServer,
     subscribeToTickerStream,
     unsubscribeFromTickerStream,
-    manualConnectAndGetPrices
+    manualConnectAndGetPrices,
+    executeBuyOrder,
+    executeSellOrder,
+    initializeWebSockets
 };
