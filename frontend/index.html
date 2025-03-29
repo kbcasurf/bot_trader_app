@@ -3,92 +3,641 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Trading Bot</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Crypto Trading Bot - Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        #status, #events, #requests {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            min-height: 50px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .connected {
+            color: green;
+        }
+        .disconnected {
+            color: red;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+            margin-bottom: 20px;
+        }
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            transition: 0.3s;
+            color: black;
+        }
+        .tab button:hover {
+            background-color: #ddd;
+        }
+        .tab button.active {
+            background-color: #ccc;
+        }
+        .tabcontent {
+            display: none;
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            border-top: none;
+        }
+        #connectionPanel {
+            display: block;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #7f8c8d;
+            margin-right: 10px;
+        }
+        .status-dot.connected {
+            background-color: #2ecc71;
+        }
+        .status-dot.disconnected {
+            background-color: #e74c3c;
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .price-display {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .price-card {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+            background-color: #f9f9f9;
+        }
+        .price-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .event-timestamp {
+            color: #7f8c8d;
+            font-size: 0.8em;
+            margin-right: 5px;
+        }
+        .event-success {
+            color: #2ecc71;
+        }
+        .event-error {
+            color: #e74c3c;
+        }
+        .event-warning {
+            color: #f39c12;
+        }
+    </style>
 </head>
 <body>
-    <header>
-        <h1>Cryptocurrency Trading Bot</h1>
-        <p>Automatically trade crypto with predefined strategies</p>
-    </header>
-
-    <div class="status-section">
-        <div class="status-card" id="connection-status">
-            <h3>Connection Status</h3>
+    <h1>Crypto Trading Bot - Connection Test</h1>
+    
+    <div class="tab">
+        <button class="tablinks active" onclick="openTab(event, 'connectionPanel')">Connection</button>
+        <button class="tablinks" onclick="openTab(event, 'pricePanel')">Price Updates</button>
+        <button class="tablinks" onclick="openTab(event, 'logsPanel')">Logs</button>
+    </div>
+    
+    <div id="connectionPanel" class="tabcontent">
+        <div class="section">
+            <h2>Connection Status</h2>
             <div class="status-indicator">
                 <div class="status-dot" id="backend-status-dot"></div>
-                <span id="backend-status-text">Backend: Connecting...</span>
+                <span id="backend-status-text">Backend: Disconnected</span>
             </div>
             <div class="status-indicator">
                 <div class="status-dot" id="db-status-dot"></div>
-                <span id="db-status-text">Database: Connecting...</span>
+                <span id="db-status-text">Database: Disconnected</span>
             </div>
-        </div>
-        <div class="status-card" id="api-status">
-            <h3>API Status</h3>
             <div class="status-indicator">
                 <div class="status-dot" id="binance-status-dot"></div>
-                <span id="binance-status-text">Binance: Connecting...</span>
+                <span id="binance-status-text">Binance: Disconnected</span>
             </div>
             <div class="status-indicator">
                 <div class="status-dot" id="telegram-status-dot"></div>
-                <span id="telegram-status-text">Telegram: Connecting...</span>
+                <span id="telegram-status-text">Telegram: Disconnected</span>
+            </div>
+            <div class="status-indicator">
+                <div class="status-dot" id="trading-status-dot"></div>
+                <span id="trading-status-text">Trading: Inactive</span>
             </div>
         </div>
-    </div>
-
-    <!-- Trading Status Section -->
-    <div class="trading-status">
-        <h3>Trading Status</h3>
-        <div class="status-indicator">
-            <div class="status-dot" id="trading-status-dot"></div>
-            <span id="trading-status-text">Trading: Unknown</span>
+        
+        <div class="section">
+            <h2>Connection Controls</h2>
+            <button id="connect-backend">Connect to Backend</button>
+            <button id="disconnect-backend">Disconnect</button>
+            <button id="test-binance-stream">Test Binance Stream</button>
+            <button id="test-telegram">Test Telegram</button>
+            <button id="debug-btc-element">Debug Price Elements</button>
+            <button id="clear-logs">Clear Logs</button>
         </div>
     </div>
-
-    <div class="crypto-grid">
-        <!-- This is just a sample card as a placeholder -->
-        <div class="crypto-card" id="btc-card">
-            <div class="crypto-header">
-                <h3>BTC/USDT</h3>
-                <span class="current-price" id="btc-price">Price: $0.00</span>
-            </div>
-            <div class="investment-slider">
-                <label for="btc-investment">Investment Amount:</label>
-                <div class="slider-presets">
-                    <button class="preset-btn" data-value="50">$50</button>
-                    <button class="preset-btn active" data-value="100">$100</button>
-                    <button class="preset-btn" data-value="150">$150</button>
-                    <button class="preset-btn" data-value="200">$200</button>
+    
+    <div id="pricePanel" class="tabcontent">
+        <div class="section">
+            <h2>Real-time Price Updates</h2>
+            <p>Updates will appear here when received from Binance WebSocket.</p>
+            <div class="price-display">
+                <div class="price-card">
+                    <h3>BTC/USDT</h3>
+                    <div class="price-value" id="btc-price">Price: $0.00</div>
+                    <div class="last-update" id="btc-updated">Last update: Never</div>
                 </div>
-                <input type="hidden" id="btc-investment" value="100">
+                <div class="price-card">
+                    <h3>SOL/USDT</h3>
+                    <div class="price-value" id="sol-price">Price: $0.00</div>
+                    <div class="last-update" id="sol-updated">Last update: Never</div>
+                </div>
+                <div class="price-card">
+                    <h3>XRP/USDT</h3>
+                    <div class="price-value" id="xrp-price">Price: $0.00</div>
+                    <div class="last-update" id="xrp-updated">Last update: Never</div>
+                </div>
+                <div class="price-card">
+                    <h3>DOGE/USDT</h3>
+                    <div class="price-value" id="doge-price">Price: $0.00</div>
+                    <div class="last-update" id="doge-updated">Last update: Never</div>
+                </div>
+                <div class="price-card">
+                    <h3>NEAR/USDT</h3>
+                    <div class="price-value" id="near-price">Price: $0.00</div>
+                    <div class="last-update" id="near-updated">Last update: Never</div>
+                </div>
+                <div class="price-card">
+                    <h3>PENDLE/USDT</h3>
+                    <div class="price-value" id="pendle-price">Price: $0.00</div>
+                    <div class="last-update" id="pendle-updated">Last update: Never</div>
+                </div>
             </div>
-            <button class="action-btn first-purchase" id="btc-first-purchase">First Purchase</button>
-            <div class="holdings">
-                <p>Current holdings: <span id="btc-holdings">0.00 BTC</span></p>
-            </div>
-            <div class="profit-loss-bar">
-                <div class="bar-fill" id="btc-profit-bar" style="width: 50%;"></div>
-            </div>
-            <p class="profit-loss-text">Profit/Loss: <span id="btc-profit-text">0.00%</span></p>
-            <div class="transaction-history">
-                <h4>Transaction History</h4>
-                <ul id="btc-history">
-                    <li class="no-transactions">No transactions yet</li>
-                </ul>
-            </div>
-            <button class="action-btn sell-all" id="btc-sell-all">Sell All</button>
+        </div>
+        <div class="section">
+            <h2>Manual Price Update Test</h2>
+            <select id="manual-symbol">
+                <option value="BTCUSDT">BTC/USDT</option>
+                <option value="SOLUSDT">SOL/USDT</option>
+                <option value="XRPUSDT">XRP/USDT</option>
+                <option value="DOGEUSDT">DOGE/USDT</option>
+                <option value="NEARUSDT">NEAR/USDT</option>
+                <option value="PENDLEUSDT">PENDLE/USDT</option>
+            </select>
+            <input type="text" id="manual-price" placeholder="Enter price (e.g. 50000.00)" value="99999.99">
+            <button id="update-price">Update Price</button>
         </div>
     </div>
-
-    <div class="test-actions">
-        <h3>Test Actions</h3>
-        <button id="test-telegram">Test Telegram Notification</button>
-        <button id="test-binance-stream">Test Binance Stream</button>
+    
+    <div id="logsPanel" class="tabcontent">
+        <div class="section">
+            <h2>Event Logs</h2>
+            <div id="events"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Network Requests</h2>
+            <div id="requests"></div>
+        </div>
     </div>
-
-    <script src="./js/dashboard.js" type="module"></script>
-    <script src="./js/cryptoBoard.js" type="module"></script>
-    <script src="./main.js" type="module"></script>
+    
+    <!-- Import Socket.IO client (CDN) -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    
+    <script>
+        // Global variables
+        let socket = null;
+        const backendUrl = 'http://localhost:8080'; // Update to match your backend URL
+        
+        // DOM elements
+        const backendStatusDot = document.getElementById('backend-status-dot');
+        const backendStatusText = document.getElementById('backend-status-text');
+        const dbStatusDot = document.getElementById('db-status-dot');
+        const dbStatusText = document.getElementById('db-status-text');
+        const binanceStatusDot = document.getElementById('binance-status-dot');
+        const binanceStatusText = document.getElementById('binance-status-text');
+        const telegramStatusDot = document.getElementById('telegram-status-dot');
+        const telegramStatusText = document.getElementById('telegram-status-text');
+        const tradingStatusDot = document.getElementById('trading-status-dot');
+        const tradingStatusText = document.getElementById('trading-status-text');
+        
+        const eventsEl = document.getElementById('events');
+        const requestsEl = document.getElementById('requests');
+        
+        // Tab functionality
+        function openTab(evt, tabName) {
+            let i, tabcontent, tablinks;
+            
+            tabcontent = document.getElementsByClassName("tabcontent");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+            
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+            
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+        
+        // Log an event to the UI
+        function logEvent(event, data, type = 'info') {
+            const time = new Date().toLocaleTimeString();
+            const dataStr = data ? JSON.stringify(data) : '';
+            const logEntry = document.createElement('div');
+            
+            // Add class based on event type
+            logEntry.className = `event-${type}`;
+            
+            // Create timestamp span
+            const timestamp = document.createElement('span');
+            timestamp.className = 'event-timestamp';
+            timestamp.textContent = `[${time}]`;
+            
+            // Add the event info
+            logEntry.appendChild(timestamp);
+            logEntry.appendChild(document.createTextNode(` ${event} ${dataStr}`));
+            
+            // Add to the events container
+            eventsEl.appendChild(logEntry);
+            
+            // Scroll to bottom
+            eventsEl.scrollTop = eventsEl.scrollHeight;
+            
+            // Also log to console
+            console.log(`[${time}] ${event}`, data ? data : '');
+        }
+        
+        // Log network request
+        function logRequest(method, url, status, responseText) {
+            const time = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            
+            // Create timestamp span
+            const timestamp = document.createElement('span');
+            timestamp.className = 'event-timestamp';
+            timestamp.textContent = `[${time}]`;
+            
+            // Add the request info
+            logEntry.appendChild(timestamp);
+            logEntry.appendChild(document.createTextNode(` ${method} ${url} - Status: ${status} - Response: ${responseText}`));
+            
+            // Add to the requests container
+            requestsEl.appendChild(logEntry);
+            
+            // Scroll to bottom
+            requestsEl.scrollTop = requestsEl.scrollHeight;
+        }
+        
+        // Monitor XHR requests for Socket.IO
+        function monitorXHR() {
+            const originalXHROpen = XMLHttpRequest.prototype.open;
+            const originalXHRSend = XMLHttpRequest.prototype.send;
+            
+            XMLHttpRequest.prototype.open = function(method, url) {
+                this._method = method;
+                this._url = url;
+                return originalXHROpen.apply(this, arguments);
+            };
+            
+            XMLHttpRequest.prototype.send = function() {
+                if (this._url && this._url.includes('socket.io')) {
+                    this.addEventListener('load', function() {
+                        const responsePreview = typeof this.responseText === 'string' 
+                            ? (this.responseText.length > 100 ? this.responseText.substring(0, 100) + '...' : this.responseText)
+                            : 'Non-text response';
+                        logRequest(this._method, this._url, this.status, responsePreview);
+                    });
+                    
+                    this.addEventListener('error', function() {
+                        logRequest(this._method, this._url, 'Error', 'Request failed');
+                    });
+                }
+                return originalXHRSend.apply(this, arguments);
+            };
+            
+            logEvent('XHR monitoring enabled');
+        }
+        
+        // Monitor WebSockets for detailed debugging
+        function monitorWebSockets() {
+            const originalWebSocket = window.WebSocket;
+            
+            window.WebSocket = function(url, protocols) {
+                logEvent(`WebSocket connection attempt to ${url}`);
+                
+                const ws = new originalWebSocket(url, protocols);
+                
+                ws.addEventListener('open', function() {
+                    logEvent(`WebSocket connection opened to ${url}`, null, 'success');
+                });
+                
+                ws.addEventListener('message', function(event) {
+                    // Log but limit the data size
+                    const dataPreview = typeof event.data === 'string' 
+                        ? (event.data.length > 100 ? event.data.substring(0, 100) + '...' : event.data)
+                        : 'Binary data';
+                    logEvent(`WebSocket message from ${url}`, { data: dataPreview });
+                });
+                
+                ws.addEventListener('close', function(event) {
+                    logEvent(`WebSocket connection to ${url} closed`, { 
+                        code: event.code,
+                        reason: event.reason,
+                        wasClean: event.wasClean
+                    }, 'warning');
+                });
+                
+                ws.addEventListener('error', function() {
+                    logEvent(`WebSocket error with ${url}`, null, 'error');
+                });
+                
+                return ws;
+            };
+            
+            window.WebSocket.prototype = originalWebSocket.prototype;
+            logEvent('WebSocket monitoring enabled');
+        }
+        
+        // Update status indicator (dot + text)
+        function updateStatusIndicator(dotElement, textElement, serviceName, isConnected) {
+            if (isConnected) {
+                dotElement.classList.add('connected');
+                dotElement.classList.remove('disconnected');
+                textElement.textContent = `${serviceName}: Connected`;
+            } else {
+                dotElement.classList.remove('connected');
+                dotElement.classList.add('disconnected');
+                textElement.textContent = `${serviceName}: Disconnected`;
+            }
+        }
+        
+        // Update price display
+        function updatePriceDisplay(symbol, price) {
+            // Extract base symbol (remove USDT)
+            const baseSymbol = symbol.replace('USDT', '').toLowerCase();
+            
+            // Find price and last update elements
+            const priceElement = document.getElementById(`${baseSymbol}-price`);
+            const updatedElement = document.getElementById(`${baseSymbol}-updated`);
+            
+            if (priceElement) {
+                const formattedPrice = parseFloat(price).toFixed(2);
+                priceElement.textContent = `Price: $${formattedPrice}`;
+                
+                if (updatedElement) {
+                    const now = new Date().toLocaleTimeString();
+                    updatedElement.textContent = `Last update: ${now}`;
+                }
+                
+                logEvent(`Updated price for ${baseSymbol}`, { price: formattedPrice }, 'success');
+                return true;
+            } else {
+                logEvent(`Could not find price element for ${baseSymbol}`, { id: `${baseSymbol}-price` }, 'error');
+                return false;
+            }
+        }
+        
+        // Function to establish Socket.IO connection
+        function connectToBackend() {
+            if (socket && socket.connected) {
+                logEvent('Already connected to backend');
+                return;
+            }
+            
+            logEvent(`Connecting to backend at ${backendUrl}`);
+            
+            // Create Socket.IO connection
+            socket = io(backendUrl, {
+                transports: ['polling', 'websocket'],
+                reconnectionAttempts: 5,
+                timeout: 20000,
+                forceNew: true
+            });
+            
+            // Connection events
+            socket.on('connect', () => {
+                logEvent('Connected to backend', null, 'success');
+                updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', true);
+                
+                // Request system status
+                socket.emit('get-system-status');
+            });
+            
+            socket.on('connect_error', (error) => {
+                logEvent('Connection error', { message: error.message }, 'error');
+                updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', false);
+            });
+            
+            socket.on('disconnect', (reason) => {
+                logEvent('Disconnected from backend', { reason }, 'warning');
+                updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', false);
+                
+                // Also update other status indicators
+                updateStatusIndicator(dbStatusDot, dbStatusText, 'Database', false);
+                updateStatusIndicator(binanceStatusDot, binanceStatusText, 'Binance', false);
+                updateStatusIndicator(telegramStatusDot, telegramStatusText, 'Telegram', false);
+                updateStatusIndicator(tradingStatusDot, tradingStatusText, 'Trading', false);
+            });
+            
+            // System status events
+            socket.on('database-status', (isConnected) => {
+                logEvent('Database status update', { connected: isConnected }, isConnected ? 'success' : 'warning');
+                updateStatusIndicator(dbStatusDot, dbStatusText, 'Database', isConnected);
+            });
+            
+            socket.on('binance-status', (isConnected) => {
+                logEvent('Binance API status update', { connected: isConnected }, isConnected ? 'success' : 'warning');
+                updateStatusIndicator(binanceStatusDot, binanceStatusText, 'Binance', isConnected);
+            });
+            
+            socket.on('telegram-status', (isConnected) => {
+                logEvent('Telegram status update', { connected: isConnected }, isConnected ? 'success' : 'warning');
+                updateStatusIndicator(telegramStatusDot, telegramStatusText, 'Telegram', isConnected);
+            });
+            
+            socket.on('trading-status', (status) => {
+                logEvent('Trading status updated', status, status.active ? 'success' : 'warning');
+                updateStatusIndicator(tradingStatusDot, tradingStatusText, 'Trading', status.active);
+            });
+            
+            // Price updates handling
+            socket.on('price-update', (data) => {
+                logEvent('Price update received', data);
+                
+                if (!data || !data.symbol) {
+                    logEvent('Invalid price update data', data, 'error');
+                    return;
+                }
+                
+                updatePriceDisplay(data.symbol, data.price);
+            });
+            
+            // Test results
+            socket.on('binance-test-result', (result) => {
+                logEvent('Binance test result', result, result.success ? 'success' : 'error');
+                
+                if (!result.success && result.error) {
+                    logEvent('Binance test error', { message: result.error }, 'error');
+                }
+            });
+            
+            socket.on('telegram-test-result', (result) => {
+                logEvent('Telegram test result', result, result.success ? 'success' : 'error');
+                
+                if (!result.success && result.error) {
+                    logEvent('Telegram test error', { message: result.error }, 'error');
+                }
+            });
+        }
+        
+        // Set up event listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize monitoring
+            monitorXHR();
+            monitorWebSockets();
+            
+            // Connection controls
+            document.getElementById('connect-backend').addEventListener('click', () => {
+                connectToBackend();
+            });
+            
+            document.getElementById('disconnect-backend').addEventListener('click', () => {
+                if (socket && socket.connected) {
+                    socket.disconnect();
+                    logEvent('Manually disconnected from backend');
+                } else {
+                    logEvent('Not connected to backend');
+                }
+            });
+            
+            document.getElementById('test-binance-stream').addEventListener('click', () => {
+                if (socket && socket.connected) {
+                    logEvent('Testing Binance stream for BTCUSDT');
+                    socket.emit('test-binance-stream');
+                    
+                    // After a delay, try to check if we received updates
+                    setTimeout(() => {
+                        const btcPrice = document.getElementById('btc-price');
+                        if (btcPrice && btcPrice.textContent === 'Price: $0.00') {
+                            logEvent('No price updates received after 5 seconds', null, 'warning');
+                        }
+                    }, 5000);
+                } else {
+                    logEvent('Cannot test Binance stream: Not connected to backend', null, 'error');
+                }
+            });
+            
+            document.getElementById('test-telegram').addEventListener('click', () => {
+                if (socket && socket.connected) {
+                    logEvent('Testing Telegram notification');
+                    socket.emit('test-telegram');
+                } else {
+                    logEvent('Cannot test Telegram: Not connected to backend', null, 'error');
+                }
+            });
+            
+            document.getElementById('debug-btc-element').addEventListener('click', () => {
+                // List all price elements
+                const priceElements = document.querySelectorAll('[id$="-price"]');
+                
+                logEvent('Debugging price elements', {
+                    count: priceElements.length,
+                    elements: Array.from(priceElements).map(el => ({
+                        id: el.id,
+                        content: el.textContent
+                    }))
+                });
+                
+                // Try manually updating each price element
+                ['btc', 'sol', 'xrp', 'doge', 'near', 'pendle'].forEach(symbol => {
+                    const element = document.getElementById(`${symbol}-price`);
+                    if (element) {
+                        const testPrice = Math.floor(Math.random() * 10000);
+                        element.textContent = `Price: $${testPrice.toFixed(2)}`;
+                        
+                        const updatedElement = document.getElementById(`${symbol}-updated`);
+                        if (updatedElement) {
+                            updatedElement.textContent = `Last update: ${new Date().toLocaleTimeString()} (Test)`;
+                        }
+                        
+                        logEvent(`Manually updated ${symbol} price for testing`, { price: testPrice });
+                    } else {
+                        logEvent(`Could not find ${symbol} price element`, null, 'error');
+                    }
+                });
+            });
+            
+            document.getElementById('update-price').addEventListener('click', () => {
+                const symbol = document.getElementById('manual-symbol').value;
+                const price = document.getElementById('manual-price').value;
+                
+                logEvent('Manual price update test', { symbol, price });
+                
+                if (updatePriceDisplay(symbol, price)) {
+                    // If price was updated successfully, try to simulate the event if socket is connected
+                    if (socket && socket.connected) {
+                        logEvent('Simulating price-update event');
+                        const mockData = { symbol: symbol, price: price };
+                        // Note: This is a bit of a hack to manually trigger event processing
+                        if (socket._callbacks && socket._callbacks['$price-update']) {
+                            socket._callbacks['$price-update'].forEach(callback => callback(mockData));
+                        }
+                    }
+                }
+            });
+            
+            document.getElementById('clear-logs').addEventListener('click', () => {
+                eventsEl.innerHTML = '';
+                requestsEl.innerHTML = '';
+                logEvent('Logs cleared');
+            });
+            
+            // Initial log
+            logEvent('Test page loaded. Click "Connect to Backend" to begin testing.');
+        });
+    </script>
 </body>
 </html>

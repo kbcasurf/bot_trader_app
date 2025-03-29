@@ -14,5 +14,11 @@ export default {
         changeOrigin: true
       }
     }
+  },
+  // Add optimization for production build
+  build: {
+    outDir: 'dist',
+    minify: 'esbuild',
+    sourcemap: false
   }
 }

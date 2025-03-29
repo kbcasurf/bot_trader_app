@@ -155,6 +155,9 @@ function setupBinanceSocketServer(server) {
     return binanceNsp;
 }
 
+
+
+
 // Subscribe to ticker stream for multiple symbols using Socket.io to forward data
 function subscribeToTickerStream(symbols, callback) {
     const symbolsKey = symbols.join('-');
@@ -164,6 +167,8 @@ function subscribeToTickerStream(symbols, callback) {
         // Format symbols for stream
         const streams = symbols.map(symbol => `${symbol.toLowerCase()}@bookTicker`).join('/');
         const socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;
+        
+        console.log(`Connecting to Binance WebSocket: ${socketUrl}`);
         
         // We'll use a custom implementation with Socket.io client to connect to Binance WebSocket
         // and then forward the data to our Socket.io server
@@ -180,24 +185,70 @@ function subscribeToTickerStream(symbols, callback) {
             }
         });
         
+
+
+
         socket.on('message', (data) => {
             try {
+                // Log the raw message (but not too much)
+                const dataForLogging = typeof data === 'string' 
+                    ? (data.length > 200 ? data.substring(0, 200) + '...' : data)
+                    : JSON.stringify(data).substring(0, 200) + '...';
+                console.log('Raw message from Binance:', dataForLogging);
+                
+                // Parse the data if it's a string
                 const parsedData = typeof data === 'string' ? JSON.parse(data) : data;
+                
+                // Log the structure for debugging
+                console.log('Binance data structure:', Object.keys(parsedData));
+                
+                // Handle different possible data structures from Binance
+                let symbolData;
+                
                 if (parsedData.data) {
-                    // If callback is a Socket.io socket, emit the data
-                    if (typeof callback === 'object' && callback.emit) {
-                        callback.emit('price-update', parsedData.data);
-                    } 
-                    // If callback is a function, call it with the data
-                    else if (typeof callback === 'function') {
-                        callback(parsedData.data);
-                    }
+                    // Format: { data: { s: "BTCUSDT", ... } }
+                    symbolData = parsedData.data;
+                    console.log('Using data property:', symbolData);
+                } else if (parsedData.stream && parsedData.data) {
+                    // Format: { stream: "...", data: { ... } }
+                    symbolData = parsedData.data;
+                    console.log('Using stream.data property:', symbolData);
+                } else if (parsedData.s) {
+                    // Format: { s: "BTCUSDT", ... }
+                    symbolData = parsedData;
+                    console.log('Using top-level properties:', symbolData);
+                } else {
+                    console.warn('Unknown Binance data format:', parsedData);
+                    return;
+                }
+                
+                // Extract the symbol and price
+                const symbol = symbolData.s || symbolData.symbol || "UNKNOWN";
+                const price = symbolData.a || symbolData.p || symbolData.price || symbolData.lastPrice || "0.00";
+                
+                console.log(`Extracted data - Symbol: ${symbol}, Price: ${price}`);
+                
+                // Create a simplified data object for our app
+                const simplifiedData = {
+                    symbol: symbol,
+                    price: price
+                };
+                
+                // Forward the data based on callback type
+                if (typeof callback === 'object' && callback.emit) {
+                    callback.emit('price-update', simplifiedData);
+                } else if (typeof callback === 'function') {
+                    callback(simplifiedData);
                 }
             } catch (error) {
                 console.error('Error handling WebSocket message:', error);
             }
         });
         
+
+
+
+
         socket.on('error', (error) => {
             console.error('Socket.io client error:', error);
             if (typeof callback === 'object' && callback.emit) {
@@ -228,6 +279,9 @@ function subscribeToTickerStream(symbols, callback) {
     
     return socketConnections[symbolsKey];
 }
+
+
+
 
 // Unsubscribe from ticker stream
 function unsubscribeFromTickerStream(symbols, socket) {
