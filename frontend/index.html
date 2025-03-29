@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Binance WebSocket Connection Test</title>
+    <title>WebSocket Connection Test - Production Backend</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -111,12 +111,19 @@
             font-weight: bold;
             margin-top: 5px;
         }
+        #network-monitor {
+            height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+            font-size: 0.8em;
+        }
     </style>
 </head>
 <body>
     <header>
-        <h1>Binance WebSocket Connection Test</h1>
-        <p>Use this page to test WebSocket connections to Binance and verify automatic reconnection</p>
+        <h1>WebSocket Connection Test - Production Backend</h1>
+        <p>This test connects directly to your application's backend to monitor WebSocket functionality</p>
     </header>
     
     <div class="container">
@@ -125,7 +132,7 @@
                 <h2>Connection Status</h2>
                 <div class="status">
                     <div id="server-status" class="indicator disconnected"></div>
-                    <span>Server Connection: <span id="server-status-text">Disconnected</span></span>
+                    <span>Backend Connection: <span id="server-status-text">Disconnected</span></span>
                 </div>
                 <div class="status">
                     <div id="binance-status" class="indicator disconnected"></div>
@@ -140,24 +147,23 @@
             <div class="panel">
                 <h2>Connection Settings</h2>
                 <div class="input-group">
-                    <label for="server-url">Test Server URL:</label>
-                    <input type="text" id="server-url" value="http://localhost:3030">
+                    <label for="server-url">Backend URL:</label>
+                    <input type="text" id="server-url" value="http://localhost:8080">
                 </div>
                 <div class="input-group">
                     <label for="symbol-select">Symbol to Monitor:</label>
                     <select id="symbol-select">
                         <option value="BTCUSDT">BTC/USDT</option>
-                        <option value="ETHUSDT">ETH/USDT</option>
                         <option value="SOLUSDT">SOL/USDT</option>
                         <option value="XRPUSDT">XRP/USDT</option>
                         <option value="DOGEUSDT">DOGE/USDT</option>
+                        <option value="NEARUSDT">NEAR/USDT</option>
                     </select>
                 </div>
                 <div class="controls">
-                    <button id="connect-server">Connect to Server</button>
-                    <button id="connect-binance">Connect to Binance</button>
-                    <button id="disconnect-binance" class="disconnect">Disconnect from Binance</button>
-                    <button id="simulate-disconnect" class="disconnect">Simulate Disconnect</button>
+                    <button id="connect-server">Connect to Backend</button>
+                    <button id="test-binance-stream">Test Binance Stream</button>
+                    <button id="manually-disconnect" class="disconnect">Manually Disconnect</button>
                 </div>
             </div>
             
@@ -178,16 +184,19 @@
             </div>
             
             <div class="panel">
-                <h2>Test Results</h2>
-                <p>Reconnection tests:</p>
-                <div id="test-results">
-                    <ul>
-                        <li>Initial connection: Not tested</li>
-                        <li>Automatic reconnection: Not tested</li>
-                        <li>Trading pause on disconnect: Not tested</li>
-                        <li>Trading resume on reconnect: Not tested</li>
-                    </ul>
-                </div>
+                <h2>Network Monitor <button id="clear-network" class="clear-log">Clear</button></h2>
+                <div id="network-monitor" class="log-area"></div>
+            </div>
+            
+            <div class="panel">
+                <h2>Test Steps</h2>
+                <ol>
+                    <li>Connect to backend</li>
+                    <li>Test the Binance Stream connection</li>
+                    <li>Watch for reconnection when manually disconnected</li>
+                    <li>Monitor WebSocket status and events</li>
+                </ol>
+                <div id="test-status">Ready to begin testing</div>
             </div>
         </div>
     </div>
@@ -202,16 +211,18 @@
         const tradingStatusIndicator = document.getElementById('trading-status');
         const tradingStatusText = document.getElementById('trading-status-text');
         const eventLog = document.getElementById('event-log');
+        const networkMonitor = document.getElementById('network-monitor');
         const priceContainer = document.getElementById('price-container');
         const serverUrlInput = document.getElementById('server-url');
         const symbolSelect = document.getElementById('symbol-select');
+        const testStatus = document.getElementById('test-status');
         
         // Buttons
         const connectServerBtn = document.getElementById('connect-server');
-        const connectBinanceBtn = document.getElementById('connect-binance');
-        const disconnectBinanceBtn = document.getElementById('disconnect-binance');
-        const simulateDisconnectBtn = document.getElementById('simulate-disconnect');
+        const testBinanceStreamBtn = document.getElementById('test-binance-stream');
+        const manuallyDisconnectBtn = document.getElementById('manually-disconnect');
         const clearLogBtn = document.getElementById('clear-log');
+        const clearNetworkBtn = document.getElementById('clear-network');
         
         // Global state
         let socket = null;
@@ -219,8 +230,47 @@
         let binanceConnected = false;
         let tradingActive = false;
         let currentSymbol = symbolSelect.value;
-        let reconnectionAttempts = 0;
         let priceUpdates = 0;
+        
+        // Monitor XHR for Socket.IO
+        function setupXHRMonitoring() {
+            const originalXHROpen = XMLHttpRequest.prototype.open;
+            const originalXHRSend = XMLHttpRequest.prototype.send;
+            
+            XMLHttpRequest.prototype.open = function(method, url) {
+                this._method = method;
+                this._url = url;
+                return originalXHROpen.apply(this, arguments);
+            };
+            
+            XMLHttpRequest.prototype.send = function() {
+                if (this._url && this._url.includes('socket.io')) {
+                    this.addEventListener('load', function() {
+                        const timestamp = new Date().toLocaleTimeString();
+                        let responsePreview = this.responseText;
+                        if (responsePreview && responsePreview.length > 100) {
+                            responsePreview = responsePreview.substring(0, 100) + '...';
+                        }
+                        
+                        const entry = `[${timestamp}] ${this._method} ${this._url} - Status: ${this.status} - Response: ${responsePreview}`;
+                        appendToNetworkLog(entry);
+                    });
+                    
+                    this.addEventListener('error', function() {
+                        const timestamp = new Date().toLocaleTimeString();
+                        const entry = `[${timestamp}] ERROR ${this._method} ${this._url} - Request failed`;
+                        appendToNetworkLog(entry);
+                    });
+                }
+                
+                return originalXHRSend.apply(this, arguments);
+            };
+        }
+        
+        function appendToNetworkLog(message) {
+            networkMonitor.innerHTML += message + '\n';
+            networkMonitor.scrollTop = networkMonitor.scrollHeight;
+        }
         
         // Log an event
         function logEvent(message, data) {
@@ -228,11 +278,18 @@
             let logMessage = `[${timestamp}] ${message}`;
             
             if (data) {
-                logMessage += '\n' + JSON.stringify(data, null, 2);
+                if (typeof data === 'object') {
+                    logMessage += '\n' + JSON.stringify(data, null, 2);
+                } else {
+                    logMessage += ' ' + data;
+                }
             }
             
             eventLog.innerHTML += '\n\n' + logMessage;
             eventLog.scrollTop = eventLog.scrollHeight;
+            
+            // Also log to console for debugging
+            console.log(`[${timestamp}] ${message}`, data);
         }
         
         // Update status indicators
@@ -262,8 +319,8 @@
         // Update price display
         function updatePrice(data) {
             const timestamp = new Date().toLocaleTimeString();
-            const symbolName = data.s || 'Unknown';
-            const price = parseFloat(data.a || data.price).toFixed(2);
+            const symbolName = data.s || data.symbol || 'Unknown';
+            const price = parseFloat(data.a || data.price || 0).toFixed(2);
             
             // Create price update element
             const priceElement = document.createElement('div');
@@ -292,170 +349,135 @@
             // Disconnect existing socket if any
             if (socket) {
                 socket.disconnect();
+                socket = null;
             }
             
             // Update URL from input
             const serverUrl = url || serverUrlInput.value;
             
-            logEvent(`Connecting to test server at ${serverUrl}`);
+            logEvent(`Connecting to backend at ${serverUrl}`);
             
-            // Create new socket connection
-            socket = io(serverUrl, {
-                transports: ['polling', 'websocket'],
-                reconnectionAttempts: 5,
-                timeout: 10000
-            });
-            
-            // Setup socket event handlers
-            socket.on('connect', () => {
-                logEvent('Connected to test server');
-                updateStatus('server', true);
+            try {
+                // Create new socket connection with explicit options for better compatibility
+                socket = io(serverUrl, {
+                    transports: ['polling', 'websocket'],
+                    reconnectionAttempts: 5,
+                    reconnectionDelay: 1000,
+                    timeout: 10000,
+                    path: '/socket.io/', // Default path for Socket.IO
+                    autoConnect: true
+                });
                 
-                // Request current status
-                socket.emit('get-status');
-            });
-            
-            socket.on('disconnect', (reason) => {
-                logEvent(`Disconnected from test server. Reason: ${reason}`);
-                updateStatus('server', false);
-                updateStatus('binance', false);
-                updateStatus('trading', false, 'Paused');
-            });
-            
-            socket.on('connect_error', (error) => {
-                logEvent(`Connection error: ${error.message}`);
-                updateStatus('server', false, 'Connection Error');
-            });
-            
-            // Listen for connection status updates
-            socket.on('connection-status', (status) => {
-                logEvent('Received connection status', status);
-                
-                if (status.binance !== undefined) {
-                    updateStatus('binance', status.binance);
-                    // Update trading status based on Binance connection
-                    updateStatus('trading', status.binance, status.binance ? 'Active' : 'Paused');
-                }
-            });
-            
-            // Listen for test results
-            socket.on('test-result', (result) => {
-                logEvent('Test result received', result);
-            });
-            
-            // Listen for disconnect results
-            socket.on('disconnect-result', (result) => {
-                logEvent('Disconnect result received', result);
-            });
-            
-            // Listen for trading status updates
-            socket.on('trading-status', (status) => {
-                logEvent('Trading status updated', status);
-                updateStatus('trading', status.active, status.active ? 'Active' : 'Paused');
-                
-                // Update test results if this is a reconnection
-                if (reconnectionAttempts > 0 && status.active) {
-                    document.getElementById('test-results').innerHTML = `
-                        <ul>
-                            <li>Initial connection: ✅ Successful</li>
-                            <li>Automatic reconnection: ✅ Successful after ${reconnectionAttempts} attempts</li>
-                            <li>Trading pause on disconnect: ✅ Verified</li>
-                            <li>Trading resume on reconnect: ✅ Verified</li>
-                        </ul>
-                    `;
-                    reconnectionAttempts = 0; // Reset for future tests
-                }
-            });
-            
-            // Listen for websocket status updates
-            socket.on('websocket-status', (status) => {
-                logEvent('WebSocket status update', status);
-                updateStatus('binance', status.connected);
-                
-                if (!status.connected) {
-                    reconnectionAttempts++;
-                    logEvent(`Disconnected from Binance. Reconnection attempt ${reconnectionAttempts} expected...`);
+                // Setup socket event handlers
+                socket.on('connect', () => {
+                    logEvent('Connected to backend');
+                    updateStatus('server', true);
                     
-                    document.getElementById('test-results').innerHTML = `
-                        <ul>
-                            <li>Initial connection: ✅ Successful</li>
-                            <li>Automatic reconnection: ⏳ Attempt ${reconnectionAttempts} in progress...</li>
-                            <li>Trading pause on disconnect: ✅ Verified</li>
-                            <li>Trading resume on reconnect: ⏳ Waiting for reconnection...</li>
-                        </ul>
-                    `;
-                }
-            });
-            
-            // Listen for price updates
-            socket.on('price-update', (data) => {
-                logEvent('Price update received', data);
-                updatePrice(data);
-            });
-            
-            return socket;
+                    // Request system status
+                    socket.emit('get-system-status');
+                    testStatus.textContent = "Connected to backend. Now test Binance stream.";
+                });
+                
+                socket.on('disconnect', (reason) => {
+                    logEvent(`Disconnected from backend. Reason: ${reason}`);
+                    updateStatus('server', false);
+                    updateStatus('binance', false);
+                    updateStatus('trading', false, 'Paused');
+                    testStatus.textContent = "Disconnected from backend. Please reconnect.";
+                });
+                
+                socket.on('connect_error', (error) => {
+                    logEvent(`Connection error: ${error.message}`);
+                    updateStatus('server', false, 'Connection Error');
+                    testStatus.textContent = `Connection error: ${error.message}`;
+                });
+                
+                // Listen for backend service status events
+                socket.on('database-status', (isConnected) => {
+                    logEvent('Database status update', isConnected ? 'Connected' : 'Disconnected');
+                });
+                
+                socket.on('binance-status', (isConnected) => {
+                    logEvent('Binance API status update', isConnected ? 'Connected' : 'Disconnected');
+                    updateStatus('binance', isConnected);
+                });
+                
+                socket.on('telegram-status', (isConnected) => {
+                    logEvent('Telegram status update', isConnected ? 'Connected' : 'Disconnected');
+                });
+                
+                // Listen for WebSocket trading status
+                socket.on('trading-status', (status) => {
+                    logEvent('Trading status updated', status);
+                    updateStatus('trading', status.active, status.active ? 'Active' : 'Paused');
+                    
+                    if (status.active) {
+                        testStatus.textContent = "Trading is active. WebSocket is connected.";
+                    } else {
+                        testStatus.textContent = "Trading is paused. WebSocket disconnected.";
+                    }
+                });
+                
+                // Listen for price updates
+                socket.on('price-update', (data) => {
+                    logEvent('Price update received', data);
+                    updatePrice(data);
+                });
+                
+                // Listen for test results
+                socket.on('binance-test-result', (result) => {
+                    logEvent('Binance test result', result);
+                    if (result.success) {
+                        testStatus.textContent = "Binance stream test successful. Waiting for price updates...";
+                    } else {
+                        testStatus.textContent = `Binance stream test failed: ${result.error || 'Unknown error'}`;
+                    }
+                });
+                
+                return socket;
+            } catch (error) {
+                logEvent(`Error creating socket: ${error.message}`);
+                testStatus.textContent = `Error: ${error.message}`;
+                return null;
+            }
         }
         
-        // Connect to Binance WebSocket
-        function connectToBinance() {
+        // Test Binance Stream
+        function testBinanceStream() {
             if (!socket || !serverConnected) {
-                alert('Please connect to the test server first');
+                logEvent('Error: Please connect to the backend first');
+                alert('Please connect to the backend first');
                 return;
             }
             
             currentSymbol = symbolSelect.value;
-            logEvent(`Requesting Binance connection for ${currentSymbol}`);
+            logEvent(`Testing Binance stream for ${currentSymbol}`);
             
-            socket.emit('test-binance-connection', {
-                symbols: [currentSymbol]
-            });
-            
-            // Update test results for initial connection
-            document.getElementById('test-results').innerHTML = `
-                <ul>
-                    <li>Initial connection: ⏳ Connecting...</li>
-                    <li>Automatic reconnection: Not tested</li>
-                    <li>Trading pause on disconnect: Not tested</li>
-                    <li>Trading resume on reconnect: Not tested</li>
-                </ul>
-            `;
+            try {
+                socket.emit('test-binance-stream');
+                testStatus.textContent = "Testing Binance stream connection...";
+            } catch (error) {
+                logEvent(`Error testing Binance stream: ${error.message}`);
+                testStatus.textContent = `Error: ${error.message}`;
+            }
         }
         
-        // Disconnect from Binance WebSocket
-        function disconnectFromBinance() {
-            if (!socket || !serverConnected) {
-                alert('Not connected to test server');
+        // Manually disconnect
+        function manuallyDisconnect() {
+            if (!socket) {
+                logEvent('Error: Not connected to server');
                 return;
             }
             
-            logEvent(`Requesting disconnect from Binance for ${currentSymbol}`);
+            logEvent('Manually disconnecting socket to test reconnection');
             
-            socket.emit('disconnect-binance', {
-                symbols: [currentSymbol]
-            });
-        }
-        
-        // Simulate a WebSocket disconnection (for testing reconnect)
-        function simulateDisconnect() {
-            if (!socket || !serverConnected || !binanceConnected) {
-                alert('Not connected to Binance');
-                return;
+            try {
+                // Disconnect the socket
+                socket.disconnect();
+                testStatus.textContent = "Manually disconnected. Watching for auto-reconnection...";
+            } catch (error) {
+                logEvent(`Error during manual disconnect: ${error.message}`);
             }
-            
-            logEvent('Simulating WebSocket disconnection');
-            
-            // Request a manual disconnect to simulate failure
-            disconnectFromBinance();
-            
-            // Update test results
-            document.getElementById('test-results').innerHTML = `
-                <ul>
-                    <li>Initial connection: ✅ Successful</li>
-                    <li>Automatic reconnection: ⏳ Testing...</li>
-                    <li>Trading pause on disconnect: ⏳ Testing...</li>
-                    <li>Trading resume on reconnect: ⏳ Waiting for reconnection...</li>
-                </ul>
-            `;
         }
         
         // Button event handlers
@@ -463,25 +485,26 @@
             connectToServer();
         });
         
-        connectBinanceBtn.addEventListener('click', () => {
-            connectToBinance();
+        testBinanceStreamBtn.addEventListener('click', () => {
+            testBinanceStream();
         });
         
-        disconnectBinanceBtn.addEventListener('click', () => {
-            disconnectFromBinance();
-        });
-        
-        simulateDisconnectBtn.addEventListener('click', () => {
-            simulateDisconnect();
+        manuallyDisconnectBtn.addEventListener('click', () => {
+            manuallyDisconnect();
         });
         
         clearLogBtn.addEventListener('click', () => {
             eventLog.innerHTML = 'Log cleared. Continuing test...';
         });
         
+        clearNetworkBtn.addEventListener('click', () => {
+            networkMonitor.innerHTML = 'Network log cleared.';
+        });
+        
         // Initialize on page load
         window.addEventListener('load', () => {
-            logEvent('Test page loaded. Click "Connect to Server" to begin testing.');
+            logEvent('Test page loaded. Click "Connect to Backend" to begin testing.');
+            setupXHRMonitoring();
         });
     </script>
 </body>

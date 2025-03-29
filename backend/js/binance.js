@@ -155,7 +155,7 @@ function setupBinanceSocketServer(server) {
     return binanceNsp;
 }
 
-// Subscribe to ticker stream for multiple symbols using Socket.io to forward data
+// Function to subscribe to ticker stream for multiple symbols using Socket.io to forward data
 function subscribeToTickerStream(symbols, callback) {
     const symbolsKey = symbols.join('-');
     
@@ -165,11 +165,16 @@ function subscribeToTickerStream(symbols, callback) {
         const streams = symbols.map(symbol => `${symbol.toLowerCase()}@bookTicker`).join('/');
         const socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;
         
+        console.log(`Attempting to connect to Binance WebSocket for ${symbols.join(', ')}`);
+        
         // We'll use a custom implementation with Socket.io client to connect to Binance WebSocket
         // and then forward the data to our Socket.io server
-        const socket = io.connect(socketUrl, {
+        const socket = io(socketUrl, {
             transports: ['websocket'],
-            forceNew: true
+            forceNew: true,
+            reconnection: true,
+            reconnectionDelay: 5000,
+            reconnectionAttempts: 10
         });
         
         socket.on('connect', () => {
@@ -205,21 +210,29 @@ function subscribeToTickerStream(symbols, callback) {
             }
         });
         
-        socket.on('disconnect', () => {
-            console.log(`Socket.io client disconnected from Binance WebSocket for ${symbols.join(', ')}`);
+        socket.on('disconnect', (reason) => {
+            console.log(`Socket.io client disconnected from Binance WebSocket for ${symbols.join(', ')}. Reason: ${reason}`);
             
             if (typeof callback === 'object' && callback.emit) {
                 callback.emit('websocket-status', { connected: false, symbols });
             }
             
-            // Attempt to reconnect after a delay
-            setTimeout(() => {
+            // Attempt to reconnect immediately, then on increasing delay if it continues to fail
+            const attemptReconnect = () => {
+                console.log(`Attempting to reconnect to Binance WebSocket for ${symbols.join(', ')}`);
+                
+                // Remove the old connection before attempting to reconnect
                 if (socketConnections[symbolsKey]) {
-                    console.log(`Attempting to reconnect Socket.io client for ${symbols.join(', ')}`);
                     delete socketConnections[symbolsKey];
-                    subscribeToTickerStream(symbols, callback);
                 }
-            }, 5000);
+                
+                // Create a new connection
+                const newSocket = subscribeToTickerStream(symbols, callback);
+                socketConnections[symbolsKey] = newSocket;
+            };
+            
+            // Attempt to reconnect after a delay
+            setTimeout(attemptReconnect, 5000);
         });
         
         // Store connection reference
