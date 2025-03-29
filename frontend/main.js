@@ -1,8 +1,9 @@
 import { io } from 'socket.io-client';
 
-// Try to connect through the proxy with auto-discovery
+// Create socket with proper backend URL
 export const socket = io({
-    path: '/socket.io/',
+    // Note: No need to specify the URL as Vite will proxy the requests
+    // The proxy is set up in vite.config.js
     transports: ['polling', 'websocket'],
     reconnectionAttempts: 5,
     timeout: 20000,
