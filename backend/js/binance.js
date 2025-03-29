@@ -156,16 +156,56 @@ function setupBinanceSocketServer(server) {
 }
 
 
+async function manualConnectAndGetPrices(symbols) {
+    try {
+        console.log(`Manually connecting to Binance for symbols: ${symbols.join(', ')}`);
+        
+        // First test connectivity
+        const connected = await testConnection();
+        if (!connected) {
+            console.error('Could not connect to Binance API.');
+            return { success: false, error: 'API connection failed' };
+        }
+        
+        // Get current prices from REST API
+        const prices = {};
+        for (const symbol of symbols) {
+            try {
+                const data = await getTickerPrice(symbol);
+                prices[symbol] = data.price;
+                console.log(`Got price for ${symbol}: ${data.price}`);
+            } catch (err) {
+                console.error(`Error getting price for ${symbol}:`, err.message);
+            }
+        }
+        
+        // Now try to set up WebSocket for real-time updates
+        const handleUpdate = (data) => {
+            console.log('WebSocket update received:', data);
+        };
+        
+        subscribeToTickerStream(symbols, handleUpdate);
+        
+        return { 
+            success: true, 
+            prices,
+            message: 'Manual connection established and WebSocket initiated'
+        };
+    } catch (err) {
+        console.error('Manual connection error:', err);
+        return { success: false, error: err.message };
+    }
+}
 
 
-// Subscribe to ticker stream for multiple symbols using Socket.io to forward data
+// Modified URL construction in subscribeToTickerStream function
 function subscribeToTickerStream(symbols, callback) {
     const symbolsKey = symbols.join('-');
     
     // Use Socket.io client to connect to Binance WebSocket
     if (!socketConnections[symbolsKey]) {
-        // Format symbols for stream
-        const streams = symbols.map(symbol => `${symbol.toLowerCase()}@bookTicker`).join('/');
+        // Format symbols for stream - use ticker instead of bookTicker for more reliable price updates
+        const streams = symbols.map(symbol => `${symbol.toLowerCase()}@ticker`).join('/');
         const socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;
         
         console.log(`Connecting to Binance WebSocket: ${socketUrl}`);
@@ -176,15 +216,8 @@ function subscribeToTickerStream(symbols, callback) {
             transports: ['websocket'],
             forceNew: true
         });
-        
-        socket.on('connect', () => {
-            console.log(`Socket.io client connected to Binance WebSocket for ${symbols.join(', ')}`);
-            // Emit a 'websocket-status' event when connected
-            if (typeof callback === 'object' && callback.emit) {
-                callback.emit('websocket-status', { connected: true, symbols });
-            }
-        });
 
+        // Modified handler for WebSocket messages in subscribeToTickerStream function
         socket.on('message', (data) => {
             try {
                 // Log the raw message for debugging
@@ -206,16 +239,29 @@ function subscribeToTickerStream(symbols, callback) {
                 // Handle different Binance WebSocket data formats
                 if (parsedData.data) {
                     // Format: { data: { s: "BTCUSDT", ... } }
-                    symbol = parsedData.data.s || parsedData.data.symbol;
-                    price = parsedData.data.c || parsedData.data.p || parsedData.data.price || parsedData.data.lastPrice;
+                    if (parsedData.data.s) {
+                        symbol = parsedData.data.s;
+                        // For bookTicker format
+                        price = parsedData.data.a || parsedData.data.b;
+                    } else if (parsedData.data.symbol) {
+                        symbol = parsedData.data.symbol;
+                        price = parsedData.data.price || parsedData.data.close || parsedData.data.lastPrice;
+                    }
                 } else if (parsedData.s) {
                     // Format: { s: "BTCUSDT", ... }
                     symbol = parsedData.s;
-                    price = parsedData.c || parsedData.p || parsedData.lastPrice;
+                    // For bookTicker format
+                    price = parsedData.a || parsedData.b || parsedData.c || parsedData.p;
                 } else if (parsedData.stream && parsedData.data) {
                     // Format: { stream: "...", data: { ... } }
-                    symbol = parsedData.data.s || parsedData.data.symbol;
-                    price = parsedData.data.c || parsedData.data.p || parsedData.data.price;
+                    if (parsedData.data.s) {
+                        symbol = parsedData.data.s;
+                        // For bookTicker format
+                        price = parsedData.data.a || parsedData.data.b;
+                    } else if (parsedData.data.symbol) {
+                        symbol = parsedData.data.symbol;
+                        price = parsedData.data.price || parsedData.data.close || parsedData.data.lastPrice;
+                    }
                 }
                 
                 // If we couldn't extract the necessary data, log and return
@@ -315,5 +361,6 @@ module.exports = {
     createMarketSellOrder,
     setupBinanceSocketServer,
     subscribeToTickerStream,
-    unsubscribeFromTickerStream
+    unsubscribeFromTickerStream,
+    manualConnectAndGetPrices
 };

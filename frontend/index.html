@@ -169,6 +169,7 @@
         <div class="section">
             <h2>Connection Controls</h2>
             <button id="connect-backend">Connect to Backend</button>
+            <button id="manual-binance-test">Manual Binance Test</button>
             <button id="disconnect-backend">Disconnect</button>
             <button id="test-binance-stream">Test Binance Stream</button>
             <button id="test-telegram">Test Telegram</button>
@@ -674,6 +675,40 @@
             
             // Initial log
             logEvent('Test page loaded. Click "Connect to Backend" to begin testing.');
+        });
+    </script>
+    <script>
+        // Event handler for manual Binance test button
+        document.getElementById('manual-binance-test').addEventListener('click', () => {
+            if (socket && socket.connected) {
+                logEvent('Requesting manual Binance test');
+                socket.emit('manual-binance-test', {
+                    symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
+                });
+            } else {
+                logEvent('Cannot run manual test: Not connected to backend', null, 'error');
+            }
+        });
+        
+        // Add event listener for the new event
+        socket.on('manual-test-result', (result) => {
+            logEvent('Manual test result', result, result.success ? 'success' : 'error');
+            
+            if (result.prices) {
+                // Update UI with received prices
+                Object.entries(result.prices).forEach(([symbol, price]) => {
+                    const baseSymbol = symbol.replace('USDT', '').toLowerCase();
+                    const priceElement = document.getElementById(`${baseSymbol}-price`);
+                    if (priceElement) {
+                        priceElement.textContent = `Price: $${parseFloat(price).toFixed(2)}`;
+                        
+                        const updatedElement = document.getElementById(`${baseSymbol}-updated`);
+                        if (updatedElement) {
+                            updatedElement.textContent = `Last update: ${new Date().toLocaleTimeString()} (API)`;
+                        }
+                    }
+                });
+            }
         });
     </script>
 </body>

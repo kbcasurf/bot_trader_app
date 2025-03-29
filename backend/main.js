@@ -195,78 +195,130 @@ io.on('connection', (socket) => {
         }
     });
     
-
+    // Add this handler to the socket.on('connection') section in main.js
+    socket.on('manual-binance-test', async (data) => {
+        try {
+            console.log('Received manual-binance-test request with data:', data);
+            
+            if (!data || !data.symbols || !Array.isArray(data.symbols)) {
+                socket.emit('manual-test-result', {
+                    success: false,
+                    error: 'Invalid request: missing symbols array'
+                });
+                return;
+            }
+            
+            // Use the new manual connect function
+            const result = await binanceAPI.manualConnectAndGetPrices(data.symbols);
+            
+            // Send back the result
+            socket.emit('manual-test-result', result);
+            
+            // If successful, also broadcast the prices as price updates
+            if (result.success && result.prices) {
+                Object.entries(result.prices).forEach(([symbol, price]) => {
+                    io.emit('price-update', {
+                        symbol: symbol,
+                        price: price,
+                        source: 'manual-test'
+                    });
+                });
+            }
+        } catch (err) {
+            console.error('Error in manual Binance test:', err);
+            socket.emit('manual-test-result', {
+                success: false,
+                error: err.message
+            });
+        }
+    });
 
 
 
     socket.on('test-binance-stream', async () => {
-    try {
-        console.log('Received test-binance-stream request');
-        
-        // First, test the connection to Binance API
-        const apiConnected = await binanceAPI.testConnection();
-        if (!apiConnected) {
+        try {
+            console.log('[TEST] Received test-binance-stream request');
+            
+            // First, test the connection to Binance API
+            const apiConnected = await binanceAPI.testConnection();
+            if (!apiConnected) {
+                socket.emit('binance-test-result', { 
+                    success: false, 
+                    error: 'Cannot connect to Binance API'
+                });
+                return;
+            }
+            
+            // Get a current price to verify API is working
+            try {
+                const tickerData = await binanceAPI.getTickerPrice('BTCUSDT');
+                console.log('[TEST] Current BTCUSDT price from API:', tickerData.price);
+                
+                // Immediately send this price as an update to show something to the user
+                io.emit('price-update', {
+                    symbol: 'BTCUSDT',
+                    price: tickerData.price,
+                    source: 'api' // Mark this as coming from API not WebSocket
+                });
+            } catch (err) {
+                console.warn('[TEST] Could not get current price, but continuing with WebSocket test:', err.message);
+            }
+            
+            // Set up a subscription callback that explicitly logs and forwards data
+            const handlePriceUpdate = (data) => {
+                console.log('[TEST] Received price data from Binance WebSocket:', JSON.stringify(data));
+                
+                // Ensure we have the required data
+                if (!data || (!data.symbol && !data.s)) {
+                    console.error('[TEST] Invalid data format received from Binance:', data);
+                    return;
+                }
+                
+                // Normalize the data format
+                const symbol = data.symbol || data.s;
+                const price = data.price || data.p || data.c || data.a || data.b || data.lastPrice;
+                
+                if (!symbol || !price) {
+                    console.error('[TEST] Missing required price data:', data);
+                    return;
+                }
+                
+                console.log(`[TEST] Emitting price-update event for ${symbol} at $${price}`);
+                
+                // Broadcast to all connected clients
+                io.emit('price-update', {
+                    symbol: symbol,
+                    price: price,
+                    source: 'websocket'
+                });
+            };
+            
+            // Subscribe to ticker updates for testing
+            console.log('[TEST] Setting up subscription to Binance WebSocket');
+            const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
+            binanceAPI.subscribeToTickerStream(symbols, handlePriceUpdate);
+            
+            console.log('[TEST] Binance stream subscription requested');
+            socket.emit('binance-test-result', { 
+                success: true,
+                message: 'WebSocket connection initiated. You should see price updates soon.'
+            });
+            
+            // Update WebSocket connected status
+            websocketConnected = true;
+            io.emit('trading-status', { active: websocketConnected });
+            console.log('[TEST] Trading status updated:', { active: websocketConnected });
+        } catch (err) {
+            console.error('[TEST] Binance stream test error:', err);
             socket.emit('binance-test-result', { 
                 success: false, 
-                error: 'Cannot connect to Binance API'
+                error: err.message,
+                message: 'WebSocket connection failed. Trading is paused until connection is restored.'
             });
-            return;
+            websocketConnected = false;
+            io.emit('trading-status', { active: websocketConnected });
         }
-        
-        // Get a current price to verify API is working
-        try {
-            const tickerData = await binanceAPI.getTickerPrice('BTCUSDT');
-            console.log('Current BTCUSDT price from API:', tickerData.price);
-        } catch (err) {
-            console.warn('Could not get current price, but continuing with WebSocket test:', err.message);
-        }
-        
-        // Set up a subscription with detailed logging
-        console.log('Setting up subscription to Binance WebSocket');
-        binanceAPI.subscribeToTickerStream(['BTCUSDT'], (data) => {
-            console.log('Received price data from Binance WebSocket:', JSON.stringify(data));
-            
-            // Ensure we have the required data
-            if (!data || (!data.symbol && !data.s)) {
-                console.error('Invalid data format received from Binance:', data);
-                return;
-            }
-            
-            // Normalize the data format
-            const symbol = data.symbol || data.s;
-            const price = data.price || data.p || data.c || data.lastPrice;
-            
-            if (!symbol || !price) {
-                console.error('Missing required price data:', data);
-                return;
-            }
-            
-            console.log(`Emitting price-update event for ${symbol} at $${price}`);
-            
-            io.emit('price-update', {
-                symbol: symbol,
-                price: price
-            });
-        });
-        
-        console.log('Binance stream subscription requested');
-        socket.emit('binance-test-result', { success: true });
-        
-        // Update WebSocket connected status
-        websocketConnected = true;
-        io.emit('trading-status', { active: websocketConnected });
-        console.log('Trading status updated:', { active: websocketConnected });
-    } catch (err) {
-        console.error('Binance stream test error:', err);
-        socket.emit('binance-test-result', { 
-            success: false, 
-            error: err.message,
-            message: 'WebSocket connection failed. Trading is paused until connection is restored.'
-        });
-        websocketConnected = false;
-        io.emit('trading-status', { active: websocketConnected });
-    }
-});
+    });
     
 
 

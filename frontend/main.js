@@ -96,24 +96,60 @@ socket.on('trading-status', (status) => {
 
 
 
-// Price update from Binance
+// Enhanced price update handler for frontend
 socket.on('price-update', (data) => {
     console.log('Price update received:', data);
     
-    if (!data || !data.symbol) {
-        console.warn('Invalid price update data:', data);
+    if (!data) {
+        console.warn('Received empty price update data');
         return;
     }
     
-    // Extract base symbol (remove USDT)
-    const baseSymbol = data.symbol.replace('USDT', '').toLowerCase();
+    // Handle different possible symbol formats
+    let symbol = '';
+    let price = 0;
     
-    // Find the price element by its ID
-    const priceElement = document.getElementById(`${baseSymbol}-price`);
+    if (data.symbol) {
+        symbol = data.symbol;
+    } else if (data.s) {
+        symbol = data.s;
+    } else {
+        console.warn('Price update missing symbol:', data);
+        return;
+    }
+    
+    if (data.price) {
+        price = data.price;
+    } else if (data.p) {
+        price = data.p;
+    } else if (data.a) {
+        price = data.a; // Use ask price from bookTicker
+    } else if (data.b) {
+        price = data.b; // Use bid price from bookTicker
+    } else if (data.c) {
+        price = data.c; // Use close price from ticker
+    } else {
+        console.warn('Price update missing price value:', data);
+        return;
+    }
+    
+    // Normalize symbol format (remove USDT if it exists)
+    const baseSymbol = symbol.replace('USDT', '').toLowerCase();
+    
+    // Try multiple selectors to find the price element
+    let priceElement = document.getElementById(`${baseSymbol}-price`);
+    
+    if (!priceElement) {
+        // Try alternative selector
+        const cryptoCard = document.getElementById(`${baseSymbol}-card`);
+        if (cryptoCard) {
+            priceElement = cryptoCard.querySelector('.current-price');
+        }
+    }
     
     if (priceElement) {
         // Format the price with 2 decimal places
-        const formattedPrice = parseFloat(data.price).toFixed(2);
+        const formattedPrice = parseFloat(price).toFixed(2);
         priceElement.textContent = `Price: $${formattedPrice}`;
         console.log(`Updated price for ${baseSymbol} to $${formattedPrice}`);
         
@@ -124,12 +160,11 @@ socket.on('price-update', (data) => {
             updatedElement.textContent = `Last update: ${now}`;
         }
     } else {
-        console.error(`Could not find price element with ID ${baseSymbol}-price`);
+        console.warn(`Could not find price element for symbol ${baseSymbol}`);
         
-        // Debug available elements
-        const allPriceElements = document.querySelectorAll('[id$="-price"]');
+        // Log all available price elements for debugging
         console.log('Available price elements:', 
-            Array.from(allPriceElements).map(el => el.id));
+            Array.from(document.querySelectorAll('[id$="-price"]')).map(el => el.id));
     }
 });
 
