@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance WebSocket Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+
+        h1, h2 {
+            color: #2c3e50;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            margin-right: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        button.disconnect {
+            background-color: #e74c3c;
+        }
+
+        button.disconnect:hover {
+            background-color: #c0392b;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        select, input {
+            padding: 8px;
+            margin-right: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        #status, #logs {
+            margin-top: 10px;
+            padding: 10px;
+            min-height: 30px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        #status.connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        #status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .price-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .price-card {
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .price-card h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #2c3e50;
+        }
+
+        .price-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #27ae60;
+        }
+
+        .price-updated {
+            font-size: 0.85em;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            font-family: monospace;
+        }
+
+        .timestamp {
+            color: #7f8c8d;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Binance WebSocket Test</h1>
+    
+    <div class="section">
+        <h2>Connection Control</h2>
+        <div class="controls">
+            <select id="endpoint-select">
+                <option value="stream?streams=btcusdt@ticker">Single Symbol: BTC/USDT</option>
+                <option value="stream?streams=btcusdt@ticker/solusdt@ticker/xrpusdt@ticker">Multiple: BTC, SOL, XRP</option>
+                <option value="stream?streams=btcusdt@ticker/solusdt@ticker/xrpusdt@ticker/dogeusdt@ticker/nearusdt@ticker/pendleusdt@ticker">All Trading Pairs</option>
+                <option value="stream?streams=btcusdt@bookTicker">BTC Book Ticker</option>
+                <option value="stream?streams=!ticker@arr">All Markets Ticker</option>
+                <option value="ws/btcusdt@depth">BTC Depth (Direct Stream)</option>
+            </select>
+            
+            <button id="connect-btn">Connect</button>
+            <button id="disconnect-btn" disabled>Disconnect</button>
+            <button id="clear-logs-btn">Clear Logs</button>
+        </div>
+        
+        <div id="status" class="disconnected">Disconnected</div>
+    </div>
+    
+    <div class="section">
+        <h2>Price Data</h2>
+        <div class="price-grid" id="price-container">
+            <!-- Price cards will be added here dynamically -->
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>WebSocket Logs</h2>
+        <div id="logs"></div>
+    </div>
+    
+    <script>
+        // Define variables
+        let socket = null;
+        const baseWsUrl = 'wss://stream.binance.com:9443/';  // Production endpoint
+        // const baseWsUrl = 'wss://testnet.binance.vision/ws/'; // Testnet endpoint
+        
+        // Set up references to DOM elements
+        const connectBtn = document.getElementById('connect-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+        const clearLogsBtn = document.getElementById('clear-logs-btn');
+        const endpointSelect = document.getElementById('endpoint-select');
+        const statusDiv = document.getElementById('status');
+        const logsDiv = document.getElementById('logs');
+        const priceContainer = document.getElementById('price-container');
+        
+        // Track prices for different symbols
+        const prices = {};
+        
+        // Function to log messages with timestamp
+        function log(message, data = null) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            
+            // Create timestamp element
+            const timestampSpan = document.createElement('span');
+            timestampSpan.className = 'timestamp';
+            timestampSpan.textContent = `[${timestamp}]`;
+            
+            // Add timestamp and message
+            logEntry.appendChild(timestampSpan);
+            
+            // If data is provided, stringify it
+            if (data) {
+                const displayData = typeof data === 'string' ? data : JSON.stringify(data);
+                logEntry.appendChild(document.createTextNode(` ${message}: ${displayData}`));
+            } else {
+                logEntry.appendChild(document.createTextNode(` ${message}`));
+            }
+            
+            // Add to logs div and scroll to bottom
+            logsDiv.appendChild(logEntry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+            
+            // Also log to console
+            if (data) {
+                console.log(`[${timestamp}] ${message}:`, data);
+            } else {
+                console.log(`[${timestamp}] ${message}`);
+            }
+        }
+        
+        // Function to update connection status
+        function updateStatus(connected) {
+            if (connected) {
+                statusDiv.className = 'connected';
+                statusDiv.textContent = 'Connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+            } else {
+                statusDiv.className = 'disconnected';
+                statusDiv.textContent = 'Disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            }
+        }
+        
+        // Function to create or update price card
+        function updatePriceCard(symbol, price, lastUpdated) {
+            // Normalize symbol (remove USDT)
+            const baseSymbol = symbol.replace('USDT', '').toUpperCase();
+            const cardId = `${baseSymbol.toLowerCase()}-card`;
+            
+            // Check if card already exists
+            let card = document.getElementById(cardId);
+            
+            if (!card) {
+                // Create new card
+                card = document.createElement('div');
+                card.className = 'price-card';
+                card.id = cardId;
+                
+                // Add title
+                const title = document.createElement('h3');
+                title.textContent = `${baseSymbol}/USDT`;
+                card.appendChild(title);
+                
+                // Add price element
+                const priceElement = document.createElement('div');
+                priceElement.className = 'price-value';
+                priceElement.id = `${baseSymbol.toLowerCase()}-price`;
+                card.appendChild(priceElement);
+                
+                // Add last updated element
+                const updatedElement = document.createElement('div');
+                updatedElement.className = 'price-updated';
+                updatedElement.id = `${baseSymbol.toLowerCase()}-updated`;
+                card.appendChild(updatedElement);
+                
+                // Add to container
+                priceContainer.appendChild(card);
+            }
+            
+            // Update price and timestamp
+            const priceElement = document.getElementById(`${baseSymbol.toLowerCase()}-price`);
+            const updatedElement = document.getElementById(`${baseSymbol.toLowerCase()}-updated`);
+            
+            if (priceElement) {
+                priceElement.textContent = `$${parseFloat(price).toFixed(2)}`;
+            }
+            
+            if (updatedElement) {
+                updatedElement.textContent = `Last update: ${lastUpdated}`;
+            }
+        }
+        
+        // Function to connect to WebSocket
+        function connect() {
+            if (socket) {
+                log('Already connected, please disconnect first');
+                return;
+            }
+            
+            try {
+                const endpoint = endpointSelect.value;
+                const wsUrl = `${baseWsUrl}${endpoint}`;
+                log('Connecting to WebSocket', wsUrl);
+                
+                // Create WebSocket
+                socket = new WebSocket(wsUrl);
+                
+                // Connection opened
+                socket.addEventListener('open', (event) => {
+                    log('Connection established');
+                    updateStatus(true);
+                });
+                
+                // Listen for messages
+                socket.addEventListener('message', (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        
+                        // Handle different Binance message formats
+                        if (data.stream && data.data) {
+                            // Combined stream format: {stream: "btcusdt@ticker", data: {...}}
+                            handleStreamData(data.stream, data.data);
+                        } else if (data.e) {
+                            // Single stream format with event type
+                            handleEventData(data);
+                        } else if (Array.isArray(data)) {
+                            // Array format (e.g., !ticker@arr)
+                            handleArrayData(data);
+                        } else {
+                            // Unknown format
+                            log('Received message in unknown format', data);
+                        }
+                    } catch (error) {
+                        log('Error parsing message', error.message);
+                        console.error('Raw data:', event.data);
+                    }
+                });
+                
+                // Connection closed
+                socket.addEventListener('close', (event) => {
+                    log(`Connection closed. Code: ${event.code}, Reason: ${event.reason || 'No reason provided'}`);
+                    updateStatus(false);
+                    socket = null;
+                });
+                
+                // Connection error
+                socket.addEventListener('error', (event) => {
+                    log('WebSocket error', event);
+                    updateStatus(false);
+                });
+            } catch (error) {
+                log('Error creating WebSocket', error.message);
+            }
+        }
+        
+        // Function to disconnect WebSocket
+        function disconnect() {
+            if (socket) {
+                log('Closing connection...');
+                socket.close();
+            } else {
+                log('Not connected');
+            }
+        }
+        
+        // Function to handle combined stream data
+        function handleStreamData(streamName, data) {
+            // Extract symbol from stream name (e.g., "btcusdt@ticker" -> "BTCUSDT")
+            const parts = streamName.split('@');
+            const symbol = parts[0].toUpperCase();
+            const streamType = parts[1];
+            
+            // Log received data with abbreviated content
+            log(`Received ${streamType} data for ${symbol}`, `Data length: ${JSON.stringify(data).length} chars`);
+            
+            // Handle different stream types
+            if (streamType === 'ticker') {
+                handleTickerData(symbol, data);
+            } else if (streamType === 'bookTicker') {
+                handleBookTickerData(symbol, data);
+            } else if (streamType === 'depth') {
+                // Just log for depth data
+                log(`Depth data for ${symbol}`, 'Depth data (not displayed)');
+            }
+        }
+        
+        // Function to handle event data (single stream format)
+        function handleEventData(data) {
+            const eventType = data.e;
+            const symbol = data.s;
+            
+            // Log received data
+            log(`Received ${eventType} event for ${symbol}`, `Data length: ${JSON.stringify(data).length} chars`);
+            
+            // Handle different event types
+            if (eventType === 'ticker@24hr' || eventType === '24hrTicker') {
+                handleTickerData(symbol, data);
+            } else if (eventType === 'bookTicker') {
+                handleBookTickerData(symbol, data);
+            }
+        }
+        
+        // Function to handle array data
+        function handleArrayData(dataArray) {
+            log(`Received array data with ${dataArray.length} items`);
+            
+            // Process first 5 items only to avoid overwhelming the UI
+            const processLimit = Math.min(5, dataArray.length);
+            
+            for (let i = 0; i < processLimit; i++) {
+                const item = dataArray[i];
+                if (item.s) { // Symbol exists
+                    if (item.c) { // Ticker data
+                        handleTickerData(item.s, item);
+                    } else if (item.a && item.b) { // Book ticker data
+                        handleBookTickerData(item.s, item);
+                    }
+                }
+            }
+            
+            if (dataArray.length > processLimit) {
+                log(`... and ${dataArray.length - processLimit} more items (not displayed)`);
+            }
+        }
+        
+        // Function to handle ticker data
+        function handleTickerData(symbol, data) {
+            // Extract close price (current price)
+            const price = data.c || data.C || data.lastPrice || 0;
+            
+            // Update prices object
+            prices[symbol] = {
+                price: price,
+                updated: new Date().toLocaleTimeString()
+            };
+            
+            // Update UI
+            updatePriceCard(symbol, price, prices[symbol].updated);
+        }
+        
+        // Function to handle book ticker data
+        function handleBookTickerData(symbol, data) {
+            // Use best ask price
+            const price = data.a || data.A || data.askPrice || 0;
+            
+            // Update prices object
+            prices[symbol] = {
+                price: price,
+                updated: new Date().toLocaleTimeString()
+            };
+            
+            // Update UI
+            updatePriceCard(symbol, price, prices[symbol].updated);
+        }
+        
+        // Event listeners
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        clearLogsBtn.addEventListener('click', () => {
+            logsDiv.innerHTML = '';
+            log('Logs cleared');
+        });
+        
+        // Initial log
+        log('WebSocket test page loaded. Select an endpoint and click Connect to begin.');
+    </script>
+</body>
+</html>
