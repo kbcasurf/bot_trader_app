@@ -326,6 +326,10 @@ function subscribeToTickerStream(symbols, io) {
         
         // Create WebSocket connection
         const ws = new WebSocket(socketUrl);
+        ws.reconnectAttempts = 0;
+        ws.maxReconnectAttempts = 5;
+        ws.reconnectDelay = 5000;
+        ws.maxReconnectDelay = 30000;
         
         // Initialize status properties
         ws.isAlive = true;
@@ -366,8 +370,11 @@ function subscribeToTickerStream(symbols, io) {
                     return;
                 }
                 
-                // Handle the various Binance message formats
-                // Rest of your message handling code...
+                // Log the data for debugging
+                console.log("Received WebSocket message:", JSON.stringify(parsedData).substring(0, 200) + "...");
+                
+                // Handle the message and emit to clients
+                // ...
             } catch (error) {
                 console.error('Error handling WebSocket message:', error.message);
             }
@@ -391,7 +398,7 @@ function subscribeToTickerStream(symbols, io) {
             }, 2000);
         });
 
-        
+
         
         ws.on('close', (code, reason) => {
             console.log(`WebSocket closed for ${symbols.join(', ')}. Code: ${code}, Reason: ${reason}`);
@@ -450,23 +457,36 @@ function startPingPong(ws) {
     }, 20000); // Send a ping every 20 seconds
 }
 
+
+
+
 // Handle reconnection with exponential backoff
 function handleReconnect(ws, symbols, io) {
-    const symbolsKey = ws.symbolsKey;
+    const symbolsKey = symbols.join('-');
+    
+    // Initialize reconnectAttempts if not set
+    if (typeof ws.reconnectAttempts === 'undefined') {
+        ws.reconnectAttempts = 0;
+    }
+    
+    // Set default values if not defined
+    const maxAttempts = ws.maxReconnectAttempts || 5;
+    const baseDelay = ws.reconnectDelay || 5000;
+    const maxDelay = ws.maxReconnectDelay || 30000;
     
     // Don't reconnect if we've exceeded max attempts or connection is open
-    if (ws.reconnectAttempts >= ws.maxReconnectAttempts || 
+    if (ws.reconnectAttempts >= maxAttempts || 
         (ws.readyState !== undefined && ws.readyState === WebSocket.OPEN)) {
         return;
     }
     
-    // Calculate delay with exponential backoff
+    // Calculate delay with exponential backoff (with proper fallbacks)
     const delay = Math.min(
-        ws.reconnectDelay * Math.pow(1.5, ws.reconnectAttempts),
-        ws.maxReconnectDelay
+        baseDelay * Math.pow(1.5, ws.reconnectAttempts),
+        maxDelay
     );
     
-    console.log(`Will attempt to reconnect in ${delay}ms (attempt ${ws.reconnectAttempts + 1}/${ws.maxReconnectAttempts})`);
+    console.log(`Will attempt to reconnect in ${delay}ms (attempt ${ws.reconnectAttempts + 1}/${maxAttempts})`);
     
     // Schedule reconnection
     setTimeout(() => {
@@ -480,27 +500,13 @@ function handleReconnect(ws, symbols, io) {
         // Increment reconnect attempts counter
         ws.reconnectAttempts++;
         
-        // Verify API connectivity before reconnecting WebSocket
-        testConnection().then(connected => {
-            if (connected) {
-                // Create a new connection
-                subscribeToTickerStream(symbols, io);
-            } else {
-                console.log('Binance API not available, delaying WebSocket reconnection');
-                // Try again later with a longer delay
-                setTimeout(() => {
-                    handleReconnect(ws, symbols, io);
-                }, ws.reconnectDelay * 2);
-            }
-        }).catch(err => {
-            console.error('Error testing connection:', err);
-            // Try again later with a longer delay
-            setTimeout(() => {
-                handleReconnect(ws, symbols, io);
-            }, ws.reconnectDelay * 2);
-        });
+        // Create a new connection
+        subscribeToTickerStream(symbols, io);
     }, delay);
 }
+
+
+
 
 // Unsubscribe from ticker stream
 function unsubscribeFromTickerStream(symbols, io) {
