@@ -17,6 +17,19 @@ const WS_BASE_URL = process.env.BINANCE_WEBSOCKET_URL;
 // WebSocket connections
 const socketConnections = {};
 
+// Connection lifecycle and status tracking
+const connectionStatus = {
+    reconnectAttempt: 0,
+    maxReconnectAttempts: 5,
+    reconnectDelay: 5000,
+    maxReconnectDelay: 30000,
+    lastSuccessfulConnection: 0,
+    connectionLifetime: 23 * 60 * 60 * 1000, // 23 hours (1 hour less than Binance's 24h limit)
+    pollingActive: false,
+    pollingIntervalId: null,
+    connectionRenewalTimeout: null
+};
+
 // Test Binance API connection
 async function testConnection() {
     try {
@@ -144,10 +157,7 @@ async function getExchangeInfo(symbol) {
     }
 }
 
-
-
-
-// and ensure it always rounds DOWN to the nearest step size
+// Format quantity using LOT_SIZE filter
 function formatQuantity(quantity, symbolInfo) {
     try {
         // Find the LOT_SIZE filter
@@ -193,11 +203,6 @@ function formatQuantity(quantity, symbolInfo) {
         return quantity.toString();
     }
 }
-
-
-
-
-
 
 // Create a market buy order
 async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
@@ -247,10 +252,7 @@ async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
     }
 }
 
-
-
-
-// it properly formats the quantity before sending to Binance
+// Create a market sell order
 async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
     try {
         let orderQuantity = quantity;
@@ -312,198 +314,366 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
     }
 }
 
+// Start fallback polling mechanism for price updates
+function startPolling(symbols, io) {
+    // Don't start if already polling
+    if (connectionStatus.pollingActive) {
+        return;
+    }
+    
+    console.log('Starting price polling as WebSocket fallback');
+    connectionStatus.pollingActive = true;
+    
+    // Clear any existing polling interval
+    if (connectionStatus.pollingIntervalId) {
+        clearInterval(connectionStatus.pollingIntervalId);
+    }
+    
+    // Function to fetch prices and emit updates
+    const fetchAndEmitPrices = async () => {
+        try {
+            // Fetch prices for all symbols
+            const prices = await getMultipleTickers(symbols);
+            
+            // Emit price updates to clients
+            prices.forEach(price => {
+                io.emit('price-update', {
+                    symbol: price.symbol,
+                    price: price.price,
+                    source: 'polling'
+                });
+            });
+            
+            console.log(`Polled prices for ${prices.length} symbols`);
+        } catch (error) {
+            console.error('Error polling prices:', error.message);
+        }
+    };
+    
+    // Fetch prices immediately
+    fetchAndEmitPrices();
+    
+    // Set up interval for regular polling (every 10 seconds)
+    connectionStatus.pollingIntervalId = setInterval(fetchAndEmitPrices, 10000);
+    
+    // Notify clients that we're in polling mode
+    io.emit('websocket-status', { 
+        connected: false, 
+        pollingActive: true,
+        message: 'Using REST API polling due to WebSocket disconnection'
+    });
+}
 
-// Subscribe to ticker stream using native WebSocket
+// Stop polling mechanism
+function stopPolling() {
+    if (!connectionStatus.pollingActive) {
+        return;
+    }
+    
+    console.log('Stopping price polling');
+    
+    // Clear polling interval
+    if (connectionStatus.pollingIntervalId) {
+        clearInterval(connectionStatus.pollingIntervalId);
+        connectionStatus.pollingIntervalId = null;
+    }
+    
+    connectionStatus.pollingActive = false;
+}
+
+// Subscribe to ticker stream using WebSocket
 function subscribeToTickerStream(symbols, io) {
     const symbolsKey = symbols.join('-');
     
     // Check if we already have an active connection for these symbols
-    if (!socketConnections[symbolsKey]) {
-        // For testnet, use the correct subscription method
-        const socketUrl = WS_BASE_URL;
-        
-        console.log(`Connecting to Binance WebSocket: ${socketUrl}`);
-        
-        // Create WebSocket connection
-        const ws = new WebSocket(socketUrl);
-        ws.reconnectAttempts = 0;
-        ws.maxReconnectAttempts = 5;
-        ws.reconnectDelay = 5000;
-        ws.maxReconnectDelay = 30000;
-        
-        // Initialize status properties
-        ws.isAlive = true;
-        ws.symbolsKey = symbolsKey;
-        
-        ws.on('open', () => {
-            console.log(`WebSocket connection opened for ${symbols.join(', ')}`);
-            ws.isAlive = true;
-            
-            // Important: Send a subscribe message for all symbols
-            const subscribeMsg = {
-                method: "SUBSCRIBE",
-                params: symbols.map(symbol => `${symbol.toLowerCase()}@ticker`),
-                id: Date.now()
-            };
-            
-            ws.send(JSON.stringify(subscribeMsg));
-            console.log("Sent subscription request:", subscribeMsg);
-            
-            // Emit connection status
-            io.emit('websocket-status', { 
-                connected: true, 
-                symbols 
-            });
-        });
-        
-
-
-        ws.on('message', (data) => {
-            try {
-                // Parse the data
-                const parsedData = JSON.parse(data.toString());
-                
-                // Check if this is a pong response
-                if (parsedData.result === null && parsedData.id !== undefined) {
-                    console.log("Received pong response from Binance");
-                    ws.isAlive = true;
-                    return;
-                }
-                
-                // Log the data for debugging
-                console.log("Received WebSocket message:", JSON.stringify(parsedData).substring(0, 200) + "...");
-                
-                // Handle the message and emit to clients
-                // ...
-            } catch (error) {
-                console.error('Error handling WebSocket message:', error.message);
-            }
-        });
-        
-
-
-        ws.on('error', (error) => {
-            console.error('WebSocket error:', error.message);
-            io.emit('websocket-status', { 
-                connected: false, 
-                error: error.message, 
-                symbols 
-            });
-            
-            // Try to recover the connection
-            setTimeout(() => {
-                if (ws.readyState !== WebSocket.OPEN) {
-                    handleReconnect(ws, symbols, io);
-                }
-            }, 2000);
-        });
-
-
-        
-        ws.on('close', (code, reason) => {
-            console.log(`WebSocket closed for ${symbols.join(', ')}. Code: ${code}, Reason: ${reason}`);
-            ws.isAlive = false;
-            
-            io.emit('websocket-status', { connected: false, symbols });
-            
-            // Attempt to reconnect with exponential backoff
-            handleReconnect(ws, symbols, io);
-        });
-        
-        // Initialize ping timer ID
-        ws.pingTimerId = null;
-        
-        // Start ping-pong for connection health check
-        startPingPong(ws);
-        
-        // Store connection reference
-        socketConnections[symbolsKey] = ws;
+    if (socketConnections[symbolsKey]) {
+        console.log(`Already have an active connection for ${symbols.join(', ')}`);
+        return socketConnections[symbolsKey];
     }
     
-    return socketConnections[symbolsKey];
+    // For testnet, use the correct subscription method
+    const socketUrl = WS_BASE_URL;
+    
+    console.log(`Connecting to Binance WebSocket: ${socketUrl}`);
+    
+    // Create WebSocket connection
+    const ws = new WebSocket(socketUrl);
+    
+    // Initialize connection properties
+    ws.symbolsKey = symbolsKey;
+    ws.symbols = symbols;
+    ws.isAlive = true;
+    ws.reconnectAttempt = connectionStatus.reconnectAttempt;
+    ws.connectionStartTime = Date.now();
+    
+    // Connection opened handler
+    ws.on('open', () => {
+        console.log(`WebSocket connection opened for ${symbols.join(', ')}`);
+        ws.isAlive = true;
+        connectionStatus.reconnectAttempt = 0;
+        connectionStatus.lastSuccessfulConnection = Date.now();
+        
+        // Subscribe to all symbols
+        const subscribeMsg = {
+            method: "SUBSCRIBE",
+            params: symbols.map(symbol => `${symbol.toLowerCase()}@ticker`),
+            id: Date.now()
+        };
+        
+        ws.send(JSON.stringify(subscribeMsg));
+        console.log("Sent subscription request:", subscribeMsg);
+        
+        // Emit connection status
+        io.emit('websocket-status', { 
+            connected: true, 
+            symbols,
+            pollingActive: connectionStatus.pollingActive
+        });
+        
+        // Update trading status
+        io.emit('trading-status', { active: true });
+        
+        // Stop polling if active as we now have WebSocket
+        stopPolling();
+        
+        // Set up connection renewal timeout (23 hours)
+        setupConnectionRenewal(symbols, io);
+    });
+    
+    // Message handler
+    ws.on('message', (data) => {
+        try {
+            // Parse the data
+            const parsedData = JSON.parse(data.toString());
+            
+            // Check if this is a pong response
+            if (parsedData.result === null && parsedData.id !== undefined) {
+                console.log("Received pong response from Binance");
+                ws.isAlive = true;
+                return;
+            }
+            
+            // Check if this is an error message
+            if (parsedData.error) {
+                console.error('Error from Binance WebSocket:', parsedData.error);
+                return;
+            }
+            
+            // For ticker data (@ticker stream)
+            if (parsedData.e === '24hrTicker') {
+                // Extract symbol and price
+                const symbol = parsedData.s;
+                const price = parsedData.c;
+                
+                // Emit price update to clients
+                io.emit('price-update', {
+                    symbol,
+                    price,
+                    data: parsedData,
+                    source: 'websocket'
+                });
+                
+                // Log only occasionally to avoid flooding
+                if (Math.random() < 0.1) {
+                    console.log(`Ticker update for ${symbol}: ${price}`);
+                }
+            } else {
+                // Log other message types (truncated to avoid huge logs)
+                console.log(`Received WebSocket message: ${JSON.stringify(parsedData).substring(0, 100)}...`);
+            }
+        } catch (error) {
+            console.error('Error handling WebSocket message:', error.message);
+        }
+    });
+    
+    // Error handler
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error.message);
+        io.emit('websocket-status', { 
+            connected: false, 
+            error: error.message, 
+            symbols 
+        });
+        
+        // Try to recover the connection
+        setTimeout(() => {
+            if (ws.readyState !== WebSocket.OPEN) {
+                handleReconnect(ws, symbols, io);
+            }
+        }, 2000);
+    });
+    
+    // Close handler
+    ws.on('close', (code, reason) => {
+        console.log(`WebSocket closed for ${symbols.join(', ')}. Code: ${code}, Reason: ${reason}`);
+        
+        // Update WebSocket status
+        io.emit('websocket-status', { 
+            connected: false, 
+            symbols 
+        });
+        
+        // Start polling as fallback
+        startPolling(symbols, io);
+        
+        // Clear connection renewal timeout if it exists
+        if (connectionStatus.connectionRenewalTimeout) {
+            clearTimeout(connectionStatus.connectionRenewalTimeout);
+            connectionStatus.connectionRenewalTimeout = null;
+        }
+        
+        // Attempt to reconnect
+        handleReconnect(ws, symbols, io);
+    });
+    
+    // Start health check for connection
+    startHealthCheck(ws, symbols, io);
+    
+    // Store connection reference
+    socketConnections[symbolsKey] = ws;
+    
+    return ws;
 }
 
-// Start ping-pong mechanism to keep connection alive
-// Start ping-pong mechanism to keep connection alive
-function startPingPong(ws) {
-    // Clear any existing timer
-    if (ws.pingTimerId) {
-        clearInterval(ws.pingTimerId);
+// Setup connection renewal timer
+function setupConnectionRenewal(symbols, io) {
+    // Clear any existing timeout
+    if (connectionStatus.connectionRenewalTimeout) {
+        clearTimeout(connectionStatus.connectionRenewalTimeout);
     }
     
-    // Set up ping interval
-    ws.pingTimerId = setInterval(() => {
+    // Set timeout to renew connection after 23 hours
+    connectionStatus.connectionRenewalTimeout = setTimeout(() => {
+        console.log(`Connection lifetime (23 hours) reached, performing planned renewal`);
+        
+        // Get the connection
+        const symbolsKey = symbols.join('-');
+        const connection = socketConnections[symbolsKey];
+        
+        if (connection) {
+            // Notify clients
+            io.emit('websocket-status', { 
+                connected: true, 
+                renewing: true,
+                message: 'Performing scheduled 24h connection renewal',
+                symbols 
+            });
+            
+            // Start polling before closing connection
+            startPolling(symbols, io);
+            
+            // Reset reconnect attempt counter for clean reconnection
+            connectionStatus.reconnectAttempt = 0;
+            
+            // Close connection (will trigger reconnect)
+            connection.close(1000, "Planned connection renewal");
+        } else {
+            console.warn(`Cannot find connection for renewal: ${symbolsKey}`);
+        }
+    }, connectionStatus.connectionLifetime);
+    
+    console.log(`Scheduled connection renewal in ${connectionStatus.connectionLifetime / 1000 / 60 / 60} hours`);
+}
+
+// Start health check for WebSocket connection
+function startHealthCheck(ws, symbols, io) {
+    // Clear any existing interval
+    if (ws.healthCheckIntervalId) {
+        clearInterval(ws.healthCheckIntervalId);
+    }
+    
+    // Set up health check interval (every 30 seconds)
+    ws.healthCheckIntervalId = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN) {
-            clearInterval(ws.pingTimerId);
+            console.log('Health check: WebSocket not open, clearing interval');
+            clearInterval(ws.healthCheckIntervalId);
             return;
         }
         
-        // For Binance, we need to send a keepalive message in the format they expect
+        // Mark as not alive until we get a response
+        ws.isAlive = false;
+        
         try {
-            // Use a proper Binance ping message format
-            ws.send(JSON.stringify({ 
-                method: "PING",
+            // Send a proper Binance request that will get a response
+            ws.send(JSON.stringify({
+                method: "LIST_SUBSCRIPTIONS",
                 id: Date.now()
             }));
             
-            console.log("Sent ping to Binance WebSocket");
+            // Also use standard WebSocket ping
+            ws.ping();
+            
+            // Schedule check for response
+            setTimeout(() => {
+                if (!ws.isAlive) {
+                    console.warn('No response received to health check, connection may be dead');
+                    ws.terminate();
+                }
+            }, 5000);
         } catch (error) {
-            console.error("Error sending ping:", error);
+            console.error('Error sending health check:', error.message);
             ws.terminate();
         }
-    }, 20000); // Send a ping every 20 seconds
+    }, 30000);
 }
-
-
-
 
 // Handle reconnection with exponential backoff
 function handleReconnect(ws, symbols, io) {
     const symbolsKey = symbols.join('-');
     
-    // Initialize reconnectAttempts if not set
-    if (typeof ws.reconnectAttempts === 'undefined') {
-        ws.reconnectAttempts = 0;
-    }
+    // Increment reconnect attempt counter
+    connectionStatus.reconnectAttempt++;
     
-    // Set default values if not defined
-    const maxAttempts = ws.maxReconnectAttempts || 5;
-    const baseDelay = ws.reconnectDelay || 5000;
-    const maxDelay = ws.maxReconnectDelay || 30000;
-    
-    // Don't reconnect if we've exceeded max attempts or connection is open
-    if (ws.reconnectAttempts >= maxAttempts || 
-        (ws.readyState !== undefined && ws.readyState === WebSocket.OPEN)) {
+    // Don't reconnect if we've exceeded max attempts
+    if (connectionStatus.reconnectAttempt > connectionStatus.maxReconnectAttempts) {
+        console.error(`Max reconnect attempts (${connectionStatus.maxReconnectAttempts}) reached`);
+        
+        // Ensure polling is active as a fallback
+        startPolling(symbols, io);
+        
+        // After a longer delay, reset reconnect counter and try again
+        setTimeout(() => {
+            console.log('Resetting reconnect attempt counter after cooldown period');
+            connectionStatus.reconnectAttempt = 0;
+            
+            // Clean up old connection reference
+            delete socketConnections[symbolsKey];
+            
+            // Try to reconnect
+            subscribeToTickerStream(symbols, io);
+        }, 5 * 60 * 1000); // 5 minutes
+        
         return;
     }
     
-    // Calculate delay with exponential backoff (with proper fallbacks)
+    // Calculate exponential backoff delay
     const delay = Math.min(
-        baseDelay * Math.pow(1.5, ws.reconnectAttempts),
-        maxDelay
+        connectionStatus.reconnectDelay * Math.pow(1.5, connectionStatus.reconnectAttempt - 1),
+        connectionStatus.maxReconnectDelay
     );
     
-    console.log(`Will attempt to reconnect in ${delay}ms (attempt ${ws.reconnectAttempts + 1}/${maxAttempts})`);
+    console.log(`Will attempt to reconnect in ${delay}ms (attempt ${connectionStatus.reconnectAttempt}/${connectionStatus.maxReconnectAttempts})`);
+    
+    // Notify clients about reconnection attempt
+    io.emit('websocket-status', {
+        connected: false,
+        reconnecting: true,
+        attempt: connectionStatus.reconnectAttempt,
+        maxAttempts: connectionStatus.maxReconnectAttempts,
+        symbols
+    });
     
     // Schedule reconnection
     setTimeout(() => {
         console.log(`Attempting to reconnect WebSocket for ${symbols.join(', ')}`);
         
         // Remove the old connection before attempting to reconnect
-        if (socketConnections[symbolsKey]) {
-            delete socketConnections[symbolsKey];
-        }
-        
-        // Increment reconnect attempts counter
-        ws.reconnectAttempts++;
+        delete socketConnections[symbolsKey];
         
         // Create a new connection
         subscribeToTickerStream(symbols, io);
     }, delay);
 }
-
-
-
 
 // Unsubscribe from ticker stream
 function unsubscribeFromTickerStream(symbols, io) {
@@ -511,13 +681,13 @@ function unsubscribeFromTickerStream(symbols, io) {
     const connection = socketConnections[key];
     
     if (connection) {
-        // Clear ping timer if it exists
-        if (connection.pingTimerId) {
-            clearInterval(connection.pingTimerId);
+        // Clear health check interval if it exists
+        if (connection.healthCheckIntervalId) {
+            clearInterval(connection.healthCheckIntervalId);
         }
         
         // Close the WebSocket connection
-        connection.close();
+        connection.close(1000, "Unsubscribed");
         delete socketConnections[key];
         console.log(`Unsubscribed from ticker stream for ${symbols.join(', ')}`);
         
@@ -565,51 +735,6 @@ async function manualConnectAndGetPrices(symbols) {
         console.error('Manual connection error:', err);
         return { success: false, error: err.message };
     }
-}
-
-/**
- * Close all active WebSocket connections
- * @returns {Promise<boolean>} True if all connections were closed successfully
- */
-async function closeAllConnections() {
-    console.log(`Closing all WebSocket connections: ${Object.keys(socketConnections).length} active connections`);
-    
-    // Make a copy of the keys to avoid modification during iteration
-    const connectionKeys = Object.keys(socketConnections);
-    
-    for (const key of connectionKeys) {
-        try {
-            console.log(`Closing WebSocket connection for ${key}`);
-            const connection = socketConnections[key];
-            
-            if (connection && connection.readyState !== undefined) {
-                // If it's a standard WebSocket
-                if (connection.readyState === WebSocket.OPEN) {
-                    connection.close(1000, "Server shutting down");
-                }
-            } else if (connection && connection.terminate) {
-                // If it's a ws library WebSocket
-                connection.terminate();
-            } else if (connection && connection.close) {
-                // Generic close method
-                connection.close();
-            }
-            
-            // Delete the connection reference
-            delete socketConnections[key];
-        } catch (error) {
-            console.error(`Error closing WebSocket for ${key}:`, error);
-        }
-    }
-    
-    // Clear any ping intervals that might be running
-    Object.values(socketConnections).forEach(conn => {
-        if (conn && conn.pingTimerId) {
-            clearInterval(conn.pingTimerId);
-        }
-    });
-    
-    return true;
 }
 
 // Execute a buy order based on USDT value
@@ -664,7 +789,7 @@ async function executeBuyOrder(symbol, amount, amountType = 'amount') {
     }
 }
 
-// Execute a sell order based on USDT value
+// Execute a sell order
 async function executeSellOrder(symbol, amount, amountType = 'amount') {
     try {
         let quantity = amount;
@@ -739,8 +864,109 @@ function initializeWebSockets(io) {
     
     console.log(`Initializing WebSocket connections for ${symbols.join(', ')}`);
     
+    // Reset reconnect attempt counter
+    connectionStatus.reconnectAttempt = 0;
+    
     // Subscribe to ticker streams
     return subscribeToTickerStream(symbols, io);
+}
+
+// Close all active WebSocket connections
+async function closeAllConnections() {
+    console.log(`Closing all WebSocket connections: ${Object.keys(socketConnections).length} active connections`);
+    
+    // Stop polling if active
+    stopPolling();
+    
+    // Clear connection renewal timeout if active
+    if (connectionStatus.connectionRenewalTimeout) {
+        clearTimeout(connectionStatus.connectionRenewalTimeout);
+        connectionStatus.connectionRenewalTimeout = null;
+    }
+    
+    // Make a copy of the keys to avoid modification during iteration
+    const connectionKeys = Object.keys(socketConnections);
+    
+    for (const key of connectionKeys) {
+        try {
+            console.log(`Closing WebSocket connection for ${key}`);
+            const connection = socketConnections[key];
+            
+            // Clear any intervals
+            if (connection.healthCheckIntervalId) {
+                clearInterval(connection.healthCheckIntervalId);
+            }
+            
+            // Close the connection
+            if (connection && connection.readyState === WebSocket.OPEN) {
+                connection.close(1000, "Server shutting down");
+            } else if (connection && connection.terminate) {
+                connection.terminate();
+            }
+            
+            // Delete the connection reference
+            delete socketConnections[key];
+        } catch (error) {
+            console.error(`Error closing WebSocket for ${key}:`, error);
+        }
+    }
+    
+    return true;
+}
+
+// Get WebSocket connection status
+function getWebSocketStatus() {
+    // Create a status report for all connections
+    const status = {
+        connections: {},
+        totalConnections: Object.keys(socketConnections).length,
+        reconnectAttempt: connectionStatus.reconnectAttempt,
+        pollingActive: connectionStatus.pollingActive,
+        connectionAge: 0
+    };
+    
+    // Add details for each connection
+    for (const [key, connection] of Object.entries(socketConnections)) {
+        const connectionAge = connection.connectionStartTime ? 
+            Math.round((Date.now() - connection.connectionStartTime) / 1000 / 60 / 60) : 0;
+            
+        status.connections[key] = {
+            isOpen: connection.readyState === WebSocket.OPEN,
+            connectionAge: connectionAge,
+            symbols: connection.symbols || []
+        };
+        
+        // Track the oldest connection for renewal decisions
+        if (connectionAge > status.connectionAge) {
+            status.connectionAge = connectionAge;
+        }
+    }
+    
+    return status;
+}
+
+// Renew a specific WebSocket connection manually
+function renewWebSocketConnection(symbols, io) {
+    const symbolsKey = Array.isArray(symbols) ? symbols.join('-') : symbols;
+    const connection = socketConnections[symbolsKey];
+    
+    if (!connection) {
+        console.log(`No connection found for ${symbolsKey}`);
+        return false;
+    }
+    
+    console.log(`Manually renewing WebSocket connection for ${symbolsKey}`);
+    
+    // Start polling as fallback during renewal
+    startPolling(connection.symbols || symbols, io);
+    
+    // Reset reconnect attempt counter
+    connectionStatus.reconnectAttempt = 0;
+    
+    // Close the connection (will trigger reconnect)
+    connection.close(1000, "Manual renewal requested");
+    
+    return true;
 }
 
 module.exports = {
@@ -757,5 +983,7 @@ module.exports = {
     executeBuyOrder,
     executeSellOrder,
     initializeWebSockets,
-    closeAllConnections
+    closeAllConnections,
+    getWebSocketStatus,
+    renewWebSocketConnection
 };

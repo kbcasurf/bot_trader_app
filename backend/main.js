@@ -316,7 +316,7 @@ io.on('connection', (socket) => {
             });
         }
     });
-    
+
     // Handle client disconnection
     socket.on('disconnect', (reason) => {
         console.log(`Client ${socket.id} disconnected. Reason: ${reason}`);
@@ -367,6 +367,47 @@ io.on('connection', (socket) => {
         }
     });
     
+
+    // Add a new socket.io event handler for checking WebSocket status
+    socket.on('get-websocket-status', async () => {
+        try {
+            const status = binanceAPI.getWebSocketStatus();
+            socket.emit('websocket-status-details', {
+                status,
+                success: true
+            });
+        } catch (error) {
+            console.error('Error getting WebSocket status:', error);
+            socket.emit('websocket-status-details', {
+                success: false,
+                error: error.message
+            });
+        }
+    });
+
+    // Add a new socket.io event handler for manually renewing WebSocket connection
+    socket.on('renew-websocket', () => {
+        try {
+            // List of symbols to track (should match what you use in initializeWebSockets)
+            const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
+            
+            console.log('Manual WebSocket renewal requested');
+            const result = binanceAPI.renewWebSocketConnection(symbols, io);
+            
+            socket.emit('renew-websocket-result', {
+                success: result,
+                message: result ? 'WebSocket renewal initiated' : 'Failed to renew WebSocket connection'
+            });
+        } catch (error) {
+            console.error('Error renewing WebSocket connection:', error);
+            socket.emit('renew-websocket-result', {
+                success: false,
+                error: error.message
+            });
+        }
+    });
+
+
     // Handle manual Binance API test
     socket.on('manual-binance-test', async (data) => {
         try {
@@ -653,69 +694,44 @@ io.on('connection', (socket) => {
         try {
             console.log('Testing Binance WebSocket stream');
             
-            // First, test connection to Binance API
-            const apiConnected = await binanceAPI.testConnection();
-            if (!apiConnected) {
-                socket.emit('binance-test-result', { 
-                    success: false, 
-                    error: 'Cannot connect to Binance API' 
-                });
-                return;
+            // First, check current WebSocket status
+            const status = binanceAPI.getWebSocketStatus();
+            
+            // If no active connections, initialize WebSockets
+            if (status.totalConnections === 0) {
+                binanceAPI.initializeWebSockets(io);
             }
             
-            // Get current prices to verify API is working
-            try {
-                const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
-                
-                // Get prices for all symbols
-                const prices = {};
-                for (const symbol of symbols) {
-                    const tickerData = await binanceAPI.getTickerPrice(symbol);
-                    prices[symbol] = tickerData.price;
-                    
-                    // Emit price updates immediately
+            // Get prices via API as a fallback
+            const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
+            const pricesResult = await binanceAPI.manualConnectAndGetPrices(symbols);
+            
+            socket.emit('binance-test-result', {
+                success: true,
+                message: 'WebSocket test initiated',
+                websocketStatus: status,
+                prices: pricesResult.prices || {}
+            });
+            
+            // Emit price updates to all clients
+            if (pricesResult.success && pricesResult.prices) {
+                Object.entries(pricesResult.prices).forEach(([symbol, price]) => {
                     io.emit('price-update', {
-                        symbol: symbol,
-                        price: tickerData.price,
-                        source: 'api'
+                        symbol,
+                        price,
+                        source: 'api-test'
                     });
-                }
-                
-                // Initialize or restart WebSocket connections
-                const wsConnection = binanceAPI.subscribeToTickerStream(symbols, io);
-                
-                socket.emit('binance-test-result', { 
-                    success: true,
-                    prices,
-                    message: 'WebSocket connection initiated. You should see price updates soon.'
-                });
-                
-                // Update WebSocket connected status
-                websocketConnected = true;
-                io.emit('trading-status', { 
-                    active: websocketConnected && !CIRCUIT_BREAKER.tripped,
-                    circuitBreaker: CIRCUIT_BREAKER.tripped
-                });
-                console.log('Trading status updated:', { 
-                    active: websocketConnected && !CIRCUIT_BREAKER.tripped,
-                    circuitBreaker: CIRCUIT_BREAKER.tripped
-                });
-                
-            } catch (err) {
-                console.error('Error in test-binance-stream:', err);
-                socket.emit('binance-test-result', { 
-                    success: false, 
-                    error: err.message 
                 });
             }
         } catch (error) {
             console.error('Error in test-binance-stream:', error);
-            socket.emit('binance-test-result', { 
-                success: false, 
-                error: error.message 
+            socket.emit('binance-test-result', {
+                success: false,
+                error: error.message
             });
         }
     });
+    
     
     // Listen for WebSocket status updates
     socket.on('websocket-status', (status) => {
