@@ -331,7 +331,7 @@ socket.on('price-update', (data) => {
     }
 });
 
-// Transaction and operation results
+// Enhanced transaction result handlers
 socket.on('first-purchase-result', (result) => {
     if (!result.success) {
         alert(`Purchase failed: ${result.error}`);
@@ -346,6 +346,65 @@ socket.on('sell-all-result', (result) => {
     } else {
         console.log('Sell successful');
     }
+});
+
+// Enhanced transaction update handler
+socket.on('transaction-update', (data) => {
+    if (!data || !data.symbol || !data.transactions) {
+        console.error('Invalid transaction update data', data);
+        return;
+    }
+    
+    console.log(`Received transaction update for ${data.symbol}:`, data.transactions);
+    
+    const symbol = data.symbol.toLowerCase();
+    const historyElement = document.getElementById(`${symbol}-history`);
+    
+    if (!historyElement) {
+        console.error(`Transaction history element not found for ${symbol}`);
+        return;
+    }
+
+     // Clear existing entries
+     historyElement.innerHTML = '';
+    
+     if (data.transactions.length === 0) {
+         const noTransactionsItem = document.createElement('li');
+         noTransactionsItem.classList.add('no-transactions');
+         noTransactionsItem.textContent = 'No transactions yet';
+         historyElement.appendChild(noTransactionsItem);
+         return;
+     }
+     
+    // Add transactions to the history list
+    data.transactions.forEach(transaction => {
+        if (!transaction) {
+            console.error('Invalid transaction in array');
+            return;
+        }
+
+        const listItem = document.createElement('li');
+
+        // Apply appropriate styling based on transaction type
+        if (transaction.type) {
+            listItem.classList.add(transaction.type.toLowerCase());
+        }
+
+        // Format the transaction information
+        let dateStr = 'Unknown date';
+        if (transaction.timestamp) {
+            const date = new Date(transaction.timestamp);
+            dateStr = date.toLocaleString();
+        }
+
+        // Make sure all values are properly formatted to avoid "undefined"
+        const type = transaction.type || 'UNKNOWN';
+        const quantity = transaction.quantity ? parseFloat(transaction.quantity).toFixed(6) : '0.00';
+        const price = transaction.price ? parseFloat(transaction.price).toFixed(2) : '0.00';
+
+        listItem.textContent = `${type}: ${quantity} ${data.symbol} at $${price} (${dateStr})`;
+        historyElement.appendChild(listItem);
+    });
 });
 
 // Test button event listeners
@@ -485,7 +544,17 @@ sellAllButtons.forEach(button => {
         const card = this.closest('.crypto-card');
         const symbol = card.id.replace('-card', '').toUpperCase() + 'USDT';
         
-        console.log(`Initiating sell all for ${symbol}`);
+        // Check if there are holdings to sell - get value from holdings element
+        const holdingsElement = card.querySelector('.holdings span');
+        const holdingsText = holdingsElement.textContent;
+        const quantity = parseFloat(holdingsText.split(' ')[0]);
+        
+        if (isNaN(quantity) || quantity <= 0) {
+            alert('No holdings to sell.');
+            return;
+        }
+        
+        console.log(`Initiating sell all for ${symbol} with quantity ${quantity}`);
         
         // Emit sell all event to backend
         socket.emit('sell-all', {

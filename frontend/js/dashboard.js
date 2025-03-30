@@ -8,18 +8,23 @@ let tradingActive = false;
 export function updateTransactionHistory(symbol, transactions) {
     const historyElement = document.getElementById(`${symbol.toLowerCase()}-history`);
     
-    if (!historyElement) return;
+    if (!historyElement) {
+        console.error(`Could not find history element for ${symbol}`);
+        return;
+    }
     
     // Clear existing entries
     historyElement.innerHTML = '';
     
-    if (transactions.length === 0) {
+    if (!transactions || transactions.length === 0) {
         const noTransactionsItem = document.createElement('li');
         noTransactionsItem.classList.add('no-transactions');
         noTransactionsItem.textContent = 'No transactions yet';
         historyElement.appendChild(noTransactionsItem);
         return;
     }
+    
+    console.log(`Updating transaction history for ${symbol} with ${transactions.length} transactions:`, transactions);
     
     // Add transactions to the history list
     transactions.forEach(transaction => {
@@ -30,7 +35,11 @@ export function updateTransactionHistory(symbol, transactions) {
         const date = new Date(transaction.timestamp);
         const formattedDate = `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
         
-        listItem.textContent = `${transaction.type}: ${transaction.amount} ${symbol} at $${transaction.price} (${formattedDate})`;
+        // Make sure to format price and quantity with proper precision
+        const price = parseFloat(transaction.price).toFixed(2);
+        const quantity = parseFloat(transaction.quantity).toFixed(6);
+        
+        listItem.textContent = `${transaction.type}: ${quantity} ${symbol} at $${price} (${formattedDate})`;
         
         historyElement.appendChild(listItem);
     });
@@ -56,17 +65,22 @@ export function updateTradingButtonsState() {
 // Listen for transaction updates
 socket.on('transaction-update', (data) => {
     const { symbol, transactions } = data;
+    console.log(`Received transaction update for ${symbol}:`, transactions);
     updateTransactionHistory(symbol, transactions);
 });
 
 // Listen for holdings updates
 socket.on('holdings-update', (data) => {
     const { symbol, amount, profitLossPercent } = data;
+    console.log(`Received holdings update for ${symbol}: ${amount} (${profitLossPercent}%)`);
     
     // Update holdings display
     const holdingsElement = document.getElementById(`${symbol.toLowerCase()}-holdings`);
     if (holdingsElement) {
+        // Format the holdings amount with 6 decimal places for cryptocurrencies
         holdingsElement.textContent = `${parseFloat(amount).toFixed(6)} ${symbol}`;
+    } else {
+        console.error(`Holdings element not found for ${symbol}`);
     }
     
     // Update profit/loss bar and text
@@ -91,6 +105,8 @@ socket.on('holdings-update', (data) => {
         } else {
             textElement.classList.remove('profit', 'loss');
         }
+    } else {
+        console.error(`Profit/loss elements not found for ${symbol}`);
     }
 });
 

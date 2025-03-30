@@ -831,29 +831,30 @@ io.on('connection', (socket) => {
 
 
 
+
     // Handle sell all
     socket.on('sell-all', async (data) => {
         try {
             // Check if WebSocket is connected
             if (!websocketConnected) {
-                socket.emit('sell-all-result', { 
-                    success: false, 
+                socket.emit('sell-all-result', {
+                    success: false,
                     error: 'Trading is paused due to WebSocket connection issues. Please try again later.'
                 });
                 return;
             }
-            
+
             // Check if circuit breaker is tripped
             if (CIRCUIT_BREAKER.tripped) {
-                socket.emit('sell-all-result', { 
-                    success: false, 
-                    error: 'Trading is currently suspended due to multiple consecutive errors. Please try again later.' 
+                socket.emit('sell-all-result', {
+                    success: false,
+                    error: 'Trading is currently suspended due to multiple consecutive errors. Please try again later.'
                 });
                 return;
             }
-            
+
             console.log(`Sell all request: ${JSON.stringify(data)}`);
-            
+
             if (!data.symbol) {
                 socket.emit('sell-all-result', {
                     success: false,
@@ -861,32 +862,41 @@ io.on('connection', (socket) => {
                 });
                 return;
             }
-            
+
             // Get current holdings
             const holdings = await getHoldings(data.symbol);
-            
-            if (!holdings || holdings.quantity <= 0) {
+            console.log(`Current holdings for ${data.symbol}:`, holdings);
+
+            if (!holdings || parseFloat(holdings.quantity) <= 0) {
                 socket.emit('sell-all-result', {
                     success: false,
                     error: 'No holdings to sell'
                 });
                 return;
             }
-            
+
             // Get current price
             const priceData = await binanceAPI.getTickerPrice(data.symbol);
             const currentPrice = parseFloat(priceData.price);
-            
+
             // Calculate total value
             const totalValue = holdings.quantity * currentPrice;
-            
+
             // Execute sell order
             console.log(`Executing sell order: ${holdings.quantity} ${data.symbol} at $${currentPrice}`);
             const result = await binanceAPI.createMarketSellOrder(data.symbol, holdings.quantity);
-            
+
+            if (!result) {
+                socket.emit('sell-all-result', {
+                    success: false,
+                    error: 'Failed to execute sell order'
+                });
+                return;
+            }
+
             // Update circuit breaker status
             checkCircuitBreaker(result !== null);
-            
+
             // Store transaction in database if connected
             if (systemStatus.database) {
                 const conn = await pool.getConnection();
@@ -895,7 +905,7 @@ io.on('connection', (socket) => {
                         'INSERT INTO transactions (symbol, type, price, quantity, investment) VALUES (?, ?, ?, ?, ?)',
                         [data.symbol, 'SELL', currentPrice, holdings.quantity, totalValue]
                     );
-                    
+
                     // Update holdings
                     await conn.query(
                         'UPDATE holdings SET quantity = 0, avg_price = 0 WHERE symbol = ?',
@@ -905,7 +915,7 @@ io.on('connection', (socket) => {
                     conn.release();
                 }
             }
-            
+
             // Send Telegram notification
             if (systemStatus.telegram) {
                 try {
@@ -922,30 +932,30 @@ io.on('connection', (socket) => {
                     console.error('Error sending Telegram notification:', telegramError);
                 }
             }
-            
+
             // Send transaction update to clients
             const transactions = await getTransactions(data.symbol);
             io.emit('transaction-update', {
                 symbol: data.symbol.replace('USDT', ''),
                 transactions: transactions
             });
-            
+
             // Send holdings update to clients
             io.emit('holdings-update', {
                 symbol: data.symbol.replace('USDT', ''),
                 amount: 0,
                 profitLossPercent: 0
             });
-            
+
             socket.emit('sell-all-result', { success: true });
         } catch (err) {
             console.error('Sell all error:', err);
             socket.emit('sell-all-result', { success: false, error: err.message });
-            
+
             // Update circuit breaker
             checkCircuitBreaker(false);
         }
-    });
+    })
 });
 
 // Start the server

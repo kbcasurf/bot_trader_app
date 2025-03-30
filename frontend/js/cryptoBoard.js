@@ -131,6 +131,8 @@ function attachEventListeners() {
             const symbol = card.id.replace('-card', '').toUpperCase() + 'USDT';
             const investment = card.querySelector('input[type="hidden"]').value;
             
+            console.log(`Initiating first purchase for ${symbol} with investment ${investment}`);
+            
             // Emit first purchase event to backend
             socket.emit('first-purchase', {
                 symbol: symbol,
@@ -150,6 +152,18 @@ function attachEventListeners() {
             
             const card = this.closest('.crypto-card');
             const symbol = card.id.replace('-card', '').toUpperCase() + 'USDT';
+            const holdingsElement = card.querySelector('.holdings span');
+            
+            // Check if there are any holdings to sell
+            const holdingsText = holdingsElement.textContent;
+            const quantity = parseFloat(holdingsText.split(' ')[0]);
+            
+            if (isNaN(quantity) || quantity <= 0) {
+                alert('No holdings to sell.');
+                return;
+            }
+            
+            console.log(`Initiating sell all for ${symbol} with quantity ${quantity}`);
             
             // Emit sell all event to backend
             socket.emit('sell-all', {
