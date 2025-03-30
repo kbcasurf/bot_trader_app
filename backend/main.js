@@ -327,7 +327,10 @@ io.on('connection', (socket) => {
             socket.emit('telegram-test-result', { success: true });
         } catch (err) {
             console.error('Telegram test error:', err);
-            socket.emit('telegram-test-result', { success: false, error: err.message });
+            socket.emit('telegram-test-result', { 
+                success: false, 
+                error: err.message 
+            });
         }
     });
     

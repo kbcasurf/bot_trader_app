@@ -103,13 +103,14 @@ function setupPeriodicPriceUpdates() {
 socket.on('connect', () => {
     console.log('Socket connected successfully');
     
-    // Request prices after connection is established
+    // Request system status first
+    socket.emit('get-system-status');
+    
+    // Wait a bit longer for the backend services to initialize
     setTimeout(() => {
         console.log('Fetching initial prices after connection...');
-        socket.emit('manual-binance-test', {
-            symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
-        });
-    }, 1000);
+        socket.emit('test-binance-stream');
+    }, 2000);
 });
 
 socket.on('connect_error', (error) => {
@@ -138,16 +139,84 @@ const tradingStatusText = document.getElementById('trading-status-text');
 const testTelegramBtn = document.getElementById('test-telegram');
 const testBinanceStreamBtn = document.getElementById('test-binance-stream');
 
+socket.on('telegram-test-result', (result) => {
+    if (result.success) {
+        alert('Telegram notification test successful!');
+    } else {
+        alert(`Telegram notification test failed: ${result.error || 'Unknown error'}`);
+    }
+    
+    console.log('Telegram test result:', result);
+});
+
 // Socket connection events
 socket.on('connect', () => {
-    console.log('Connected to backend');
-    backendStatusDot.classList.add('connected');
-    backendStatusDot.classList.remove('disconnected');
-    backendStatusText.textContent = 'Backend: Connected';
+    console.log('Socket connected successfully');
     
-    // Request system status after connection
+    // Request system status first
     socket.emit('get-system-status');
+    
+    // Add this to fetch account holdings after connection
+    setTimeout(() => {
+        console.log('Fetching account holdings...');
+        socket.emit('get-account-info');
+    }, 1500);
+    
+    // Wait a bit longer for the backend services to initialize and fetch prices
+    setTimeout(() => {
+        console.log('Fetching initial prices after connection...');
+        socket.emit('test-binance-stream');
+    }, 2500);
 });
+
+socket.on('account-info', (accountInfo) => {
+    console.log('Account info received:', accountInfo);
+    
+    if (accountInfo && accountInfo.balances) {
+        // Process each supported cryptocurrency
+        const supportedSymbols = ['BTC', 'SOL', 'XRP', 'DOGE', 'NEAR', 'PENDLE'];
+        
+        supportedSymbols.forEach(symbol => {
+            // Find the balance for this cryptocurrency
+            const balance = accountInfo.balances.find(b => b.asset === symbol);
+            
+            if (balance) {
+                // Get the holdings element
+                const holdingsElement = document.getElementById(`${symbol.toLowerCase()}-holdings`);
+                if (holdingsElement) {
+                    holdingsElement.textContent = `${parseFloat(balance.free).toFixed(8)} ${symbol}`;
+                    console.log(`Updated ${symbol} holdings: ${balance.free}`);
+                }
+            }
+        });
+    }
+});
+
+
+    socket.on('buy-result', (result) => {
+        if (result.success) {
+            console.log('Buy order successful:', result);
+            
+            // Request updated account info to refresh all holdings
+            socket.emit('get-account-info');
+        } else {
+            console.error('Buy order failed:', result.error);
+            alert(`Purchase failed: ${result.error}`);
+        }
+    });
+    
+    // Similarly for sell-result handler
+    socket.on('sell-result', (result) => {
+        if (result.success) {
+            console.log('Sell order successful:', result);
+            
+            // Request updated account info to refresh all holdings
+            socket.emit('get-account-info');
+        } else {
+            console.error('Sell order failed:', result.error);
+            alert(`Sell failed: ${result.error}`);
+        }
+    });
 
 socket.on('connect_error', (error) => {
     console.error('Connection error:', error);
