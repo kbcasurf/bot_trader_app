@@ -23,6 +23,7 @@ const HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
 const HEALTH_CHECK_TIMEOUT = 5000; // 5 seconds
 const POLLING_INTERVAL = 10000; // 10 seconds
 
+
 // WebSocket state
 let wsInstance = null;
 let wsState = {
@@ -42,6 +43,108 @@ let pollingState = {
     intervalId: null
 };
 
+
+// Initialize WebSocket connections for the configured symbols
+function initializeWebSockets(io) {
+    // List of symbols to track
+    const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
+    
+    console.log(`Initializing WebSocket connections for ${symbols.join(', ')}`);
+    
+    // Reset reconnect attempt counter
+    wsState.reconnectAttempt = 0;
+    wsState.isReconnecting = false;
+    
+    // Connect to WebSocket
+    return connectToWebSocket(symbols, io);
+}
+
+// Close all active WebSocket connections
+async function closeAllConnections() {
+    console.log('Closing all WebSocket connections');
+    
+    // Stop polling if active
+    stopPolling();
+    
+    // Clean up WebSocket
+    if (wsInstance) {
+        cleanupWebSocket(wsInstance);
+        wsInstance = null;
+    }
+    
+    // Reset connection state
+    wsState.isConnected = false;
+    
+    return true;
+}
+
+
+
+// Get WebSocket connection status
+function getWebSocketStatus() {
+    // Create a status report
+    const status = {
+        connections: {},
+        totalConnections: wsInstance ? 1 : 0,
+        reconnectAttempt: wsState.reconnectAttempt,
+        pollingActive: pollingState.isActive,
+        connectionAge: wsState.connectionStartTime ? 
+            Math.round((Date.now() - wsState.connectionStartTime) / 1000 / 60 / 60) : 0
+    };
+    
+    // Add details for the connection
+    if (wsInstance) {
+        const key = wsState.activeSymbols.join('-');
+        status.connections[key] = {
+            isOpen: wsInstance.readyState === WebSocket.OPEN,
+            connectionAge: status.connectionAge,
+            symbols: wsState.activeSymbols || [],
+            readyState: wsInstance.readyState
+        };
+    }
+    
+    return status;
+}
+
+
+
+
+/* // Renew WebSocket connection manually
+function renewWebSocketConnection(io) {
+    if (!wsInstance) {
+        console.log('No active WebSocket connection to renew');
+        return false;
+    }
+    
+    console.log('Manually renewing WebSocket connection');
+    
+    // Start polling as fallback during renewal
+    startPolling(wsState.activeSymbols, io);
+    
+    // Reset reconnect attempt counter
+    wsState.reconnectAttempt = 0;
+    wsState.isReconnecting = false;
+    
+    // Close the connection (will trigger reconnect)
+    if (wsInstance.readyState === WebSocket.OPEN) {
+        wsInstance.close(1000, "Manual renewal requested");
+    } else {
+        // If not open, clean up and reconnect manually
+        cleanupWebSocket(wsInstance);
+        wsInstance = null;
+        
+        // Reset state and initiate new connection
+        setTimeout(() => {
+            connectToWebSocket(wsState.activeSymbols, io);
+        }, 1000);
+    }
+    
+    return true;
+} */
+
+
+
+
 // Test Binance API connection
 async function testConnection() {
     try {
@@ -53,38 +156,9 @@ async function testConnection() {
     }
 }
 
-// Generate signature for signed endpoints
-function generateSignature(queryString) {
-    return crypto
-        .createHmac('sha256', API_SECRET)
-        .update(queryString)
-        .digest('hex');
-}
 
-// Get account information
-async function getAccountInfo() {
-    try {
-        const timestamp = Date.now();
-        const queryString = `timestamp=${timestamp}`;
-        const signature = generateSignature(queryString);
-        
-        const response = await axios.get(
-            `${BASE_URL}/api/v3/account?${queryString}&signature=${signature}`,
-            {
-                headers: {
-                    'X-MBX-APIKEY': API_KEY
-                }
-            }
-        );
-        
-        return response.data;
-    } catch (error) {
-        console.error('Failed to get account info:', error.response ? error.response.data : error.message);
-        throw error;
-    }
-}
 
-// Get current ticker price for a symbol
+/* // Get current ticker price for a symbol
 async function getTickerPrice(symbol) {
     try {
         const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`, {
@@ -96,7 +170,7 @@ async function getTickerPrice(symbol) {
         console.error(`Failed to get ticker price for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
-}
+} */
 
 // Get ticker price for multiple symbols
 async function getMultipleTickers(symbols = []) {
@@ -216,7 +290,7 @@ function formatQuantity(quantity, symbolInfo) {
     }
 }
 
-// Create a market buy order
+/* // Create a market buy order
 async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
     try {
         let orderQuantity = quantity;
@@ -262,9 +336,9 @@ async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
         console.error(`Failed to create market buy order for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
-}
+} */
 
-// Create a market sell order
+/* // Create a market sell order
 async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
     try {
         let orderQuantity = quantity;
@@ -324,7 +398,7 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
         console.error(`Failed to create market sell order for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
-}
+} */
 
 // Start price polling
 function startPolling(symbols, io) {
@@ -425,7 +499,10 @@ function cleanupWebSocket(ws) {
     }
 }
 
-// Schedule connection renewal
+
+
+
+/* // Schedule connection renewal
 function scheduleConnectionRenewal(symbols, io) {
     // Clear any existing renewal timeout
     if (wsState.renewalTimeout) {
@@ -458,9 +535,12 @@ function scheduleConnectionRenewal(symbols, io) {
     }, WS_CONNECTION_LIFETIME);
     
     console.log(`Scheduled connection renewal in ${WS_CONNECTION_LIFETIME / 1000 / 60 / 60} hours`);
-}
+} */
 
-// Set up health check for WebSocket connection
+
+
+
+/* // Set up health check for WebSocket connection
 function setupHealthCheck(ws, symbols, io) {
     // Clear any existing interval
     if (wsState.healthCheckInterval) {
@@ -510,8 +590,12 @@ function setupHealthCheck(ws, symbols, io) {
         }
     }, HEALTH_CHECK_INTERVAL);
 }
+ */
 
-// Implement exponential backoff for reconnection
+
+
+
+/* // Implement exponential backoff for reconnection
 function getReconnectDelay() {
     return Math.min(
         INITIAL_RECONNECT_DELAY * Math.pow(1.5, wsState.reconnectAttempt),
@@ -569,8 +653,10 @@ function handleReconnect(symbols, io) {
         connectToWebSocket(symbols, io);
     }, delay);
 }
+ */
 
-// Main function to connect to Binance WebSocket
+
+/* // Main function to connect to Binance WebSocket
 function connectToWebSocket(symbols, io) {
     // Clean up existing connection if present
     if (wsInstance) {
@@ -709,7 +795,42 @@ function connectToWebSocket(symbols, io) {
     });
     
     return ws;
+} */
+
+
+
+// Generate signature for signed endpoints
+function generateSignature(queryString) {
+    return crypto
+        .createHmac('sha256', API_SECRET)
+        .update(queryString)
+        .digest('hex');
 }
+
+// Get account information
+async function getAccountInfo() {
+    try {
+        const timestamp = Date.now();
+        const queryString = `timestamp=${timestamp}`;
+        const signature = generateSignature(queryString);
+        
+        const response = await axios.get(
+            `${BASE_URL}/api/v3/account?${queryString}&signature=${signature}`,
+            {
+                headers: {
+                    'X-MBX-APIKEY': API_KEY
+                }
+            }
+        );
+        
+        return response.data;
+    } catch (error) {
+        console.error('Failed to get account info:', error.response ? error.response.data : error.message);
+        throw error;
+    }
+}
+
+
 
 // Execute a buy order based on USDT value
 async function executeBuyOrder(symbol, amount, amountType = 'amount') {
@@ -831,7 +952,7 @@ async function executeSellOrder(symbol, amount, amountType = 'amount') {
     }
 }
 
-// Legacy function for backward compatibility
+/* // Legacy function for backward compatibility
 function subscribeToTickerStream(symbols, io) {
     console.log(`Legacy subscribeToTickerStream called for symbols: ${symbols.join(', ')}`);
     
@@ -868,114 +989,25 @@ function unsubscribeFromTickerStream(symbols, io) {
     
     return false;
 }
+ */
 
-// Initialize WebSocket connections for the configured symbols
-function initializeWebSockets(io) {
-    // List of symbols to track
-    const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
-    
-    console.log(`Initializing WebSocket connections for ${symbols.join(', ')}`);
-    
-    // Reset reconnect attempt counter
-    wsState.reconnectAttempt = 0;
-    wsState.isReconnecting = false;
-    
-    // Connect to WebSocket
-    return connectToWebSocket(symbols, io);
-}
 
-// Close all active WebSocket connections
-async function closeAllConnections() {
-    console.log('Closing all WebSocket connections');
-    
-    // Stop polling if active
-    stopPolling();
-    
-    // Clean up WebSocket
-    if (wsInstance) {
-        cleanupWebSocket(wsInstance);
-        wsInstance = null;
-    }
-    
-    // Reset connection state
-    wsState.isConnected = false;
-    
-    return true;
-}
-
-// Get WebSocket connection status
-function getWebSocketStatus() {
-    // Create a status report
-    const status = {
-        connections: {},
-        totalConnections: wsInstance ? 1 : 0,
-        reconnectAttempt: wsState.reconnectAttempt,
-        pollingActive: pollingState.isActive,
-        connectionAge: wsState.connectionStartTime ? 
-            Math.round((Date.now() - wsState.connectionStartTime) / 1000 / 60 / 60) : 0
-    };
-    
-    // Add details for the connection
-    if (wsInstance) {
-        const key = wsState.activeSymbols.join('-');
-        status.connections[key] = {
-            isOpen: wsInstance.readyState === WebSocket.OPEN,
-            connectionAge: status.connectionAge,
-            symbols: wsState.activeSymbols || [],
-            readyState: wsInstance.readyState
-        };
-    }
-    
-    return status;
-}
-
-// Renew WebSocket connection manually
-function renewWebSocketConnection(io) {
-    if (!wsInstance) {
-        console.log('No active WebSocket connection to renew');
-        return false;
-    }
-    
-    console.log('Manually renewing WebSocket connection');
-    
-    // Start polling as fallback during renewal
-    startPolling(wsState.activeSymbols, io);
-    
-    // Reset reconnect attempt counter
-    wsState.reconnectAttempt = 0;
-    wsState.isReconnecting = false;
-    
-    // Close the connection (will trigger reconnect)
-    if (wsInstance.readyState === WebSocket.OPEN) {
-        wsInstance.close(1000, "Manual renewal requested");
-    } else {
-        // If not open, clean up and reconnect manually
-        cleanupWebSocket(wsInstance);
-        wsInstance = null;
-        
-        // Reset state and initiate new connection
-        setTimeout(() => {
-            connectToWebSocket(wsState.activeSymbols, io);
-        }, 1000);
-    }
-    
-    return true;
-}
 
 module.exports = {
-    testConnection,
-    getAccountInfo,
-    getTickerPrice,
-    getMultipleTickers,
-    calculateQuantityFromUsdt,
-    createMarketBuyOrder,
-    createMarketSellOrder,
-    subscribeToTickerStream,
-    unsubscribeFromTickerStream,
-    executeBuyOrder,
-    executeSellOrder,
     initializeWebSockets,
     closeAllConnections,
     getWebSocketStatus,
-    renewWebSocketConnection
+    testConnection,
+    getAccountInfo,
+//    getTickerPrice,
+    getMultipleTickers,
+    calculateQuantityFromUsdt,
+//    createMarketBuyOrder,
+//    createMarketSellOrder,
+//    subscribeToTickerStream,
+//    unsubscribeFromTickerStream,
+    executeBuyOrder,
+    executeSellOrder,
+
+//    renewWebSocketConnection
 };
