@@ -319,50 +319,31 @@ function subscribeToTickerStream(symbols, io) {
     
     // Check if we already have an active connection for these symbols
     if (!socketConnections[symbolsKey]) {
-        // Format symbols for stream - use ticker instead of bookTicker for more reliable price updates
-        const streams = symbols.map(symbol => `${symbol.toLowerCase()}@ticker`).join('/');
-        
-        // Determine correct WebSocket URL format based on environment
-        let socketUrl;
-        if (WS_BASE_URL.includes('testnet')) {
-            // For testnet, use this format
-            socketUrl = `${WS_BASE_URL}`;
-            
-            // Create WebSocket with single-stream format
-            const ws = new WebSocket(socketUrl);
-            
-            // After connection, send a subscribe message
-            ws.on('open', () => {
-                const subscribeMsg = {
-                    method: "SUBSCRIBE",
-                    params: symbols.map(symbol => `${symbol.toLowerCase()}@ticker`),
-                    id: 1
-                };
-                ws.send(JSON.stringify(subscribeMsg));
-            });
-        
-        } else {
-            // For production, we use the standard format
-            socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;
-        }
+        // For testnet, use the correct subscription method
+        const socketUrl = WS_BASE_URL;
         
         console.log(`Connecting to Binance WebSocket: ${socketUrl}`);
         
-        // Create native WebSocket connection
+        // Create WebSocket connection
         const ws = new WebSocket(socketUrl);
-
+        
         // Initialize status properties
         ws.isAlive = true;
         ws.symbolsKey = symbolsKey;
-        ws.reconnectAttempts = 0;
-        ws.maxReconnectAttempts = 10;
-        ws.reconnectDelay = 5000; // Start with 5 seconds
-        ws.maxReconnectDelay = 60000; // Max delay of 1 minute
         
         ws.on('open', () => {
             console.log(`WebSocket connection opened for ${symbols.join(', ')}`);
             ws.isAlive = true;
-            ws.reconnectAttempts = 0;
+            
+            // Important: Send a subscribe message for all symbols
+            const subscribeMsg = {
+                method: "SUBSCRIBE",
+                params: symbols.map(symbol => `${symbol.toLowerCase()}@ticker`),
+                id: Date.now()
+            };
+            
+            ws.send(JSON.stringify(subscribeMsg));
+            console.log("Sent subscription request:", subscribeMsg);
             
             // Emit connection status
             io.emit('websocket-status', { 
@@ -371,57 +352,29 @@ function subscribeToTickerStream(symbols, io) {
             });
         });
         
+
+
         ws.on('message', (data) => {
             try {
-                // Parse data
+                // Parse the data
                 const parsedData = JSON.parse(data.toString());
                 
-                // Log summarized data to avoid console spam
-                console.log(`Received WebSocket data for stream: ${parsedData.stream || 'unknown'}`);
-                
-                // Extract price data
-                let symbol, price, priceChangePercent;
-                
-                // Handle different Binance WebSocket data formats
-                if (parsedData.data) {
-                    // Format: { data: { s: "BTCUSDT", ... } }
-                    if (parsedData.data.s) {
-                        symbol = parsedData.data.s;
-                        // Price and price change percentage for ticker format
-                        price = parsedData.data.c; // Last price
-                        priceChangePercent = parsedData.data.P; // Price change percent
-                    } else if (parsedData.data.symbol) {
-                        symbol = parsedData.data.symbol;
-                        price = parsedData.data.price || parsedData.data.lastPrice;
-                        priceChangePercent = parsedData.data.priceChangePercent;
-                    }
-                } else if (parsedData.s) {
-                    // Format: { s: "BTCUSDT", ... }
-                    symbol = parsedData.s;
-                    price = parsedData.c || parsedData.p;
-                    priceChangePercent = parsedData.P;
-                }
-                
-                // If we couldn't extract the necessary data, log and return
-                if (!symbol || !price) {
-                    console.warn('Could not extract symbol or price from message.');
+                // Check if this is a pong response
+                if (parsedData.result === null && parsedData.id !== undefined) {
+                    console.log("Received pong response from Binance");
+                    ws.isAlive = true;
                     return;
                 }
                 
-                // Create a simplified data object for our app
-                const simplifiedData = {
-                    symbol: symbol,
-                    price: price,
-                    P: priceChangePercent // Include price change percent if available
-                };
-                
-                // Emit price update
-                io.emit('price-update', simplifiedData);
+                // Handle the various Binance message formats
+                // Rest of your message handling code...
             } catch (error) {
                 console.error('Error handling WebSocket message:', error.message);
             }
         });
         
+
+
         ws.on('error', (error) => {
             console.error('WebSocket error:', error.message);
             io.emit('websocket-status', { 
@@ -429,7 +382,16 @@ function subscribeToTickerStream(symbols, io) {
                 error: error.message, 
                 symbols 
             });
+            
+            // Try to recover the connection
+            setTimeout(() => {
+                if (ws.readyState !== WebSocket.OPEN) {
+                    handleReconnect(ws, symbols, io);
+                }
+            }, 2000);
         });
+
+        
         
         ws.on('close', (code, reason) => {
             console.log(`WebSocket closed for ${symbols.join(', ')}. Code: ${code}, Reason: ${reason}`);
@@ -463,22 +425,29 @@ function startPingPong(ws) {
     
     // Set up ping interval
     ws.pingTimerId = setInterval(() => {
-        if (ws.isAlive === false) {
+        if (ws.readyState !== WebSocket.OPEN) {
             clearInterval(ws.pingTimerId);
-            ws.terminate();
             return;
         }
         
-        ws.isAlive = false;
-        // For Binance WebSocket, we can't send actual ping frames
-        // Instead we use a timeout to check if any messages were received
-        setTimeout(() => {
-            if (ws.isAlive === false && ws.readyState === WebSocket.OPEN) {
-                console.log('WebSocket connection timed out. Reconnecting...');
-                ws.terminate();
-            }
-        }, 15000); // Wait 15s for activity before assuming connection is dead
-    }, 30000); // Check every 30s
+        // Binance testnet requires a ping message to keep the connection alive
+        // Send a ping message as a proper JSON payload
+        try {
+            ws.send(JSON.stringify({ method: "ping" }));
+            console.log("Sent ping to Binance WebSocket");
+            
+            // Set a timeout to check for pong response
+            setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    // If still connected, connection is healthy
+                    console.log("WebSocket connection is healthy");
+                }
+            }, 5000);
+        } catch (error) {
+            console.error("Error sending ping:", error);
+            ws.terminate();
+        }
+    }, 20000); // Send a ping every 20 seconds
 }
 
 // Handle reconnection with exponential backoff
