@@ -384,6 +384,11 @@ io.on('connection', (socket) => {
         }
     });
     
+
+
+
+
+
     // Handle buy order
     socket.on('buy-order', async (data) => {
         try {
@@ -431,14 +436,19 @@ io.on('connection', (socket) => {
                 
                 // Send Telegram notification for successful order
                 if (systemStatus.telegram) {
-                    await telegramBot.sendTradeNotification({
-                        symbol: data.symbol,
-                        type: 'BUY',
-                        price: result.price,
-                        quantity: result.amount,
-                        investment: validation.params.amount,
-                        timestamp: Date.now()
-                    });
+                    try {
+                        await telegramBot.sendTradeNotification({
+                            symbol: data.symbol,
+                            type: 'BUY',
+                            price: result.price,
+                            quantity: result.amount,
+                            investment: validation.params.amount,
+                            timestamp: Date.now()
+                        });
+                        console.log('Telegram notification sent for buy order');
+                    } catch (telegramError) {
+                        console.error('Error sending Telegram notification:', telegramError);
+                    }
                 }
                 
                 // Store transaction in database if connection is available
@@ -489,6 +499,9 @@ io.on('connection', (socket) => {
         }
     });
     
+
+
+
     // Handle sell order
     socket.on('sell-order', async (data) => {
         try {
@@ -536,14 +549,19 @@ io.on('connection', (socket) => {
                 
                 // Send Telegram notification for successful order
                 if (systemStatus.telegram) {
-                    await telegramBot.sendTradeNotification({
-                        symbol: data.symbol,
-                        type: 'SELL',
-                        price: result.price,
-                        quantity: result.amount,
-                        investment: validation.params.amount * result.price, // Approximate value of the sale
-                        timestamp: Date.now()
-                    });
+                    try {
+                        await telegramBot.sendTradeNotification({
+                            symbol: data.symbol,
+                            type: 'SELL',
+                            price: result.price,
+                            quantity: result.amount,
+                            investment: validation.params.amount * result.price, // Approximate value of the sale
+                            timestamp: Date.now()
+                        });
+                        console.log('Telegram notification sent for sell order');
+                    } catch (telegramError) {
+                        console.error('Error sending Telegram notification:', telegramError);
+                    }
                 }
                 
                 // Store transaction in database if connection is available
@@ -593,6 +611,9 @@ io.on('connection', (socket) => {
             checkCircuitBreaker(false);
         }
     });
+
+
+
 
     // Handle test Binance WebSocket stream
     socket.on('test-binance-stream', async () => {
@@ -678,6 +699,9 @@ io.on('connection', (socket) => {
         }
     });
     
+
+
+
     // Handle first purchase
     socket.on('first-purchase', async (data) => {
         try {
@@ -762,13 +786,19 @@ io.on('connection', (socket) => {
             
             // Send Telegram notification
             if (systemStatus.telegram) {
-                await telegramBot.sendMessage(
-                    `🔵 Buy Order Executed\n` +
-                    `Symbol: ${data.symbol}\n` +
-                    `Price: $${currentPrice.toFixed(2)}\n` +
-                    `Quantity: ${quantity.toFixed(6)}\n` +
-                    `Investment: $${investment}`
-                );
+                try {
+                    await telegramBot.sendTradeNotification({
+                        symbol: data.symbol,
+                        type: 'BUY',
+                        price: currentPrice,
+                        quantity: quantity,
+                        investment: investment,
+                        timestamp: Date.now()
+                    });
+                    console.log('Telegram notification sent for first purchase');
+                } catch (telegramError) {
+                    console.error('Error sending Telegram notification:', telegramError);
+                }
             }
             
             // Send transaction update to clients
@@ -795,7 +825,12 @@ io.on('connection', (socket) => {
             checkCircuitBreaker(false);
         }
     });
+
     
+
+
+
+
     // Handle sell all
     socket.on('sell-all', async (data) => {
         try {
@@ -873,13 +908,19 @@ io.on('connection', (socket) => {
             
             // Send Telegram notification
             if (systemStatus.telegram) {
-                await telegramBot.sendMessage(
-                    `🔴 Sell Order Executed\n` +
-                    `Symbol: ${data.symbol}\n` +
-                    `Price: $${currentPrice.toFixed(2)}\n` +
-                    `Quantity: ${holdings.quantity.toFixed(6)}\n` +
-                    `Total Value: $${totalValue.toFixed(2)}`
-                );
+                try {
+                    await telegramBot.sendTradeNotification({
+                        symbol: data.symbol,
+                        type: 'SELL',
+                        price: currentPrice,
+                        quantity: holdings.quantity,
+                        investment: totalValue,
+                        timestamp: Date.now()
+                    });
+                    console.log('Telegram notification sent for sell all');
+                } catch (telegramError) {
+                    console.error('Error sending Telegram notification:', telegramError);
+                }
             }
             
             // Send transaction update to clients

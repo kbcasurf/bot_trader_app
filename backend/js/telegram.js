@@ -35,7 +35,7 @@ async function testConnection() {
 // Send message to configured chat ID
 async function sendMessage(message) {
     try {
-        const result = await bot.telegram.sendMessage(CHAT_ID, message);
+        const result = await bot.telegram.sendMessage(CHAT_ID, message, { parse_mode: 'HTML' });
         console.log('Telegram message sent:', message);
         return result;
     } catch (error) {
@@ -44,18 +44,21 @@ async function sendMessage(message) {
     }
 }
 
-// Send notification about trade execution
+// Send notification about trade execution with enhanced formatting
 async function sendTradeNotification(tradeInfo) {
     const { symbol, type, price, quantity, investment, timestamp } = tradeInfo;
     
-    // Create a formatted message
+    // Get human-readable symbol (remove USDT suffix if present)
+    const displaySymbol = symbol.replace('USDT', '');
+    
+    // Create a formatted message with HTML
     const message = 
-        `${type === 'BUY' ? '🔵 Buy' : '🔴 Sell'} Order Executed\n` +
-        `Symbol: ${symbol}\n` +
-        `Price: $${price.toFixed(2)}\n` +
-        `Quantity: ${quantity.toFixed(6)}\n` +
-        `${type === 'BUY' ? 'Investment' : 'Total Value'}: $${investment.toFixed(2)}\n` +
-        `Time: ${new Date(timestamp).toLocaleString()}`;
+        `<b>${type === 'BUY' ? '🔵 Buy' : '🔴 Sell'} Order Executed</b>\n\n` +
+        `<b>Symbol:</b> ${displaySymbol}/USDT\n` +
+        `<b>Price:</b> $${parseFloat(price).toFixed(2)}\n` +
+        `<b>Quantity:</b> ${parseFloat(quantity).toFixed(6)} ${displaySymbol}\n` +
+        `<b>${type === 'BUY' ? 'Investment' : 'Total Value'}:</b> $${parseFloat(investment).toFixed(2)}\n` +
+        `<b>Time:</b> ${new Date(timestamp).toLocaleString()}`;
     
     return await sendMessage(message);
 }
@@ -69,20 +72,66 @@ async function sendPriceAlert(alertInfo) {
     const emoji = isIncrease ? '📈' : '📉';
     const changePercent = Math.abs(priceChange).toFixed(2);
     
-    // Create a formatted message
+    // Get human-readable symbol (remove USDT suffix if present)
+    const displaySymbol = symbol.replace('USDT', '');
+    
+    // Create a formatted message with HTML
     const message = 
-        `${emoji} Price Alert: ${symbol}\n` +
-        `${isIncrease ? 'Increased' : 'Decreased'} by ${changePercent}%\n` +
-        `Previous: ${previousPrice.toFixed(2)}\n` +
-        `Current: ${currentPrice.toFixed(2)}\n` +
+        `<b>${emoji} Price Alert: ${displaySymbol}/USDT</b>\n\n` +
+        `${isIncrease ? '<b>Increased</b>' : '<b>Decreased</b>'} by ${changePercent}%\n` +
+        `Previous: $${previousPrice.toFixed(2)}\n` +
+        `Current: $${currentPrice.toFixed(2)}\n` +
         `Time: ${new Date().toLocaleString()}`;
     
     return await sendMessage(message);
+}
+
+// Send trade summary notification
+async function sendTradeSummary(summaryInfo) {
+    const { symbol, period, trades, totalBuy, totalSell, profitLoss } = summaryInfo;
+    
+    // Get human-readable symbol (remove USDT suffix if present)
+    const displaySymbol = symbol.replace('USDT', '');
+    
+    // Determine profit/loss emoji
+    const plEmoji = profitLoss >= 0 ? '✅' : '❌';
+    
+    // Create a formatted message with HTML
+    const message = 
+        `<b>📊 ${displaySymbol}/USDT Trade Summary (${period})</b>\n\n` +
+        `<b>Total Trades:</b> ${trades}\n` +
+        `<b>Buy Volume:</b> $${totalBuy.toFixed(2)}\n` +
+        `<b>Sell Volume:</b> $${totalSell.toFixed(2)}\n` +
+        `<b>Profit/Loss:</b> ${plEmoji} $${Math.abs(profitLoss).toFixed(2)} ${profitLoss >= 0 ? 'profit' : 'loss'}`;
+    
+    return await sendMessage(message);
+}
+
+// Send system status alert
+async function sendSystemAlert(alertInfo) {
+    const { type, message, details } = alertInfo;
+    
+    // Determine alert emoji based on type
+    let emoji = '⚠️';
+    if (type === 'error') emoji = '🔴';
+    else if (type === 'success') emoji = '✅';
+    else if (type === 'warning') emoji = '⚠️';
+    else if (type === 'info') emoji = 'ℹ️';
+    
+    // Create a formatted message with HTML
+    const alertMessage = 
+        `<b>${emoji} System ${type.charAt(0).toUpperCase() + type.slice(1)}</b>\n\n` +
+        `<b>Message:</b> ${message}\n` +
+        (details ? `<b>Details:</b> ${details}` : '');
+    
+    return await sendMessage(alertMessage);
 }
 
 module.exports = {
     testConnection,
     sendMessage,
     sendTradeNotification,
-    sendPriceAlert
+    sendPriceAlert,
+    sendTradeSummary,
+    sendSystemAlert
 };

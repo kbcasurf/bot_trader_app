@@ -54,7 +54,7 @@ async function getAccountInfo() {
         
         return response.data;
     } catch (error) {
-        console.error('Failed to get account info:', error.message);
+        console.error('Failed to get account info:', error.response ? error.response.data : error.message);
         throw error;
     }
 }
@@ -68,7 +68,7 @@ async function getTickerPrice(symbol) {
         
         return response.data;
     } catch (error) {
-        console.error(`Failed to get ticker price for ${symbol}:`, error.message);
+        console.error(`Failed to get ticker price for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
 }
@@ -88,7 +88,7 @@ async function getMultipleTickers(symbols = []) {
             symbols.includes(ticker.symbol)
         );
     } catch (error) {
-        console.error('Failed to get multiple tickers:', error.message);
+        console.error('Failed to get multiple tickers:', error.response ? error.response.data : error.message);
         throw error;
     }
 }
@@ -139,7 +139,7 @@ async function getExchangeInfo(symbol) {
         
         return symbolInfo;
     } catch (error) {
-        console.error(`Failed to get exchange info for ${symbol}:`, error.message);
+        console.error(`Failed to get exchange info for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
 }
@@ -199,15 +199,24 @@ async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
         const queryString = `symbol=${symbol}&side=BUY&type=MARKET&quantity=${orderQuantity}&timestamp=${timestamp}`;
         const signature = generateSignature(queryString);
         
-        const response = await axios.post(
-            `${BASE_URL}/api/v3/order?${queryString}&signature=${signature}`,
-            null, // No request body for GET-like POST
-            {
-                headers: {
-                    'X-MBX-APIKEY': API_KEY
-                }
+        console.log(`Creating market buy order: ${queryString}`);
+        
+        const response = await axios({
+            method: 'POST',
+            url: `${BASE_URL}/api/v3/order`,
+            headers: {
+                'X-MBX-APIKEY': API_KEY,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            params: {
+                symbol: symbol,
+                side: 'BUY',
+                type: 'MARKET',
+                quantity: orderQuantity,
+                timestamp: timestamp,
+                signature: signature
             }
-        );
+        });
         
         // Add price to response if we calculated it
         if (price) {
@@ -216,7 +225,7 @@ async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
         
         return response.data;
     } catch (error) {
-        console.error(`Failed to create market buy order for ${symbol}:`, error.message);
+        console.error(`Failed to create market buy order for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
 }
@@ -247,15 +256,24 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
         const queryString = `symbol=${symbol}&side=SELL&type=MARKET&quantity=${orderQuantity}&timestamp=${timestamp}`;
         const signature = generateSignature(queryString);
         
-        const response = await axios.post(
-            `${BASE_URL}/api/v3/order?${queryString}&signature=${signature}`,
-            null, // No request body for GET-like POST
-            {
-                headers: {
-                    'X-MBX-APIKEY': API_KEY
-                }
+        console.log(`Creating market sell order: ${queryString}`);
+        
+        const response = await axios({
+            method: 'POST',
+            url: `${BASE_URL}/api/v3/order`,
+            headers: {
+                'X-MBX-APIKEY': API_KEY,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            params: {
+                symbol: symbol,
+                side: 'SELL',
+                type: 'MARKET',
+                quantity: orderQuantity,
+                timestamp: timestamp,
+                signature: signature
             }
-        );
+        });
         
         // Add price to response if we calculated it
         if (price) {
@@ -264,7 +282,7 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
         
         return response.data;
     } catch (error) {
-        console.error(`Failed to create market sell order for ${symbol}:`, error.message);
+        console.error(`Failed to create market sell order for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
 }
