@@ -33,9 +33,21 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Add a health check endpoint that returns 200
 app.get('/health', (req, res) => {
-    res.status(200).send('OK');
+    // Collect health information
+    const health = {
+        uptime: process.uptime(),
+        timestamp: Date.now(),
+        services: {
+            database: systemStatus.database,
+            binance: systemStatus.binance,
+            telegram: systemStatus.telegram,
+            websocket: websocketConnected
+        }
+    };
+    
+    // Send health status with 200 OK
+    res.status(200).json(health);
 });
 
 // Add a simple endpoint
@@ -56,7 +68,12 @@ const io = socketIo(server, {
     },
     transports: ['polling', 'websocket'],
     pingTimeout: 60000,
-    pingInterval: 25000
+    pingInterval: 25000,
+    connectTimeout: 30000,
+    allowUpgrades: true,
+    perMessageDeflate: {
+        threshold: 1024 // Compress data if it exceeds 1KB
+    }
 });
 
 // Debug middleware for Socket.IO connections
@@ -166,6 +183,17 @@ async function initializeWebSockets() {
     }
 }
 
+
+// Add a heartbeat mechanism to keep connections alive
+function setupHeartbeat() {
+    // Periodically send a heartbeat event to all connected clients
+    setInterval(() => {
+        io.emit('heartbeat', { timestamp: Date.now() });
+    }, 30000); // Every 30 seconds
+}
+
+
+
 // Function to check and update the circuit breaker
 function checkCircuitBreaker(success) {
     const now = Date.now();
@@ -273,15 +301,20 @@ function validateTradeParams(params) {
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
-    console.log('Client connected with ID:', socket.id);
-    
-    // Send current system status to newly connected client
-    socket.emit('database-status', systemStatus.database);
-    socket.emit('binance-status', systemStatus.binance);
-    socket.emit('telegram-status', systemStatus.telegram);
-    socket.emit('trading-status', { 
-        active: websocketConnected && !CIRCUIT_BREAKER.tripped,
-        circuitBreaker: CIRCUIT_BREAKER.tripped
+    // Add ping handler for connection testing
+    socket.on('ping', (data, callback) => {
+        if (typeof callback === 'function') {
+            callback({ 
+                pong: true, 
+                timestamp: Date.now(), 
+                received: data 
+            });
+        } else {
+            socket.emit('pong', { 
+                timestamp: Date.now(), 
+                received: data 
+            });
+        }
     });
     
     // Handle client disconnection
@@ -832,7 +865,6 @@ io.on('connection', (socket) => {
 
 
 
-    // This code should be updated in the 'sell-all' socket handler in main.js
 
 // Handle sell all
 socket.on('sell-all', async (data) => {
@@ -980,6 +1012,9 @@ server.listen(PORT, () => {
         if (binanceConnected) {
             await initializeWebSockets();
         }
+        
+        // Setup heartbeat mechanism
+        setupHeartbeat();
     })();
 });
 

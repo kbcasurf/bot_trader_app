@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import ConnectionManager from './js/connection-manager.js';
 
 // Enhanced Socket.IO debugging
 const DEBUG_MODE = true;
@@ -49,6 +50,141 @@ function createDebugSocket() {
     return socket;
 }
 
+
+// Implement a connection status monitoring mechanism
+function implementConnectionMonitoring() {
+    // Track last successful backend response time
+    let lastBackendResponseTime = Date.now();
+    
+    // Create a function to mark backend responses
+    function markBackendResponse() {
+        lastBackendResponseTime = Date.now();
+        updateConnectionStatus(true);
+    }
+    
+    // Listen for ANY event from the backend to mark responses
+    const originalOn = socket.on;
+    socket.on = function(event, callback) {
+        // For any event except connect/disconnect (which we handle separately)
+        if (event !== 'connect' && event !== 'disconnect' && event !== 'connect_error') {
+            return originalOn.call(this, event, function(...args) {
+                // Mark that we got a response from backend
+                markBackendResponse();
+                // Call the original callback
+                return callback.apply(this, args);
+            });
+        } else {
+            return originalOn.call(this, event, callback);
+        }
+    };
+    
+    // Periodically check backend connection health
+    setInterval(() => {
+        const now = Date.now();
+        const secondsSinceLastResponse = (now - lastBackendResponseTime) / 1000;
+        
+        // If no responses for more than 10 seconds, check connection status
+        if (secondsSinceLastResponse > 10) {
+            // Connection might be unhealthy, check if socket reports as connected
+            if (socket.connected) {
+                // Socket says it's connected but we haven't received events
+                // Send a ping to see if connection is really alive
+                console.log('Testing backend connection health...');
+                socket.emit('get-system-status');
+                
+                // Give it 2 seconds to respond
+                setTimeout(() => {
+                    const newSecondsSinceLastResponse = (Date.now() - lastBackendResponseTime) / 1000;
+                    if (newSecondsSinceLastResponse > 12) {
+                        // Still no response, connection might be dead
+                        console.warn('Backend connection appears unresponsive despite socket reporting as connected');
+                        updateConnectionStatus(false);
+                        
+                        // Try to reconnect
+                        socket.disconnect().connect();
+                    }
+                }, 2000);
+            } else {
+                // Socket knows it's disconnected
+                updateConnectionStatus(false);
+            }
+        }
+    }, 10000);
+}
+
+   // Helper to update connection status
+   function updateConnectionStatus(isConnected) {
+    const backendStatusDot = document.getElementById('backend-status-dot');
+    const backendStatusText = document.getElementById('backend-status-text');
+    
+    if (backendStatusDot && backendStatusText) {
+        if (isConnected) {
+            backendStatusDot.classList.add('connected');
+            backendStatusDot.classList.remove('disconnected');
+            backendStatusText.textContent = 'Backend: Connected';
+        } else {
+            backendStatusDot.classList.remove('connected');
+            backendStatusDot.classList.add('disconnected');
+            backendStatusText.textContent = 'Backend: Disconnected';
+        }
+    }
+}
+// Call the connection monitoring function
+implementConnectionMonitoring();
+
+
+// After creating the socket, initialize the ConnectionManager
+let connectionManager;
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize your components after DOM is ready
+    initializeComponents();
+    
+    // Initialize the ConnectionManager with the socket
+    connectionManager = new ConnectionManager(socket, {
+        pingInterval: 15000, // 15 seconds
+        reconnectAttempts: 10,
+        healthCheckUrl: '/health',
+        statusCallback: (status, details) => {
+            console.log(`Connection status: ${status}`, details);
+            
+            // Update UI based on connection status
+            switch (status) {
+                case 'connected':
+                    updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', true);
+                    // Request latest data after successful connection
+                    socket.emit('get-system-status');
+                    break;
+                    
+                case 'disconnected':
+                    updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', false);
+                    updateStatusIndicator(dbStatusDot, dbStatusText, 'Database', false);
+                    updateStatusIndicator(binanceStatusDot, binanceStatusText, 'Binance', false);
+                    updateStatusIndicator(telegramStatusDot, telegramStatusText, 'Telegram', false);
+                    break;
+                    
+                case 'reconnecting':
+                    // Show reconnecting status
+                    backendStatusDot.classList.remove('connected', 'disconnected');
+                    backendStatusText.textContent = `Backend: Reconnecting (${details.attempt}/${details.maxAttempts})`;
+                    break;
+                    
+                case 'max_attempts_reached':
+                    updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', false);
+                    backendStatusText.textContent = 'Backend: Connection Failed - Reload Page';
+                    // Maybe show a reload button to the user
+                    showReloadPrompt();
+                    break;
+                    
+                case 'error':
+                    updateStatusIndicator(backendStatusDot, backendStatusText, 'Backend', false);
+                    backendStatusText.textContent = 'Backend: Connection Error';
+                    break;
+            }
+        }
+    });
+});
+
 // Export the socket for other modules to use
 export const socket = createDebugSocket();
 
@@ -65,33 +201,50 @@ document.addEventListener('DOMContentLoaded', () => {
         validateDomElements();
     }, 1000);
     
-    // Fetch prices automatically after a short delay
-    setTimeout(() => {
-        if (socket && socket.connected) {
-            console.log('Automatically fetching initial prices...');
-            socket.emit('manual-binance-test', {
-                symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
-            });
-        } else {
-            console.log('Socket not connected yet, will try to fetch prices on connect');
-        }
-    }, 1500);
     
     // Set up periodic price updates
     setupPeriodicPriceUpdates();
 });
 
-// Setup periodic price updates every 30 seconds
+
+
+
 function setupPeriodicPriceUpdates() {
-    // Fetch prices every 30 seconds as a fallback mechanism
+    // Track last price update time
+    let lastPriceUpdateTime = Date.now();
+    let wsActive = false;
+    
+    // Clear any existing interval
+    if (window.priceUpdateInterval) {
+        clearInterval(window.priceUpdateInterval);
+    }
+    
+    // Listen for price updates from WebSocket
+    socket.on('price-update', (data) => {
+        // Mark the WebSocket as active when we receive updates
+        wsActive = true;
+        lastPriceUpdateTime = Date.now();
+    });
+    
+    // Fetch prices every 30 seconds ONLY if WebSocket is inactive
     const priceUpdateInterval = setInterval(() => {
-        if (socket && socket.connected) {
-            console.log('Performing periodic price update...');
-            socket.emit('manual-binance-test', {
-                symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
-            });
-        } else {
-            console.log('Socket disconnected, cannot update prices');
+        const now = Date.now();
+        const secondsSinceLastUpdate = (now - lastPriceUpdateTime) / 1000;
+        
+        // If no updates for more than 15 seconds, consider WebSocket inactive
+        if (secondsSinceLastUpdate > 15) {
+            console.log('WebSocket price updates may be inactive, using fallback polling...');
+            wsActive = false;
+            
+            if (socket && socket.connected) {
+                socket.emit('manual-binance-test', {
+                    symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
+                });
+            } else {
+                console.log('Socket disconnected, cannot update prices');
+            }
+        } else if (wsActive) {
+            console.log('WebSocket price updates active, skipping polling');
         }
     }, 30000);
     
@@ -99,19 +252,40 @@ function setupPeriodicPriceUpdates() {
     window.priceUpdateInterval = priceUpdateInterval;
 }
 
-// Log connection events for debugging
+
+
+
+
 socket.on('connect', () => {
     console.log('Socket connected successfully');
+    
+    // Explicitly update the backend connection status
+    const backendStatusDot = document.getElementById('backend-status-dot');
+    const backendStatusText = document.getElementById('backend-status-text');
+    
+    if (backendStatusDot && backendStatusText) {
+        backendStatusDot.classList.add('connected');
+        backendStatusDot.classList.remove('disconnected');
+        backendStatusText.textContent = 'Backend: Connected';
+    }
     
     // Request system status first
     socket.emit('get-system-status');
     
-    // Wait a bit longer for the backend services to initialize
+    // Add this to fetch account holdings after connection
+    setTimeout(() => {
+        console.log('Fetching account holdings...');
+        socket.emit('get-account-info');
+    }, 1500);
+    
+    // Wait a bit longer for the backend services to initialize and fetch prices
     setTimeout(() => {
         console.log('Fetching initial prices after connection...');
         socket.emit('test-binance-stream');
-    }, 2000);
+    }, 2500);
 });
+
+
 
 socket.on('connect_error', (error) => {
     console.error('Socket connection error:', error.message);
@@ -348,64 +522,7 @@ socket.on('sell-all-result', (result) => {
     }
 });
 
-// Enhanced transaction update handler
-socket.on('transaction-update', (data) => {
-    if (!data || !data.symbol || !data.transactions) {
-        console.error('Invalid transaction update data', data);
-        return;
-    }
-    
-    console.log(`Received transaction update for ${data.symbol}:`, data.transactions);
-    
-    const symbol = data.symbol.toLowerCase();
-    const historyElement = document.getElementById(`${symbol}-history`);
-    
-    if (!historyElement) {
-        console.error(`Transaction history element not found for ${symbol}`);
-        return;
-    }
 
-     // Clear existing entries
-     historyElement.innerHTML = '';
-    
-     if (data.transactions.length === 0) {
-         const noTransactionsItem = document.createElement('li');
-         noTransactionsItem.classList.add('no-transactions');
-         noTransactionsItem.textContent = 'No transactions yet';
-         historyElement.appendChild(noTransactionsItem);
-         return;
-     }
-     
-    // Add transactions to the history list
-    data.transactions.forEach(transaction => {
-        if (!transaction) {
-            console.error('Invalid transaction in array');
-            return;
-        }
-
-        const listItem = document.createElement('li');
-
-        // Apply appropriate styling based on transaction type
-        if (transaction.type) {
-            listItem.classList.add(transaction.type.toLowerCase());
-        }
-
-        // Format the transaction information
-        let dateStr = 'Unknown date';
-        if (transaction.timestamp) {
-            const date = new Date(transaction.timestamp);
-            dateStr = date.toLocaleString();
-        }
-
-        // Make sure all values are properly formatted to avoid "undefined"
-        const type = transaction.type || 'UNKNOWN';
-        const quantity = transaction.quantity ? parseFloat(transaction.quantity).toFixed(6) : '0.00';
-        const price = transaction.price ? parseFloat(transaction.price).toFixed(2) : '0.00';
-
-        listItem.textContent = `${type}: ${quantity} ${data.symbol} at $${price} (${dateStr})`;
-        historyElement.appendChild(listItem);
-    });
-});
 
 // Test button event listeners
 testTelegramBtn.addEventListener('click', () => {

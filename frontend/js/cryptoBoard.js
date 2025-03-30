@@ -237,15 +237,6 @@ socket.on('trading-status', (status) => {
     updateTradingButtonsState();
 });
 
-// Listen for holdings updates
-socket.on('holdings-update', (data) => {
-    const { symbol, amount } = data;
-    const holdingsElement = document.getElementById(`${symbol.toLowerCase()}-holdings`);
-    
-    if (holdingsElement) {
-        holdingsElement.textContent = `${parseFloat(amount).toFixed(6)} ${symbol}`;
-    }
-});
 
 export default {
     createCryptoCards,
