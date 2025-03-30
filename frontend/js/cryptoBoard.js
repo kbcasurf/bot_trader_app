@@ -43,23 +43,28 @@ function createCryptoCards() {
         
         // Clone the BTC card and modify it
         if (btcCard) {
+            // In cryptoBoard.js - modify the card cloning logic:
             const newCard = btcCard.cloneNode(true);
-            
-            // Update IDs and content
             newCard.id = `${symbol}-card`;
-            
-            // Update header
-            const header = newCard.querySelector('h3');
-            if (header) header.textContent = `${crypto.symbol}/USDT`;
-            
-            // Update price
+
+            // Find ALL elements with IDs and update them
+            const elementsWithIds = newCard.querySelectorAll('[id]');
+            elementsWithIds.forEach(element => {
+                // Replace 'btc' with the new symbol in all IDs
+                const newId = element.id.replace('btc', symbol);
+                element.id = newId;
+                console.log(`Updated ID from ${element.id} to ${newId}`);
+            });
+
+            // Then continue with your specific updates
             const price = newCard.querySelector('.current-price');
             if (price) {
-                price.id = `${symbol}-price`;
+                // Double-check it has the correct ID
+                if (price.id !== `${symbol}-price`) {
+                    console.warn(`Price element ID mismatch. Current: ${price.id}, Expected: ${symbol}-price`);
+                    price.id = `${symbol}-price`;
+                }
                 price.textContent = 'Price: $0.00';
-                console.log(`Created price element for ${symbol} with ID: ${price.id}`);
-            } else {
-                console.error(`Could not find price element in the cloned card for ${symbol}`);
             }
             
             // Update investment input

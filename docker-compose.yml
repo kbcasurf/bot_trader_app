@@ -75,7 +75,7 @@ services:
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
-      test: mysqladmin ping -h localhost -u ${DB_USER} -p${DB_PASSWORD}
+      test: mysqladmin ping -h database -u ${DB_USER} -p${DB_PASSWORD}
       interval: 10s
       timeout: 5s
       retries: 5

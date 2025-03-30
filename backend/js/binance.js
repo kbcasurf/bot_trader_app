@@ -281,13 +281,22 @@ function subscribeToTickerStream(symbols, io) {
         // Determine correct WebSocket URL format based on environment
         let socketUrl;
         if (WS_BASE_URL.includes('testnet')) {
-            // For testnet, we need a different URL format
-            if (symbols.length === 1) {
-                socketUrl = `${WS_BASE_URL}/${symbols[0].toLowerCase()}@ticker`;
-            } else {
-                // For multiple symbols in testnet, we use the stream approach
-                socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;
-            }
+            // For testnet, use this format
+            socketUrl = `${WS_BASE_URL}`;
+            
+            // Create WebSocket with single-stream format
+            const ws = new WebSocket(socketUrl);
+            
+            // After connection, send a subscribe message
+            ws.on('open', () => {
+                const subscribeMsg = {
+                    method: "SUBSCRIBE",
+                    params: symbols.map(symbol => `${symbol.toLowerCase()}@ticker`),
+                    id: 1
+                };
+                ws.send(JSON.stringify(subscribeMsg));
+            });
+        
         } else {
             // For production, we use the standard format
             socketUrl = `${WS_BASE_URL}/stream?streams=${streams}`;

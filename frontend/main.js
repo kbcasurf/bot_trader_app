@@ -1,5 +1,14 @@
 import { io } from 'socket.io-client';
 
+document.addEventListener('DOMContentLoaded', () => {
+    // Log all available price elements as a sanity check
+    console.log('Available price elements on DOM load:', 
+        Array.from(document.querySelectorAll('[id$="-price"]')).map(el => el.id));
+    
+    // Initialize your components after DOM is ready
+    initializeComponents();
+});
+
 // Create socket with proper backend URL
 export const socket = io({
     // Note: No need to specify the URL as Vite will proxy the requests
@@ -272,20 +281,22 @@ function updatePrice(symbol, price) {
     
     // Try different methods to find the element
     let priceElement = document.getElementById(`${baseSymbol}-price`);
+    console.log(`Looking for price element with ID: ${baseSymbol}-price, found: ${priceElement ? 'yes' : 'no'}`);
     
     if (!priceElement) {
         const card = document.getElementById(`${baseSymbol}-card`);
         if (card) {
             priceElement = card.querySelector('.current-price');
+            console.log(`Found card element, querySelector for .current-price returned: ${priceElement ? 'element' : 'null'}`);
         }
     }
     
     if (priceElement) {
         priceElement.textContent = `Price: $${price}`;
-        console.log(`Manually updated price for ${symbol} to $${price}`);
         return true;
     } else {
-        console.error(`Could not find price element for ${symbol}`);
+        console.error(`Could not find price element for ${symbol}. Available price elements:`, 
+            Array.from(document.querySelectorAll('[id$="-price"]')).map(el => el.id));
         return false;
     }
 }
