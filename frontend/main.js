@@ -64,11 +64,52 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => {
         validateDomElements();
     }, 1000);
+    
+    // Fetch prices automatically after a short delay
+    setTimeout(() => {
+        if (socket && socket.connected) {
+            console.log('Automatically fetching initial prices...');
+            socket.emit('manual-binance-test', {
+                symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
+            });
+        } else {
+            console.log('Socket not connected yet, will try to fetch prices on connect');
+        }
+    }, 1500);
+    
+    // Set up periodic price updates
+    setupPeriodicPriceUpdates();
 });
+
+// Setup periodic price updates every 30 seconds
+function setupPeriodicPriceUpdates() {
+    // Fetch prices every 30 seconds as a fallback mechanism
+    const priceUpdateInterval = setInterval(() => {
+        if (socket && socket.connected) {
+            console.log('Performing periodic price update...');
+            socket.emit('manual-binance-test', {
+                symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
+            });
+        } else {
+            console.log('Socket disconnected, cannot update prices');
+        }
+    }, 30000);
+    
+    // Store the interval ID so we can clear it if needed
+    window.priceUpdateInterval = priceUpdateInterval;
+}
 
 // Log connection events for debugging
 socket.on('connect', () => {
     console.log('Socket connected successfully');
+    
+    // Request prices after connection is established
+    setTimeout(() => {
+        console.log('Fetching initial prices after connection...');
+        socket.emit('manual-binance-test', {
+            symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
+        });
+    }, 1000);
 });
 
 socket.on('connect_error', (error) => {
@@ -245,6 +286,14 @@ testTelegramBtn.addEventListener('click', () => {
 
 testBinanceStreamBtn.addEventListener('click', () => {
     socket.emit('test-binance-stream');
+    
+    // Fetch prices via API rather than manual override
+    setTimeout(() => {
+        console.log('Fetching fresh prices via API...');
+        socket.emit('manual-binance-test', {
+            symbols: ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT']
+        });
+    }, 2000);
 });
 
 // Helper function to update status indicators
@@ -341,15 +390,6 @@ window.updatePrice = function(symbol, price) {
         return false;
     }
 };
-
-// Add a test button click handler
-document.getElementById('test-binance-stream').addEventListener('click', function() {
-    // After sending the test request, try a manual update
-    setTimeout(() => {
-        console.log('Testing manual price update...');
-        window.updatePrice('BTCUSDT', '99999.99');
-    }, 2000);
-});
 
 // First Purchase button functionality
 const firstPurchaseButtons = document.querySelectorAll('.first-purchase');
