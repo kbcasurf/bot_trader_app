@@ -626,6 +626,9 @@ socket.on('connect', () => {
     // Update the backend connection status
     updateConnectionStatus(true);
     
+    // Force trading status to active when connected
+    updateTradingStatus(true);
+    
     // Mark response received
     lastBackendResponseTime = Date.now();
     
@@ -738,7 +741,7 @@ socket.on('price-update', (data) => {
         // Format the price with 2 decimal places
         const formattedPrice = parseFloat(price).toFixed(2);
         priceElement.textContent = `Price: $${formattedPrice}`;
-        console.log(`Updated price for ${baseSymbol} to $${formattedPrice}`);
+//        console.log(`Updated price for ${baseSymbol} to $${formattedPrice}`);
         
         // Mark response received
         lastBackendResponseTime = Date.now();

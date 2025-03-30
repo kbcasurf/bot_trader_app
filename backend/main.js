@@ -407,7 +407,7 @@ io.on('connection', (socket) => {
         }
     });
 
-
+/* 
     // Handle manual Binance API test
     socket.on('manual-binance-test', async (data) => {
         try {
@@ -445,7 +445,9 @@ io.on('connection', (socket) => {
             });
         }
     });
-    
+     */
+
+
     // Handle get account info request
     socket.on('get-account-info', async () => {
         try {
@@ -701,10 +703,14 @@ io.on('connection', (socket) => {
             if (status.totalConnections === 0) {
                 binanceAPI.initializeWebSockets(io);
             }
+
             
+           /*  
             // Get prices via API as a fallback
             const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
             const pricesResult = await binanceAPI.manualConnectAndGetPrices(symbols);
+ */
+
             
             socket.emit('binance-test-result', {
                 success: true,
@@ -731,7 +737,7 @@ io.on('connection', (socket) => {
             });
         }
     });
-    
+
     
     // Listen for WebSocket status updates
     socket.on('websocket-status', (status) => {

@@ -747,7 +747,7 @@ function connectToWebSocket(symbols, io) {
                 
                 // Log only occasionally to avoid flooding
                 if (Math.random() < 0.1) {
-                    console.log(`Ticker update for ${symbol}: ${price}`);
+                //    console.log(`Ticker update for ${symbol}: ${price}`);
                 }
             } else {
                 // Log other message types (truncated to avoid huge logs)
