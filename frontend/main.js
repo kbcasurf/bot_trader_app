@@ -1,5 +1,4 @@
 import { io } from 'socket.io-client';
-import ConnectionManager from './js/connection-manager.js';
 
 // Enhanced Socket.IO debugging
 const DEBUG_MODE = true;
