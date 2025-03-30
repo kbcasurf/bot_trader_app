@@ -144,7 +144,10 @@ async function getExchangeInfo(symbol) {
     }
 }
 
-// Format quantity according to lot size filter
+
+
+
+// and ensure it always rounds DOWN to the nearest step size
 function formatQuantity(quantity, symbolInfo) {
     try {
         // Find the LOT_SIZE filter
@@ -165,22 +168,36 @@ function formatQuantity(quantity, symbolInfo) {
         
         // Get the step size
         const stepSize = parseFloat(lotSizeFilter.stepSize);
+        const minQty = parseFloat(lotSizeFilter.minQty);
+        const maxQty = parseFloat(lotSizeFilter.maxQty);
         
         // Calculate precision from step size
-        const precision = stepSize.toString().includes('.')
-            ? stepSize.toString().split('.')[1].length
-            : 0;
+        let precision = 0;
+        if (stepSize.toString().includes('.')) {
+            precision = stepSize.toString().split('.')[1].length;
+        }
+        
+        // Ensure quantity is within min/max bounds
+        quantity = Math.max(minQty, Math.min(maxQty, quantity));
         
         // Round down to the nearest step
-        const roundedQuantity = Math.floor(quantity / stepSize) * stepSize;
+        const remainder = quantity % stepSize;
+        if (remainder !== 0) {
+            quantity = quantity - remainder;
+        }
         
         // Format to correct precision
-        return roundedQuantity.toFixed(precision);
+        return quantity.toFixed(precision);
     } catch (error) {
         console.error('Error formatting quantity:', error);
         return quantity.toString();
     }
 }
+
+
+
+
+
 
 // Create a market buy order
 async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
@@ -230,7 +247,10 @@ async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
     }
 }
 
-// Create a market sell order
+
+
+
+// it properly formats the quantity before sending to Binance
 async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
     try {
         let orderQuantity = quantity;
@@ -250,6 +270,11 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
             if (!assetBalance || parseFloat(assetBalance.free) < parseFloat(orderQuantity)) {
                 throw new Error(`Insufficient ${asset} balance. Required: ${orderQuantity}, Available: ${assetBalance ? assetBalance.free : 0}`);
             }
+        } else {
+            // For sell-all scenarios, need to get exchange info for LOT_SIZE rule
+            const exchangeInfo = await getExchangeInfo(symbol);
+            orderQuantity = formatQuantity(quantity, exchangeInfo);
+            console.log(`Formatted ${symbol} quantity from ${quantity} to ${orderQuantity} based on LOT_SIZE rule`);
         }
         
         const timestamp = Date.now();
@@ -286,6 +311,7 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
         throw error;
     }
 }
+
 
 // Subscribe to ticker stream using native WebSocket
 function subscribeToTickerStream(symbols, io) {
@@ -690,6 +716,10 @@ async function executeSellOrder(symbol, amount, amountType = 'amount') {
             // Get current price for reference
             const tickerData = await getTickerPrice(symbol);
             price = parseFloat(tickerData.price);
+            
+            // Get exchange info for precise quantity formatting
+            const exchangeInfo = await getExchangeInfo(symbol);
+            quantity = formatQuantity(quantity, exchangeInfo);
         }
         
         // Get current balance to check if sufficient
