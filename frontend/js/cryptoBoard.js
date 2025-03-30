@@ -41,12 +41,17 @@ function createCryptoCards() {
     supportedCryptos.slice(1).forEach(crypto => {
         const symbol = crypto.symbol.toLowerCase();
         
-        // Clone the BTC card and modify it
+        // Clone the BTC card
         if (btcCard) {
-            // In cryptoBoard.js - modify the card cloning logic:
             const newCard = btcCard.cloneNode(true);
             newCard.id = `${symbol}-card`;
-
+            
+            // Update card header
+            const header = newCard.querySelector('.crypto-header h3');
+            if (header) {
+                header.textContent = `${crypto.symbol}/USDT`;
+            }
+            
             // Find ALL elements with IDs and update them
             const elementsWithIds = newCard.querySelectorAll('[id]');
             elementsWithIds.forEach(element => {
@@ -55,8 +60,8 @@ function createCryptoCards() {
                 element.id = newId;
                 console.log(`Updated ID from ${element.id} to ${newId}`);
             });
-
-            // Then continue with your specific updates
+            
+            // Make sure price element has correct ID and content
             const price = newCard.querySelector('.current-price');
             if (price) {
                 // Double-check it has the correct ID
@@ -67,9 +72,11 @@ function createCryptoCards() {
                 price.textContent = 'Price: $0.00';
             }
             
-            // Update investment input
-            const investmentInput = newCard.querySelector('input[type="hidden"]');
-            if (investmentInput) investmentInput.id = `${symbol}-investment`;
+            // Update holdings display
+            const holdings = newCard.querySelector('.holdings span');
+            if (holdings) {
+                holdings.textContent = `0.00 ${crypto.symbol}`;
+            }
             
             // Add the new card to the grid
             gridElement.appendChild(newCard);
@@ -90,7 +97,6 @@ function createCryptoCards() {
     updateTradingButtonsState();
 }
     
-
 // Function to attach event listeners to dynamically created elements
 function attachEventListeners() {
     // Investment preset buttons
@@ -177,11 +183,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Listen for price updates
 socket.on('price-update', (data) => {
-    const baseSymbol = data.symbol.replace('USDT', '').toLowerCase();
+    if (!data) return;
+    
+    let symbol = '';
+    if (data.symbol) {
+        symbol = data.symbol;
+    } else if (data.s) {
+        symbol = data.s;
+    } else {
+        return;
+    }
+    
+    const baseSymbol = symbol.replace('USDT', '').toLowerCase();
     const priceElement = document.getElementById(`${baseSymbol}-price`);
     
     if (priceElement) {
-        priceElement.textContent = `Price: $${parseFloat(data.price).toFixed(2)}`;
+        let price = 0;
+        if (data.price) {
+            price = data.price;
+        } else if (data.p) {
+            price = data.p;
+        } else if (data.c) {
+            price = data.c;
+        } else if (data.a) {
+            price = data.a;
+        } else if (data.b) {
+            price = data.b;
+        } else {
+            return;
+        }
+        
+        priceElement.textContent = `Price: $${parseFloat(price).toFixed(2)}`;
     }
 });
 
@@ -189,6 +221,16 @@ socket.on('price-update', (data) => {
 socket.on('trading-status', (status) => {
     tradingActive = status.active;
     updateTradingButtonsState();
+});
+
+// Listen for holdings updates
+socket.on('holdings-update', (data) => {
+    const { symbol, amount } = data;
+    const holdingsElement = document.getElementById(`${symbol.toLowerCase()}-holdings`);
+    
+    if (holdingsElement) {
+        holdingsElement.textContent = `${parseFloat(amount).toFixed(6)} ${symbol}`;
+    }
 });
 
 export default {

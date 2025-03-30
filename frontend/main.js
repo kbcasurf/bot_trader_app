@@ -1,5 +1,57 @@
 import { io } from 'socket.io-client';
 
+// Enhanced Socket.IO debugging
+const DEBUG_MODE = true;
+
+// Wrap socket.io with debugging capabilities
+function createDebugSocket() {
+    // Create socket with proper backend URL
+    const socket = io({
+        // Note: No need to specify the URL as Vite will proxy the requests
+        // The proxy is set up in vite.config.js
+        transports: ['polling', 'websocket'],
+        reconnectionAttempts: 5,
+        timeout: 20000,
+        forceNew: true
+    });
+    
+    // Add debug event listeners
+    if (DEBUG_MODE) {
+        // Track original listeners to prevent duplicates
+        const originalOn = socket.on;
+        const registeredEvents = new Set();
+        
+        socket.on = function(event, callback) {
+            if (!registeredEvents.has(event)) {
+                console.log(`[Socket Debug] Registering listener for event: ${event}`);
+                registeredEvents.add(event);
+                
+                // Wrap the callback with logging
+                const wrappedCallback = function(...args) {
+                    console.log(`[Socket Debug] Received event: ${event}`, args.length > 0 ? args[0] : null);
+                    return callback.apply(this, args);
+                };
+                
+                return originalOn.call(this, event, wrappedCallback);
+            } else {
+                return originalOn.call(this, event, callback);
+            }
+        };
+        
+        // Also wrap socket.emit for debugging
+        const originalEmit = socket.emit;
+        socket.emit = function(event, ...args) {
+            console.log(`[Socket Debug] Emitting event: ${event}`, args.length > 0 ? args[0] : null);
+            return originalEmit.apply(this, [event, ...args]);
+        };
+    }
+    
+    return socket;
+}
+
+// Export the socket for other modules to use
+export const socket = createDebugSocket();
+
 document.addEventListener('DOMContentLoaded', () => {
     // Log all available price elements as a sanity check
     console.log('Available price elements on DOM load:', 
@@ -7,16 +59,11 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Initialize your components after DOM is ready
     initializeComponents();
-});
-
-// Create socket with proper backend URL
-export const socket = io({
-    // Note: No need to specify the URL as Vite will proxy the requests
-    // The proxy is set up in vite.config.js
-    transports: ['polling', 'websocket'],
-    reconnectionAttempts: 5,
-    timeout: 20000,
-    forceNew: true
+    
+    // Run DOM validation after a short delay to ensure all elements are loaded
+    setTimeout(() => {
+        validateDomElements();
+    }, 1000);
 });
 
 // Log connection events for debugging
@@ -102,10 +149,7 @@ socket.on('trading-status', (status) => {
     updateTradingStatus(status.active);
 });
 
-
-
-
-// Enhanced price update handler for frontend
+// IMPROVED: Enhanced price update handler for frontend
 socket.on('price-update', (data) => {
     console.log('Price update received:', data);
     
@@ -176,9 +220,6 @@ socket.on('price-update', (data) => {
             Array.from(document.querySelectorAll('[id$="-price"]')).map(el => el.id));
     }
 });
-
-
-
 
 // Transaction and operation results
 socket.on('first-purchase-result', (result) => {
@@ -276,7 +317,7 @@ presetButtons.forEach(button => {
 });
 
 // Helper function to manually update a price (for testing)
-function updatePrice(symbol, price) {
+window.updatePrice = function(symbol, price) {
     const baseSymbol = symbol.replace('USDT', '').toLowerCase();
     
     // Try different methods to find the element
@@ -299,17 +340,16 @@ function updatePrice(symbol, price) {
             Array.from(document.querySelectorAll('[id$="-price"]')).map(el => el.id));
         return false;
     }
-}
+};
 
 // Add a test button click handler
 document.getElementById('test-binance-stream').addEventListener('click', function() {
     // After sending the test request, try a manual update
     setTimeout(() => {
         console.log('Testing manual price update...');
-        updatePrice('BTCUSDT', '99999.99');
+        window.updatePrice('BTCUSDT', '99999.99');
     }, 2000);
 });
-
 
 // First Purchase button functionality
 const firstPurchaseButtons = document.querySelectorAll('.first-purchase');
@@ -345,8 +385,8 @@ sellAllButtons.forEach(button => {
     });
 });
 
-// Validate that all required price elements exist
-window.addEventListener('load', () => {
+// Function to validate that all required price elements exist
+function validateDomElements() {
     console.log('Validating price elements...');
     
     const requiredSymbols = ['btc', 'sol', 'xrp', 'doge', 'near', 'pendle'];
@@ -368,4 +408,42 @@ window.addEventListener('load', () => {
     } else {
         console.log('All required price elements found.');
     }
-});
+}
+
+// Manual price update function for debugging
+window.manualPriceUpdate = function(symbol, price) {
+    // Create a mock price update event
+    const data = {
+        symbol: symbol,
+        price: price
+    };
+    
+    console.log(`Manually triggering price update for ${symbol}: $${price}`);
+    
+    // Manually trigger the price-update event
+    if (socket) {
+        socket.emit('manual-price-update', data);
+        
+        // Also process it locally to ensure UI updates
+        const baseSymbol = symbol.replace('USDT', '').toLowerCase();
+        const priceElement = document.getElementById(`${baseSymbol}-price`);
+        
+        if (priceElement) {
+            priceElement.textContent = `Price: $${parseFloat(price).toFixed(2)}`;
+            console.log(`Updated ${baseSymbol}-price element manually`);
+            return true;
+        } else {
+            console.error(`Could not find price element with ID: ${baseSymbol}-price`);
+            return false;
+        }
+    } else {
+        console.error('Socket not initialized');
+        return false;
+    }
+};
+
+// Initialization function (you can add more components here)
+function initializeComponents() {
+    // Any additional initialization code can go here
+    console.log('Initializing components...');
+}
