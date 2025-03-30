@@ -1,8 +1,8 @@
 // Import socket.io client
 import { io } from 'socket.io-client';
 
-// Debug mode toggle
-const DEBUG_MODE = true;
+/* // Debug mode toggle
+const DEBUG_MODE = true; */
 
 // Create and configure socket connection
 const socket = io({
@@ -14,6 +14,8 @@ const socket = io({
     autoConnect: true
 });
 
+
+/* 
 // Add enhanced debugging for socket connection
 if (DEBUG_MODE) {
     // Track original socket methods to enhance with logging
@@ -47,7 +49,10 @@ if (DEBUG_MODE) {
     socket.io.engine.on('upgrade', (transport) => {
         console.log('Socket transport upgraded to:', transport.name);
     });
-}
+} */
+
+
+
 
 // Export the socket for other modules to use
 export { socket };
@@ -94,10 +99,14 @@ function initializeApp() {
     telegramStatusText = document.getElementById('telegram-status-text');
     tradingStatusDot = document.getElementById('trading-status-dot');
     tradingStatusText = document.getElementById('trading-status-text');
+
+
     
-    // Get test buttons
+ /*    // Get test buttons
     testTelegramBtn = document.getElementById('test-telegram');
     testBinanceStreamBtn = document.getElementById('test-binance-stream');
+ */
+
     
     // Initialize crypto cards
     createCryptoCards();
@@ -299,6 +308,8 @@ function attachEventListeners() {
         });
     });
     
+
+/* 
     // Test buttons
     if (testTelegramBtn) {
         testTelegramBtn.addEventListener('click', () => {
@@ -306,6 +317,8 @@ function attachEventListeners() {
         });
     }
     
+
+
     if (testBinanceStreamBtn) {
         testBinanceStreamBtn.addEventListener('click', () => {
             socket.emit('test-binance-stream');
@@ -318,8 +331,11 @@ function attachEventListeners() {
                 });
             }, 2000);
         });
-    }
+    }*/
 }
+
+ 
+
 
 // Setup price update fallback
 function setupPeriodicPriceUpdates() {
@@ -567,7 +583,7 @@ function validateDomElements() {
 }
 
 // Manual price update function for debugging
-window.manualPriceUpdate = function(symbol, price) {
+/*window.manualPriceUpdate = function(symbol, price) {
     // Create a mock price update event
     const data = {
         symbol: symbol,
@@ -576,7 +592,7 @@ window.manualPriceUpdate = function(symbol, price) {
     
     console.log(`Manually triggering price update for ${symbol}: $${price}`);
     
-    // Manually trigger the price-update event
+     // Manually trigger the price-update event
     if (socket) {
         socket.emit('manual-price-update', data);
         
@@ -597,6 +613,9 @@ window.manualPriceUpdate = function(symbol, price) {
         return false;
     }
 };
+ */
+
+
 
 // ======== Socket.IO Event Handlers ========
 
@@ -858,7 +877,7 @@ socket.on('sell-all-result', (result) => {
     lastBackendResponseTime = Date.now();
 });
 
-socket.on('telegram-test-result', (result) => {
+/* socket.on('telegram-test-result', (result) => {
     if (result.success) {
         alert('Telegram notification test successful!');
     } else {
@@ -866,8 +885,9 @@ socket.on('telegram-test-result', (result) => {
     }
     
     // Mark response received
-    lastBackendResponseTime = Date.now();
+    lastBackendResponseTime = Date.now(); 
 });
+*/
 
 // Initialize everything when DOM is ready
 whenDomReady(() => {

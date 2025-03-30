@@ -108,8 +108,8 @@ function getWebSocketStatus() {
 
 
 
-
-/* // Renew WebSocket connection manually
+/* 
+// Renew WebSocket connection manually
 function renewWebSocketConnection(io) {
     if (!wsInstance) {
         console.log('No active WebSocket connection to renew');
@@ -502,7 +502,7 @@ function cleanupWebSocket(ws) {
 
 
 
-/* // Schedule connection renewal
+// Schedule connection renewal
 function scheduleConnectionRenewal(symbols, io) {
     // Clear any existing renewal timeout
     if (wsState.renewalTimeout) {
@@ -535,12 +535,12 @@ function scheduleConnectionRenewal(symbols, io) {
     }, WS_CONNECTION_LIFETIME);
     
     console.log(`Scheduled connection renewal in ${WS_CONNECTION_LIFETIME / 1000 / 60 / 60} hours`);
-} */
+}
 
 
 
 
-/* // Set up health check for WebSocket connection
+// Set up health check for WebSocket connection
 function setupHealthCheck(ws, symbols, io) {
     // Clear any existing interval
     if (wsState.healthCheckInterval) {
@@ -590,12 +590,12 @@ function setupHealthCheck(ws, symbols, io) {
         }
     }, HEALTH_CHECK_INTERVAL);
 }
- */
 
 
 
 
-/* // Implement exponential backoff for reconnection
+
+// Implement exponential backoff for reconnection
 function getReconnectDelay() {
     return Math.min(
         INITIAL_RECONNECT_DELAY * Math.pow(1.5, wsState.reconnectAttempt),
@@ -653,10 +653,10 @@ function handleReconnect(symbols, io) {
         connectToWebSocket(symbols, io);
     }, delay);
 }
- */
 
 
-/* // Main function to connect to Binance WebSocket
+
+ // Main function to connect to Binance WebSocket
 function connectToWebSocket(symbols, io) {
     // Clean up existing connection if present
     if (wsInstance) {
@@ -795,7 +795,7 @@ function connectToWebSocket(symbols, io) {
     });
     
     return ws;
-} */
+}
 
 
 
