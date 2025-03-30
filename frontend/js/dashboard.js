@@ -1,9 +1,8 @@
-// Get socket instance from main.js or create a new one if needed
+// Get socket instance from main.js
 import { socket } from '../main.js';
 
 // Track trading status
 let tradingActive = false;
-
 
 /**
  * WebSocket Monitor Component
@@ -23,6 +22,18 @@ class WebSocketMonitor {
      * Initialize the component
      */
     init() {
+        // Wait for DOM to be ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => this.setupMonitor());
+        } else {
+            this.setupMonitor();
+        }
+    }
+    
+    /**
+     * Set up the monitor component
+     */
+    setupMonitor() {
         // Create container if it doesn't exist
         this.createContainer();
         
@@ -79,8 +90,13 @@ class WebSocketMonitor {
                 </div>
             `;
             
-            // Add to page (you might want to append it to a specific element instead)
-            document.body.appendChild(container);
+            // Add to page - look for a specific element to append to
+            const targetElement = document.querySelector('.status-section') || document.body;
+            if (targetElement) {
+                targetElement.after(container);
+            } else {
+                document.body.appendChild(container);
+            }
         }
         
         this.container = container;
@@ -225,7 +241,7 @@ class WebSocketMonitor {
             `;
             
             // Add connection details if there are any
-            if (Object.keys(status.connections).length > 0) {
+            if (Object.keys(status.connections || {}).length > 0) {
                 detailsHtml += '<h4>Active Connections</h4>';
                 detailsHtml += '<div class="connections-list">';
                 
@@ -261,9 +277,12 @@ class WebSocketMonitor {
     }
 }
 
-
-// Function to update transaction history
-export function updateTransactionHistory(symbol, transactions) {
+/**
+ * Function to update transaction history
+ * @param {string} symbol Cryptocurrency symbol
+ * @param {Array} transactions List of transactions
+ */
+function updateTransactionHistory(symbol, transactions) {
     const historyElement = document.getElementById(`${symbol.toLowerCase()}-history`);
     
     if (!historyElement) {
@@ -282,7 +301,7 @@ export function updateTransactionHistory(symbol, transactions) {
         return;
     }
     
-    console.log(`Updating transaction history for ${symbol} with ${transactions.length} transactions:`, transactions);
+    console.log(`Updating transaction history for ${symbol} with ${transactions.length} transactions`);
     
     // Add transactions to the history list
     transactions.forEach(transaction => {
@@ -293,7 +312,7 @@ export function updateTransactionHistory(symbol, transactions) {
         const date = new Date(transaction.timestamp);
         const formattedDate = `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
         
-        // Make sure to format price and quantity with proper precision
+        // Format price and quantity with proper precision
         const price = parseFloat(transaction.price).toFixed(2);
         const quantity = parseFloat(transaction.quantity).toFixed(6);
         
@@ -303,8 +322,10 @@ export function updateTransactionHistory(symbol, transactions) {
     });
 }
 
-// Function to update trading button states based on WebSocket connection
-export function updateTradingButtonsState() {
+/**
+ * Function to update trading button states based on WebSocket connection
+ */
+function updateTradingButtonsState() {
     const tradingButtons = document.querySelectorAll('.first-purchase, .sell-all');
     
     if (tradingActive) {
@@ -318,6 +339,16 @@ export function updateTradingButtonsState() {
             button.classList.add('disabled');
         });
     }
+}
+
+// Initialize the WebSocket monitor when DOM is ready
+let wsMonitor;
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        wsMonitor = new WebSocketMonitor();
+    });
+} else {
+    wsMonitor = new WebSocketMonitor();
 }
 
 // Listen for transaction updates
@@ -374,7 +405,7 @@ socket.on('trading-status', (status) => {
     updateTradingButtonsState();
 });
 
-export default {
+export {
     updateTransactionHistory,
     updateTradingButtonsState,
     WebSocketMonitor
