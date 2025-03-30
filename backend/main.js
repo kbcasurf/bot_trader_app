@@ -689,8 +689,17 @@ io.on('connection', (socket) => {
     });
 
 
+    socket.on('get-trading-status', () => {
+        // Send the current WebSocket trading status
+        const isActive = websocketConnected && !CIRCUIT_BREAKER.tripped;
+        socket.emit('trading-status', { 
+            active: isActive,
+            circuitBreaker: CIRCUIT_BREAKER.tripped
+        });
+        console.log(`Sent trading status in response to request: ${isActive}`);
+    });
 
-
+    
     // Handle test Binance WebSocket stream
     socket.on('test-binance-stream', async () => {
         try {

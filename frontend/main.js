@@ -6,12 +6,12 @@ const DEBUG_MODE = true; */
 
 // Create and configure socket connection
 const socket = io({
-    // Remove explicit path setting to use default
-    transports: ['websocket', 'polling'],  // Try WebSocket first, then polling
-    reconnectionAttempts: 5,
+    transports: ['websocket', 'polling'],
+    reconnectionAttempts: 10,     // Increase attempts
     reconnectionDelay: 1000,
-    timeout: 20000,
-    autoConnect: true
+    timeout: 30000,               // Increase timeout
+    autoConnect: true,
+    forceNew: true               // Force a new connection
 });
 
 
@@ -72,8 +72,8 @@ let telegramStatusDot;
 let telegramStatusText;
 let tradingStatusDot;
 let tradingStatusText;
-let testTelegramBtn;
-let testBinanceStreamBtn;
+//let testTelegramBtn;
+//let testBinanceStreamBtn;
 
 // Dom Ready Utilities
 function whenDomReady(callback) {
@@ -383,11 +383,12 @@ function setupPeriodicPriceUpdates() {
 
 // Connection monitoring mechanism
 function implementConnectionMonitoring() {
-    // Create a function to mark backend responses
-    function markBackendResponse() {
-        lastBackendResponseTime = Date.now();
-        updateConnectionStatus(true);
-    }
+    setInterval(() => {
+        if (priceUpdateReceived && !tradingActive) {
+            console.log('Inconsistent state: Price updates received but trading inactive');
+            syncTradingStatusWithPriceUpdates();
+        }
+    }, 10000);
     
     // Periodically check backend connection health
     setInterval(() => {
@@ -535,6 +536,51 @@ function updateTransactionHistory(symbol, transactions) {
     });
 }
 
+
+
+// Add this to frontend/main.js
+let priceUpdateReceived = false;
+
+// Modify your price update handler
+socket.on('price-update', (data) => {
+    // ... your existing price update code ...
+    
+    // Mark that we've received a price update
+    priceUpdateReceived = true;
+    
+    // If we're getting price updates but buttons are still disabled,
+    // something is wrong with our trading status
+    if (!tradingActive && priceUpdateReceived) {
+        console.log('Price update received but trading not active, syncing status');
+        syncTradingStatusWithPriceUpdates();
+    }
+});
+
+
+
+// Function to sync trading status with price updates
+function syncTradingStatusWithPriceUpdates() {
+    if (priceUpdateReceived && !tradingActive) {
+        console.log('Price updates are active, syncing trading status');
+        // Request trading status again
+        socket.emit('get-trading-status');
+        
+        // If we don't get a response after 2 seconds, infer trading status from price updates
+        setTimeout(() => {
+            if (!tradingActive && priceUpdateReceived) {
+                console.log('No trading status response, inferring from price updates');
+                // If we've received price updates, then the WebSocket must be working
+                updateTradingStatus(true);
+            }
+        }, 2000);
+    }
+}
+
+// Call this function periodically
+setInterval(syncTradingStatusWithPriceUpdates, 5000);
+
+
+
 // Function to validate that all required price elements exist
 function validateDomElements() {
     console.log('Validating DOM elements...');
@@ -640,7 +686,14 @@ socket.on('connect', () => {
         console.log('Fetching account holdings...');
         socket.emit('get-account-info');
     }, 1500);
-    
+
+
+    setTimeout(() => {
+        console.log('Explicitly requesting trading status');
+        socket.emit('get-trading-status');
+    }, 2000);
+
+        
     // Wait for backend services to initialize and fetch prices
     setTimeout(() => {
         console.log('Fetching initial prices after connection...');
@@ -692,8 +745,19 @@ socket.on('telegram-status', (isConnected) => {
 
 // Trading status update
 socket.on('trading-status', (status) => {
-    console.log('Trading status update received:', status);
-    updateTradingStatus(status.active);
+    console.log('Trading status event received:', status);
+    tradingActive = status.active;
+    updateTradingButtonsState();
+});
+
+// Add event listener for websocket-status
+socket.on('websocket-status', (status) => {
+    console.log('WebSocket status update received:', status);
+    // If WebSocket is connected but trading is inactive, request trading status
+    if (status.connected && !tradingActive) {
+        console.log('WebSocket connected but trading inactive, requesting trading status');
+        socket.emit('get-websocket-status');
+    }
 });
 
 // Price updates
@@ -701,6 +765,10 @@ socket.on('price-update', (data) => {
     if (!data) {
         console.warn('Received empty price update data');
         return;
+    }
+    if (!tradingActive) {
+        console.log('Received price update while trading inactive, requesting trading status');
+        socket.emit('get-trading-status');
     }
     
     // Handle different possible symbol formats

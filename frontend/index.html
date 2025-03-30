@@ -5,37 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crypto Trading Bot</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/x-icon" href="favicon.svg">
 </head>
 <body>
     <header>
         <h1>Cryptocurrency Trading Bot</h1>
         <p>Automatically trade crypto with predefined strategies</p>
     </header>
-
-    <div class="status-section">
-        <div class="status-card" id="connection-status">
-            <h3>Connection Status</h3>
-            <div class="status-indicator">
-                <div class="status-dot" id="backend-status-dot"></div>
-                <span id="backend-status-text">Backend: Connecting...</span>
-            </div>
-            <div class="status-indicator">
-                <div class="status-dot" id="db-status-dot"></div>
-                <span id="db-status-text">Database: Connecting...</span>
-            </div>
-        </div>
-        <div class="status-card" id="api-status">
-            <h3>API Status</h3>
-            <div class="status-indicator">
-                <div class="status-dot" id="binance-status-dot"></div>
-                <span id="binance-status-text">Binance: Connecting...</span>
-            </div>
-            <div class="status-indicator">
-                <div class="status-dot" id="telegram-status-dot"></div>
-                <span id="telegram-status-text">Telegram: Connecting...</span>
-            </div>
-        </div>
-    </div>
 
     <!-- Trading Status Section -->
     <div class="trading-status">
@@ -81,10 +57,29 @@
         </div>
     </div>
 
-    <div class="test-actions">
-        <h3>Test Actions</h3>
-        <button id="test-telegram">Test Telegram Notification</button>
-        <button id="test-binance-stream">Test Binance Stream</button>
+    <div class="status-section">
+        <div class="status-card" id="connection-status">
+            <h3>Connection Status</h3>
+            <div class="status-indicator">
+                <div class="status-dot" id="backend-status-dot"></div>
+                <span id="backend-status-text">Backend: Connecting...</span>
+            </div>
+            <div class="status-indicator">
+                <div class="status-dot" id="db-status-dot"></div>
+                <span id="db-status-text">Database: Connecting...</span>
+            </div>
+        </div>
+        <div class="status-card" id="api-status">
+            <h3>API Status</h3>
+            <div class="status-indicator">
+                <div class="status-dot" id="binance-status-dot"></div>
+                <span id="binance-status-text">Binance: Connecting...</span>
+            </div>
+            <div class="status-indicator">
+                <div class="status-dot" id="telegram-status-dot"></div>
+                <span id="telegram-status-text">Telegram: Connecting...</span>
+            </div>
+        </div>
     </div>
 
     <script src="./js/dashboard.js" type="module"></script>
