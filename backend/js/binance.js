@@ -424,6 +424,7 @@ function subscribeToTickerStream(symbols, io) {
 }
 
 // Start ping-pong mechanism to keep connection alive
+// Start ping-pong mechanism to keep connection alive
 function startPingPong(ws) {
     // Clear any existing timer
     if (ws.pingTimerId) {
@@ -437,19 +438,15 @@ function startPingPong(ws) {
             return;
         }
         
-        // Binance testnet requires a ping message to keep the connection alive
-        // Send a ping message as a proper JSON payload
+        // For Binance, we need to send a keepalive message in the format they expect
         try {
-            ws.send(JSON.stringify({ method: "ping" }));
-            console.log("Sent ping to Binance WebSocket");
+            // Use a proper Binance ping message format
+            ws.send(JSON.stringify({ 
+                method: "PING",
+                id: Date.now()
+            }));
             
-            // Set a timeout to check for pong response
-            setTimeout(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    // If still connected, connection is healthy
-                    console.log("WebSocket connection is healthy");
-                }
-            }, 5000);
+            console.log("Sent ping to Binance WebSocket");
         } catch (error) {
             console.error("Error sending ping:", error);
             ws.terminate();

@@ -6,14 +6,16 @@ const DEBUG_MODE = true;
 
 // Wrap socket.io with debugging capabilities
 function createDebugSocket() {
-    // Create socket with proper backend URL
+    // Create socket with explicit backend URL and connection options
     const socket = io({
-        // Note: No need to specify the URL as Vite will proxy the requests
-        // The proxy is set up in vite.config.js
-        transports: ['polling', 'websocket'],
+        // Explicitly set the URL to match your nginx proxy configuration
+        path: '/socket.io',
+        transports: ['websocket', 'polling'],  // Try WebSocket first, then polling
         reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
         timeout: 20000,
-        forceNew: true
+        forceNew: true,
+        autoConnect: true
     });
     
     // Add debug event listeners
@@ -288,7 +290,13 @@ socket.on('connect', () => {
 
 
 socket.on('connect_error', (error) => {
-    console.error('Socket connection error:', error.message);
+    console.error('Socket.IO connection error:', error.message);
+    // Try to reconnect with polling if WebSocket fails
+    if (socket.io.opts.transports[0] === 'websocket') {
+        console.log('WebSocket connection failed, falling back to polling');
+        socket.io.opts.transports = ['polling', 'websocket'];
+        socket.connect();
+    }
 });
 
 socket.on('disconnect', (reason) => {
@@ -342,6 +350,12 @@ socket.on('connect', () => {
         socket.emit('test-binance-stream');
     }, 2500);
 });
+
+// Shows log for reconnection attempts
+socket.on('reconnect_attempt', (attempt) => {
+    console.log('Socket.IO reconnect attempt:', attempt);
+});
+
 
 socket.on('account-info', (accountInfo) => {
     console.log('Account info received:', accountInfo);
