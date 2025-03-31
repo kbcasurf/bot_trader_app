@@ -14,8 +14,10 @@ dotenv.config({ path: '/app/.env' });
 const app = express();
 const server = http.createServer(app);
 
+/* 
 // Detailed logging mode - turn on for debugging
 const DETAILED_LOGGING = true;
+ */
 
 // Circuit breaker settings to prevent excessive trading during errors
 const CIRCUIT_BREAKER = {
@@ -101,12 +103,16 @@ let systemStatus = {
 // WebSocket connection status
 let websocketConnected = false;
 
+
+/* 
 // Helper function for detailed logging
 function detailedLog(...args) {
     if (DETAILED_LOGGING) {
         console.log('[DETAILED]', ...args);
     }
-}
+} */
+
+
 
 // Test database connection
 async function testDatabaseConnection() {
@@ -127,6 +133,8 @@ async function testDatabaseConnection() {
     }
 }
 
+
+
 // Test Binance API connection
 async function testBinanceConnection() {
     try {
@@ -143,6 +151,8 @@ async function testBinanceConnection() {
     }
 }
 
+
+
 // Test Telegram Bot connection
 async function testTelegramConnection() {
     try {
@@ -158,6 +168,8 @@ async function testTelegramConnection() {
         return false;
     }
 }
+
+
 
 // Initialize WebSocket connections if Binance is connected
 async function initializeWebSockets() {
@@ -182,6 +194,8 @@ async function initializeWebSockets() {
         return false;
     }
 }
+
+
 
 
 // Add a heartbeat mechanism to keep connections alive
@@ -233,6 +247,8 @@ function checkCircuitBreaker(success) {
     return CIRCUIT_BREAKER.tripped;
 }
 
+
+
 // Helper function to get transactions for a symbol
 async function getTransactions(symbol) {
     let conn;
@@ -251,6 +267,8 @@ async function getTransactions(symbol) {
     }
 }
 
+
+
 // Helper function to get holdings for a symbol
 async function getHoldings(symbol) {
     let conn;
@@ -268,6 +286,8 @@ async function getHoldings(symbol) {
         if (conn) conn.release();
     }
 }
+
+
 
 // Validate trading parameters
 function validateTradeParams(params) {
@@ -298,6 +318,8 @@ function validateTradeParams(params) {
         amountType: params.amountType || 'amount'
     }};
 }
+
+
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -334,6 +356,9 @@ io.on('connection', (socket) => {
         }
     });
     
+
+
+/* 
     // Handle manual price updates
     socket.on('manual-price-update', (data) => {
         console.log('Manual price update received:', data);
@@ -352,7 +377,10 @@ io.on('connection', (socket) => {
         
         console.log(`Manual price update for ${data.symbol} to ${data.price} broadcast to all clients`);
     });
-    
+     */
+
+
+
     // Handle Telegram test
     socket.on('test-telegram', async () => {
         try {
@@ -385,6 +413,9 @@ io.on('connection', (socket) => {
         }
     });
 
+
+
+/* 
     // Add a new socket.io event handler for manually renewing WebSocket connection
     socket.on('renew-websocket', () => {
         try {
@@ -406,6 +437,9 @@ io.on('connection', (socket) => {
             });
         }
     });
+
+ */
+
 
 /* 
     // Handle manual Binance API test
@@ -446,6 +480,7 @@ io.on('connection', (socket) => {
         }
     });
      */
+
 
 
     // Handle get account info request
@@ -689,17 +724,7 @@ io.on('connection', (socket) => {
     });
 
 
-    socket.on('get-trading-status', () => {
-        // Send the current WebSocket trading status
-        const isActive = websocketConnected && !CIRCUIT_BREAKER.tripped;
-        socket.emit('trading-status', { 
-            active: isActive,
-            circuitBreaker: CIRCUIT_BREAKER.tripped
-        });
-        console.log(`Sent trading status in response to request: ${isActive}`);
-    });
 
-    
     // Handle test Binance WebSocket stream
     socket.on('test-binance-stream', async () => {
         try {
@@ -893,10 +918,6 @@ io.on('connection', (socket) => {
     
 
 
-
-
-
-
 // Handle sell all
 socket.on('sell-all', async (data) => {
     try {
@@ -1028,6 +1049,7 @@ socket.on('sell-all', async (data) => {
 });
 
 
+
 // Start the server
 const PORT = process.env.PORT;
 server.listen(PORT, () => {
@@ -1048,6 +1070,9 @@ server.listen(PORT, () => {
         setupHeartbeat();
     })();
 });
+
+
+
 
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
