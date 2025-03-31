@@ -60,15 +60,17 @@ let tradingStatusText;
 let priceCheckInterval;
 let connectionCheckInterval;
 
+
 // Define supported crypto configurations
 const supportedCryptos = [
-    { symbol: 'BTC', fullName: 'Bitcoin', icon: './images/btc.svg' },
-    { symbol: 'SOL', fullName: 'Solana', icon: './images/sol.svg' },
-    { symbol: 'XRP', fullName: 'Ripple', icon: './images/xrp.svg' },
-    { symbol: 'PENDLE', fullName: 'Pendle', icon: './images/pendle.svg' },
-    { symbol: 'DOGE', fullName: 'Dogecoin', icon: './images/doge.svg' },
-    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: './images/near.svg' }
+    { symbol: 'BTC', fullName: 'Bitcoin', icon: '../images/btc.svg' },
+    { symbol: 'SOL', fullName: 'Solana', icon: '../images/sol.svg' },
+    { symbol: 'XRP', fullName: 'Ripple', icon: '../images/xrp.svg' },
+    { symbol: 'PENDLE', fullName: 'Pendle', icon: '../images/pendle.svg' },
+    { symbol: 'DOGE', fullName: 'Dogecoin', icon: '../images/doge.svg' },
+    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: '../images/near.svg' }
 ];
+
 
 // Request initial data for all crypto cards
 function requestInitialData() {
@@ -674,9 +676,9 @@ function updateProfitLossIndicator(symbol, profitLossPercent) {
     const indicator = document.getElementById(`${symbol}-profit-indicator`);
     if (!indicator) return;
     
-    // Calculate position (0% is center at 50%, range is -500% to +500%)
-    // Convert from -500% to +500% to 0% to 100%
-    const position = Math.min(Math.max((profitLossPercent + 500) / 1000 * 100, 0), 100);
+    // Calculate position (0% is center at 50%, range is -5% to +5%)
+    // Convert from -5% to +5% to 0% to 100%
+    const position = Math.min(Math.max((profitLossPercent + 5) / 1000 * 100, 0), 100);
     
     // Update indicator position
     indicator.style.left = `${position}%`;

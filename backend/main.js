@@ -345,21 +345,6 @@ io.on('connection', (socket) => {
     });
     
 
-
-
-    // Handle Telegram test
-    socket.on('test-telegram', async () => {
-        try {
-            await telegramBot.sendMessage('Test message from Crypto Trading Bot');
-            socket.emit('telegram-test-result', { success: true });
-        } catch (err) {
-            console.error('Telegram test error:', err);
-            socket.emit('telegram-test-result', { 
-                success: false, 
-                error: err.message 
-            });
-        }
-    });
     
 
     // Add a new socket.io event handler for checking WebSocket status

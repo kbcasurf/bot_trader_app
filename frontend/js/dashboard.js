@@ -137,9 +137,9 @@ function updateProfitLossIndicator(symbol, profitLossPercent) {
     const indicator = document.getElementById(`${symbol}-profit-indicator`);
     if (!indicator) return;
     
-    // Calculate position (0% is center at 50%, range is -500% to +500%)
-    // Convert from -500% to +500% to 0% to 100%
-    const position = Math.min(Math.max((profitLossPercent + 500) / 1000 * 100, 0), 100);
+    // Calculate position (0% is center at 50%, range is -5% to +5%)
+    // Convert from -5% to +5% to 0% to 100%
+    const position = Math.min(Math.max((profitLossPercent + 5) / 1000 * 100, 0), 100);
     
     // Update indicator position
     indicator.style.left = `${position}%`;
