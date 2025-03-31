@@ -47,12 +47,16 @@ function createCryptoCards() {
                 headerText.textContent = `${crypto.symbol}/USDT`;
             }
             
-            // Update icon
+            // Update icon - ensure we're getting the correct icon element
             const iconImage = headerContainer.querySelector('.crypto-icon');
             if (iconImage) {
                 iconImage.src = crypto.icon;
                 iconImage.alt = crypto.fullName;
+            } else {
+                console.error(`Icon image element not found for ${crypto.symbol}`);
             }
+        } else {
+            console.error(`Header container not found for ${crypto.symbol}`);
         }
         
         // Find ALL elements with IDs and update them
@@ -104,6 +108,7 @@ function validateCryptoCards() {
         const symbol = crypto.symbol.toLowerCase();
         const card = document.getElementById(`${symbol}-card`);
         const price = document.getElementById(`${symbol}-price`);
+        const icon = card ? card.querySelector('.crypto-icon') : null;
         
         if (!card) {
             console.error(`Missing card element for ${symbol}`);
@@ -111,6 +116,12 @@ function validateCryptoCards() {
         
         if (!price) {
             console.error(`Missing price element for ${symbol}`);
+        }
+        
+        if (!icon) {
+            console.error(`Missing icon element for ${symbol}`);
+        } else {
+            console.log(`${symbol} icon src: ${icon.src}`);
         }
     });
 }

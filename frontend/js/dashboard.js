@@ -98,36 +98,27 @@ function calculateProfitLoss(symbol, transactions) {
     // Calculate current portfolio value
     const currentValue = remainingQuantity * currentPrice;
     
-    // Calculate cost basis (adjusted for sells)
-    const costBasis = (totalBuyQuantity > 0) 
+    // Calculate cost basis of remaining holdings
+    const costBasis = totalBuyQuantity > 0 
         ? (totalBuyAmount * (remainingQuantity / totalBuyQuantity)) 
         : 0;
     
-    // Calculate unrealized profit/loss
-    const unrealizedPL = currentValue - costBasis;
-    
-    // Calculate realized profit/loss from sells
-    const realizedPL = totalSellAmount - (totalBuyAmount * (totalSellQuantity / totalBuyQuantity));
-    
-    // Total profit/loss (realized + unrealized)
-    const totalPL = realizedPL + unrealizedPL;
-    
-    // Calculate profit/loss percentage relative to total investment
-    let plPercentage = 0;
-    if (costBasis > 0) {
-        plPercentage = (unrealizedPL / costBasis) * 100;
-    }
+    // Calculate unrealized profit/loss - FIXED calculation
+    // Only compare current price to avg buy price, not total cost
+    const unrealizedPL = currentPrice > 0 && avgBuyPrice > 0
+        ? ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100
+        : 0;
     
     // Update UI with profit/loss information
     const textElement = document.getElementById(`${symbol.toLowerCase()}-profit-text`);
     if (textElement) {
-        textElement.textContent = `${plPercentage.toFixed(2)}%`;
+        textElement.textContent = `${unrealizedPL.toFixed(2)}%`;
         
         // Add appropriate class based on profit/loss
-        if (plPercentage > 0) {
+        if (unrealizedPL > 0) {
             textElement.classList.add('profit');
             textElement.classList.remove('loss');
-        } else if (plPercentage < 0) {
+        } else if (unrealizedPL < 0) {
             textElement.classList.add('loss');
             textElement.classList.remove('profit');
         } else {
@@ -136,9 +127,9 @@ function calculateProfitLoss(symbol, transactions) {
     }
     
     // Update profit/loss indicator
-    updateProfitLossIndicator(symbol.toLowerCase(), plPercentage);
+    updateProfitLossIndicator(symbol.toLowerCase(), unrealizedPL);
     
-    console.log(`${symbol} P/L: ${plPercentage.toFixed(2)}% (${unrealizedPL.toFixed(2)} USDT)`);
+    console.log(`${symbol} P/L: ${unrealizedPL.toFixed(2)}% (Avg buy: $${avgBuyPrice.toFixed(2)}, Current: $${currentPrice.toFixed(2)})`);
 }
 
 // Function to update profit/loss indicator position
