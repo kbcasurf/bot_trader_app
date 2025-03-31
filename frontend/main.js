@@ -63,12 +63,12 @@ let connectionCheckInterval;
 
 // Define supported crypto configurations
 const supportedCryptos = [
-    { symbol: 'BTC', fullName: 'Bitcoin', icon: '../images/btc.svg' },
-    { symbol: 'SOL', fullName: 'Solana', icon: '../images/sol.svg' },
-    { symbol: 'XRP', fullName: 'Ripple', icon: '../images/xrp.svg' },
-    { symbol: 'PENDLE', fullName: 'Pendle', icon: '../images/pendle.svg' },
-    { symbol: 'DOGE', fullName: 'Dogecoin', icon: '../images/doge.svg' },
-    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: '../images/near.svg' }
+    { symbol: 'BTC', fullName: 'Bitcoin', icon: 'frontend/images/btc.svg' },
+    { symbol: 'SOL', fullName: 'Solana', icon: 'frontend/images/sol.svg' },
+    { symbol: 'XRP', fullName: 'Ripple', icon: 'frontend/images/xrp.svg' },
+    { symbol: 'PENDLE', fullName: 'Pendle', icon: 'frontend/images/pendle.svg' },
+    { symbol: 'DOGE', fullName: 'Dogecoin', icon: 'frontend/images/doge.svg' },
+    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: 'frontend/images/near.svg' }
 ];
 
 
