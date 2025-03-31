@@ -398,6 +398,10 @@ function isTradingEnabled() {
     );
 }
 
+
+
+
+/* 
 // Re-evaluate trading status based on all system statuses
 function reevaluateTradingStatus() {
     const allServicesConnected = (
@@ -432,6 +436,10 @@ function reevaluateTradingStatus() {
         updateTradingStatus(true, statusMessage);
     }
 }
+ */
+
+
+
 
 // Update connection status indicators
 function updateConnectionStatus(isConnected) {
@@ -761,9 +769,18 @@ socket.on('price-update', (data) => {
         console.warn(`Could not find price element for symbol ${baseSymbol}`);
     }
     
-    // Mark response received
+        // CRITICAL: If we're receiving price updates, the backend must be connected
+    // Use the existing updateConnectionStatus function to update backend status
+    updateConnectionStatus(true);
+    
+    // Mark response received and WebSocket as active
     systemStatus.lastBackendResponse = Date.now();
+    systemStatus.websocket = true;
+    
+    // Re-evaluate trading status
+    reevaluateTradingStatus();
 });
+
 
 // Function to update WebSocket status indicator
 function updateWebSocketStatus(isConnected) {
