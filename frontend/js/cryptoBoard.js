@@ -3,12 +3,12 @@ import { socket } from '../main.js';
 
 // Crypto configuration for supported trading pairs
 const supportedCryptos = [
-    { symbol: 'BTC', fullName: 'Bitcoin' },
-    { symbol: 'SOL', fullName: 'Solana' },
-    { symbol: 'XRP', fullName: 'Ripple' },
-    { symbol: 'PENDLE', fullName: 'Pendle' },
-    { symbol: 'DOGE', fullName: 'Dogecoin' },
-    { symbol: 'NEAR', fullName: 'NEAR Protocol' }
+    { symbol: 'BTC', fullName: 'Bitcoin', icon: './images/btc.svg' },
+    { symbol: 'SOL', fullName: 'Solana', icon: './images/sol.svg' },
+    { symbol: 'XRP', fullName: 'Ripple', icon: './images/xrp.svg' },
+    { symbol: 'PENDLE', fullName: 'Pendle', icon: './images/pendle.svg' },
+    { symbol: 'DOGE', fullName: 'Dogecoin', icon: './images/doge.svg' },
+    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: './images/near.svg' }
 ];
 
 // Function to create crypto cards dynamically
@@ -39,9 +39,19 @@ function createCryptoCards() {
         newCard.id = `${symbol}-card`;
         
         // Update card header
-        const header = newCard.querySelector('.crypto-header h3');
-        if (header) {
-            header.textContent = `${crypto.symbol}/USDT`;
+        const headerContainer = newCard.querySelector('.crypto-header-left');
+        if (headerContainer) {
+            const headerText = headerContainer.querySelector('h3');
+            if (headerText) {
+                headerText.textContent = `${crypto.symbol}/USDT`;
+            }
+            
+            // Update icon
+            const iconImage = headerContainer.querySelector('.crypto-icon');
+            if (iconImage) {
+                iconImage.src = crypto.icon;
+                iconImage.alt = crypto.fullName;
+            }
         }
         
         // Find ALL elements with IDs and update them
@@ -50,7 +60,6 @@ function createCryptoCards() {
             // Replace 'btc' with the new symbol in all IDs
             const newId = element.id.replace('btc', symbol);
             element.id = newId;
-            console.log(`Updated ID from ${element.id} to ${newId}`);
         });
         
         // Make sure price element has correct ID and content
@@ -73,6 +82,19 @@ function createCryptoCards() {
     
     // Reattach event listeners after creating new cards
     attachEventListeners();
+    
+    // Request initial transaction history for all symbols
+    requestInitialTransactions();
+}
+
+// Function to request initial transaction history for all cards
+function requestInitialTransactions() {
+    supportedCryptos.forEach(crypto => {
+        const symbol = crypto.symbol.toLowerCase();
+        
+        // Request transactions for this symbol
+        socket.emit('get-transactions', { symbol: crypto.symbol + 'USDT' });
+    });
 }
 
 // Function to validate that all crypto cards were created correctly
@@ -169,6 +191,28 @@ function attachEventListeners() {
     });
 }
 
+// Function to update profit/loss indicator
+function updateProfitLossIndicator(symbol, profitLossPercent) {
+    const indicator = document.getElementById(`${symbol}-profit-indicator`);
+    if (!indicator) return;
+    
+    // Calculate position (0% is center at 50%, range is -500% to +500%)
+    // Convert from -500% to +500% to 0% to 100%
+    const position = Math.min(Math.max((profitLossPercent + 500) / 1000 * 100, 0), 100);
+    
+    // Update indicator position
+    indicator.style.left = `${position}%`;
+    
+    // Update color based on profit/loss
+    if (profitLossPercent > 0) {
+        indicator.style.borderBottomColor = '#2ecc71'; // Green for profit
+    } else if (profitLossPercent < 0) {
+        indicator.style.borderBottomColor = '#e74c3c'; // Red for loss
+    } else {
+        indicator.style.borderBottomColor = '#f1c40f'; // Yellow for neutral
+    }
+}
+
 // Initialize the crypto board when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     // Short delay to ensure all elements are rendered
@@ -219,8 +263,22 @@ socket.on('price-update', (data) => {
     }
 });
 
+// Listen for profit/loss updates
+socket.on('holdings-update', (data) => {
+    const { symbol, amount, profitLossPercent } = data;
+    
+    // Update profit/loss indicator
+    updateProfitLossIndicator(symbol.toLowerCase(), profitLossPercent);
+});
+
+// Listen for transaction history updates
+socket.on('transaction-update', (data) => {
+    // Transaction update handling is now in dashboard.js
+});
+
 export {
     createCryptoCards,
     supportedCryptos,
-    validateCryptoCards
+    validateCryptoCards,
+    updateProfitLossIndicator
 };

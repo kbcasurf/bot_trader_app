@@ -3,11 +3,47 @@
     padding: 0;
     box-sizing: border-box;
     font-family: 'Arial', sans-serif;
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+:root {
+    /* Light theme variables */
+    --bg-color: #f5f8fa;
+    --card-bg: #ffffff;
+    --text-color: #333333;
+    --header-color: #2c3e50;
+    --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    --border-color: #ecf0f1;
+    --button-bg: #ecf0f1;
+    --button-active: #3498db;
+    --button-text: #333333;
+    --button-active-text: #ffffff;
+    --buy-button: #2ecc71;
+    --sell-button: #e74c3c;
+    --disabled-opacity: 0.5;
+    --grey-text: #7f8c8d;
+}
+
+.dark-mode {
+    --bg-color: #1a1c20;
+    --card-bg: #2c3e50;
+    --text-color: #ecf0f1;
+    --header-color: #3498db;
+    --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    --border-color: #34495e;
+    --button-bg: #34495e;
+    --button-active: #3498db;
+    --button-text: #ecf0f1;
+    --button-active-text: #ffffff;
+    --buy-button: #27ae60;
+    --sell-button: #c0392b;
+    --disabled-opacity: 0.3;
+    --grey-text: #95a5a6;
 }
 
 body {
-    background-color: #f5f8fa;
-    color: #333;
+    background-color: var(--bg-color);
+    color: var(--text-color);
     line-height: 1.6;
     padding: 20px;
 }
@@ -15,11 +51,71 @@ body {
 header {
     text-align: center;
     margin-bottom: 40px;
+    position: relative;
 }
 
 header h1 {
-    color: #2c3e50;
+    color: var(--header-color);
     margin-bottom: 10px;
+}
+
+/* Theme Toggle Switch */
+.theme-switch-container {
+    position: absolute;
+    right: 20px;
+    top: 10px;
+    display: flex;
+    align-items: center;
+}
+
+.theme-switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 30px;
+    margin-left: 10px;
+}
+
+.theme-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .4s;
+    border-radius: 30px;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 22px;
+    width: 22px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+}
+
+input:checked + .slider {
+    background-color: #3498db;
+}
+
+input:checked + .slider:before {
+    transform: translateX(30px);
+}
+
+.theme-icon {
+    font-size: 20px;
 }
 
 .status-section {
@@ -29,16 +125,16 @@ header h1 {
 }
 
 .status-card {
-    background-color: white;
+    background-color: var(--card-bg);
     border-radius: 10px;
     padding: 20px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow);
     width: 48%;
 }
 
 .status-card h3 {
     margin-bottom: 15px;
-    color: #2c3e50;
+    color: var(--header-color);
 }
 
 .status-indicator {
@@ -51,7 +147,7 @@ header h1 {
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background-color: #7f8c8d;
+    background-color: var(--grey-text);
     margin-right: 10px;
 }
 
@@ -66,15 +162,15 @@ header h1 {
 /* Trading Status Styles */
 .trading-status {
     margin-bottom: 20px;
-    background-color: white;
+    background-color: var(--card-bg);
     border-radius: 10px;
     padding: 15px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow);
 }
 
 .trading-status h3 {
     margin-bottom: 15px;
-    color: #2c3e50;
+    color: var(--header-color);
 }
 
 .crypto-grid {
@@ -85,10 +181,10 @@ header h1 {
 }
 
 .crypto-card {
-    background-color: white;
+    background-color: var(--card-bg);
     border-radius: 10px;
     padding: 20px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow);
 }
 
 .crypto-header {
@@ -98,8 +194,20 @@ header h1 {
     margin-bottom: 15px;
 }
 
+/* Add icon to crypto header */
+.crypto-header-left {
+    display: flex;
+    align-items: center;
+}
+
+.crypto-icon {
+    width: 32px;
+    height: 32px;
+    margin-right: 10px;
+}
+
 .crypto-header h3 {
-    color: #2c3e50;
+    color: var(--header-color);
 }
 
 .investment-slider {
@@ -112,7 +220,8 @@ header h1 {
 }
 
 .preset-btn {
-    background-color: #ecf0f1;
+    background-color: var(--button-bg);
+    color: var(--button-text);
     border: none;
     padding: 5px 10px;
     margin-right: 10px;
@@ -121,8 +230,8 @@ header h1 {
 }
 
 .preset-btn.active {
-    background-color: #3498db;
-    color: white;
+    background-color: var(--button-active);
+    color: var(--button-active-text);
 }
 
 .action-btn {
@@ -137,17 +246,17 @@ header h1 {
 
 /* Disabled button styles */
 .action-btn.disabled {
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
 }
 
 .first-purchase {
-    background-color: #2ecc71;
+    background-color: var(--buy-button);
     color: white;
 }
 
 .sell-all {
-    background-color: #e74c3c;
+    background-color: var(--sell-button);
     color: white;
 }
 
@@ -155,21 +264,52 @@ header h1 {
     margin-bottom: 15px;
 }
 
-.profit-loss-bar {
-    height: 10px;
-    background-color: #ecf0f1;
-    border-radius: 5px;
-    overflow: hidden;
-    margin-bottom: 5px;
+.profit-loss-container {
+    position: relative;
+    margin-bottom: 20px;
 }
 
-.bar-fill {
-    height: 100%;
+.profit-loss-bar {
+    height: 10px;
     background: linear-gradient(to right, #e74c3c, #f39c12, #f1c40f, #2ecc71);
+    border-radius: 5px;
+    overflow: hidden;
+    margin-bottom: 10px;
+    position: relative;
+}
+
+.profit-loss-indicator {
+    position: absolute;
+    top: 12px;
+    left: 50%; /* Start at the middle (0%) */
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 8px solid var(--text-color);
+    transform: translateX(-50%);
+}
+
+.profit-loss-scale {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--grey-text);
+    margin-top: 5px;
 }
 
 .profit-loss-text {
     margin-bottom: 15px;
+    text-align: center;
+    font-weight: bold;
+}
+
+.profit {
+    color: #2ecc71;
+}
+
+.loss {
+    color: #e74c3c;
 }
 
 .transaction-history {
@@ -178,50 +318,81 @@ header h1 {
 
 .transaction-history h4 {
     margin-bottom: 10px;
+    color: var(--header-color);
 }
 
 .transaction-history ul {
     list-style-type: none;
     max-height: 150px;
     overflow-y: auto;
-    border: 1px solid #ecf0f1;
+    border: 1px solid var(--border-color);
     border-radius: 5px;
     padding: 10px;
+    font-size: 12px; /* Smaller text for transaction history */
 }
 
 .transaction-history li {
-    padding: 5px 0;
-    border-bottom: 1px solid #ecf0f1;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-color);
 }
 
 .transaction-history li:last-child {
     border-bottom: none;
 }
 
+.transaction-history li.buy {
+    color: var(--buy-button);
+}
+
+.transaction-history li.sell {
+    color: var(--sell-button);
+}
+
+.transaction-history li.no-transactions {
+    color: var(--grey-text);
+    font-style: italic;
+}
+
 .test-actions {
-    background-color: white;
+    background-color: var(--card-bg);
     border-radius: 10px;
     padding: 20px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow);
     margin-top: 20px;
 }
 
 .test-actions h3 {
     margin-bottom: 15px;
-    color: #2c3e50;
+    color: var(--header-color);
 }
 
 .test-actions button {
     padding: 10px 15px;
     margin-right: 10px;
-    background-color: #3498db;
+    background-color: var(--button-active);
     color: white;
     border: none;
     border-radius: 5px;
     cursor: pointer;
 }
 
-.no-transactions {
-    color: #7f8c8d;
-    font-style: italic;
+@media (max-width: 768px) {
+    .crypto-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .status-section {
+        flex-direction: column;
+    }
+    
+    .status-card {
+        width: 100%;
+        margin-bottom: 15px;
+    }
+    
+    .theme-switch-container {
+        position: static;
+        margin-top: 10px;
+        justify-content: center;
+    }
 }

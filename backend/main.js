@@ -14,11 +14,6 @@ dotenv.config({ path: '/app/.env' });
 const app = express();
 const server = http.createServer(app);
 
-/* 
-// Detailed logging mode - turn on for debugging
-const DETAILED_LOGGING = true;
- */
-
 // Circuit breaker settings to prevent excessive trading during errors
 const CIRCUIT_BREAKER = {
     maxErrorCount: 3,         // Max consecutive errors before breaking the circuit
@@ -103,14 +98,6 @@ let systemStatus = {
 // WebSocket connection status
 let websocketConnected = false;
 
-
-/* 
-// Helper function for detailed logging
-function detailedLog(...args) {
-    if (DETAILED_LOGGING) {
-        console.log('[DETAILED]', ...args);
-    }
-} */
 
 
 
@@ -339,6 +326,7 @@ io.on('connection', (socket) => {
         }
     });
 
+
     // Handle client disconnection
     socket.on('disconnect', (reason) => {
         console.log(`Client ${socket.id} disconnected. Reason: ${reason}`);
@@ -356,28 +344,6 @@ io.on('connection', (socket) => {
         }
     });
     
-
-
-/* 
-    // Handle manual price updates
-    socket.on('manual-price-update', (data) => {
-        console.log('Manual price update received:', data);
-        
-        if (!data || !data.symbol || !data.price) {
-            console.error('Invalid manual price update data:', data);
-            return;
-        }
-        
-        // Broadcast the manual price update to all clients
-        io.emit('price-update', {
-            symbol: data.symbol,
-            price: data.price,
-            source: 'manual'
-        });
-        
-        console.log(`Manual price update for ${data.symbol} to ${data.price} broadcast to all clients`);
-    });
-     */
 
 
 
@@ -415,73 +381,6 @@ io.on('connection', (socket) => {
 
 
 
-/* 
-    // Add a new socket.io event handler for manually renewing WebSocket connection
-    socket.on('renew-websocket', () => {
-        try {
-            // List of symbols to track (should match what you use in initializeWebSockets)
-            const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
-            
-            console.log('Manual WebSocket renewal requested');
-            const result = binanceAPI.renewWebSocketConnection(symbols, io);
-            
-            socket.emit('renew-websocket-result', {
-                success: result,
-                message: result ? 'WebSocket renewal initiated' : 'Failed to renew WebSocket connection'
-            });
-        } catch (error) {
-            console.error('Error renewing WebSocket connection:', error);
-            socket.emit('renew-websocket-result', {
-                success: false,
-                error: error.message
-            });
-        }
-    });
-
- */
-
-
-/* 
-    // Handle manual Binance API test
-    socket.on('manual-binance-test', async (data) => {
-        try {
-            console.log('Received manual-binance-test request with data:', data);
-            
-            if (!data || !data.symbols || !Array.isArray(data.symbols)) {
-                socket.emit('manual-test-result', {
-                    success: false,
-                    error: 'Invalid request: missing symbols array'
-                });
-                return;
-            }
-            
-            // Use the manual connect function
-            const result = await binanceAPI.manualConnectAndGetPrices(data.symbols);
-            
-            // Send back the result
-            socket.emit('binance-test-result', result);
-            
-            // If successful, also broadcast the prices as price updates
-            if (result.success && result.prices) {
-                Object.entries(result.prices).forEach(([symbol, price]) => {
-                    io.emit('price-update', {
-                        symbol: symbol,
-                        price: price,
-                        source: 'manual-test'
-                    });
-                });
-            }
-        } catch (err) {
-            console.error('Error in manual Binance test:', err);
-            socket.emit('binance-test-result', {
-                success: false,
-                error: err.message
-            });
-        }
-    });
-     */
-
-
 
     // Handle get account info request
     socket.on('get-account-info', async () => {
@@ -495,7 +394,6 @@ io.on('connection', (socket) => {
         }
     });
     
-
 
 
 
@@ -738,14 +636,7 @@ io.on('connection', (socket) => {
                 binanceAPI.initializeWebSockets(io);
             }
 
-            
-           /*  
-            // Get prices via API as a fallback
-            const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
-            const pricesResult = await binanceAPI.manualConnectAndGetPrices(symbols);
- */
-
-            
+       
             socket.emit('binance-test-result', {
                 success: true,
                 message: 'WebSocket test initiated',
@@ -915,7 +806,84 @@ io.on('connection', (socket) => {
         }
     });
 
+
     
+// Add a route to get transaction history and send to dashboard/database
+socket.on('get-transactions', async (data) => {
+    try {
+        console.log('Received get-transactions request:', data);
+        
+        if (!data || !data.symbol) {
+            socket.emit('transaction-update', { 
+                symbol: 'unknown',
+                transactions: [],
+                success: false,
+                error: 'Missing symbol in request'
+            });
+            return;
+        }
+        
+        // Extract base symbol without USDT
+        const baseSymbol = data.symbol.replace('USDT', '');
+        
+        // Get transactions for the symbol from database
+        let conn;
+        try {
+            conn = await pool.getConnection();
+            const rows = await conn.query(
+                'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC',
+                [data.symbol]
+            );
+            
+            console.log(`Found ${rows.length} transactions for ${data.symbol}`);
+            
+            // Send transaction history to client
+            socket.emit('transaction-update', {
+                symbol: baseSymbol,
+                transactions: rows,
+                success: true
+            });
+            
+            // Also recalculate and send holdings
+            const holdings = await getHoldings(data.symbol);
+            
+            // Get current price to calculate profit/loss
+            const priceData = await binanceAPI.getTickerPrice(data.symbol);
+            const currentPrice = parseFloat(priceData.price);
+            
+            // Calculate profit/loss percentage if we have holdings and price
+            let profitLossPercent = 0;
+            if (holdings.quantity > 0 && holdings.avg_price > 0 && currentPrice > 0) {
+                profitLossPercent = ((currentPrice - holdings.avg_price) / holdings.avg_price) * 100;
+            }
+            
+            socket.emit('holdings-update', {
+                symbol: baseSymbol,
+                amount: holdings.quantity,
+                avgPrice: holdings.avg_price,
+                currentPrice: currentPrice,
+                profitLossPercent: profitLossPercent
+            });
+            
+        } catch (error) {
+            console.error('Error querying transactions:', error);
+            socket.emit('transaction-update', { 
+                symbol: baseSymbol,
+                transactions: [],
+                success: false,
+                error: 'Database error'
+            });
+        } finally {
+            if (conn) conn.release();
+        }
+    } catch (error) {
+        console.error('Error processing get-transactions request:', error);
+        socket.emit('transaction-update', { 
+            success: false,
+            error: 'Server error'
+        });
+    }
+});
 
 
 // Handle sell all

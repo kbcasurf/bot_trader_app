@@ -55,13 +55,40 @@ let priceCheckInterval;
 let connectionCheckInterval;
 
 // Dom Ready Utilities
-function whenDomReady(callback) {
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', callback);
-    } else {
-        callback();
-    }
+whenDomReady(() => {
+    // Wait a short time for everything to render completely
+    setTimeout(() => {
+        initializeApp();
+        
+        // Request initial system status
+        socket.emit('get-system-status');
+        
+        console.log('Application initialized and ready');
+        
+        // Request initial data for crypto cards after a delay
+        setTimeout(requestInitialData, 2000);
+    }, 500);
+});
+
+
+// Request initial data for all crypto cards
+function requestInitialData() {
+    console.log('Requesting initial data for all crypto cards...');
+    
+    // Define the supported crypto symbols
+    const cryptoSymbols = ['BTC', 'SOL', 'XRP', 'PENDLE', 'DOGE', 'NEAR'];
+    
+    // Request data for each symbol
+    cryptoSymbols.forEach(symbol => {
+        // Request transaction history
+        socket.emit('get-transactions', { symbol: `${symbol}USDT` });
+        console.log(`Requested transaction history for ${symbol}`);
+    });
+    
+    // Also request account information
+    socket.emit('get-account-info');
 }
+
 
 // Initialize all components
 function initializeApp() {
@@ -636,6 +663,7 @@ function validateDomElements() {
     }
 }
 
+
 // Make socket.on('connect') focus on re-requesting status
 socket.on('connect', () => {
     console.log('Socket connected successfully with ID:', socket.id);
@@ -646,12 +674,11 @@ socket.on('connect', () => {
     // Request system status
     socket.emit('get-system-status');
     
-    // Fetch account holdings after connection
-    setTimeout(() => {
-        console.log('Fetching account holdings...');
-        socket.emit('get-account-info');
-    }, 1500);
+    // Request initial data for all crypto cards with a delay
+    // to ensure system is ready
+    setTimeout(requestInitialData, 1500);
 });
+
 
 socket.on('connect_error', (error) => {
     console.error('Socket.IO connection error:', error.message);

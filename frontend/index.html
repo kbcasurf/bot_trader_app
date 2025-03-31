@@ -11,13 +11,26 @@
     <header>
         <h1>Cryptocurrency Trading Bot</h1>
         <p>Automatically trade crypto with predefined strategies</p>
+        
+        <!-- Theme Switch -->
+        <div class="theme-switch-container">
+            <span class="theme-icon">☀️</span>
+            <label class="theme-switch">
+                <input type="checkbox" id="theme-toggle">
+                <span class="slider"></span>
+            </label>
+            <span class="theme-icon">🌙</span>
+        </div>
     </header>
 
     <div class="crypto-grid">
         <!-- This is just a sample card as a placeholder -->
         <div class="crypto-card" id="btc-card">
             <div class="crypto-header">
-                <h3>BTC/USDT</h3>
+                <div class="crypto-header-left">
+                    <img src="images/btc.svg" alt="Bitcoin" class="crypto-icon">
+                    <h3>BTC/USDT</h3>
+                </div>
                 <span class="current-price" id="btc-price">Price: $0.00</span>
             </div>
             <div class="investment-slider">
@@ -30,14 +43,20 @@
                 </div>
                 <input type="hidden" id="btc-investment" value="100">
             </div>
-            <button class="action-btn first-purchase" id="btc-first-purchase">First Purchase</button>
+            <button class="action-btn first-purchase" id="btc-first-purchase">Buy Crypto</button>
             <div class="holdings">
                 <p>Current holdings: <span id="btc-holdings">0.00 BTC</span></p>
             </div>
-            <div class="profit-loss-bar">
-                <div class="bar-fill" id="btc-profit-bar" style="width: 50%;"></div>
+            <div class="profit-loss-container">
+                <div class="profit-loss-bar"></div>
+                <div class="profit-loss-indicator" id="btc-profit-indicator"></div>
+                <div class="profit-loss-scale">
+                    <span>-500%</span>
+                    <span>0%</span>
+                    <span>+500%</span>
+                </div>
+                <p class="profit-loss-text">Profit/Loss: <span id="btc-profit-text">0.00%</span></p>
             </div>
-            <p class="profit-loss-text">Profit/Loss: <span id="btc-profit-text">0.00%</span></p>
             <div class="transaction-history">
                 <h4>Transaction History</h4>
                 <ul id="btc-history">
@@ -49,8 +68,8 @@
     </div>
 
 
-      <!-- Trading Status Section -->
-      <div class="trading-status">
+    <!-- Trading Status Section -->
+    <div class="trading-status">
         <h3>Trading Status</h3>
         <div class="status-indicator">
             <div class="status-dot" id="trading-status-dot"></div>
@@ -86,6 +105,7 @@
 
     <script src="./js/dashboard.js" type="module"></script>
     <script src="./js/cryptoBoard.js" type="module"></script>
+    <script src="./js/themeManager.js" type="module"></script>
     <script src="./main.js" type="module"></script>
 </body>
 </html>
