@@ -158,7 +158,7 @@ async function testConnection() {
 
 
 
-/* // Get current ticker price for a symbol
+// Get current ticker price for a symbol
 async function getTickerPrice(symbol) {
     try {
         const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`, {
@@ -170,7 +170,7 @@ async function getTickerPrice(symbol) {
         console.error(`Failed to get ticker price for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
-} */
+}
 
 // Get ticker price for multiple symbols
 async function getMultipleTickers(symbols = []) {
@@ -290,7 +290,7 @@ function formatQuantity(quantity, symbolInfo) {
     }
 }
 
-/* // Create a market buy order
+// Create a market buy order
 async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
     try {
         let orderQuantity = quantity;
@@ -336,9 +336,9 @@ async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
         console.error(`Failed to create market buy order for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
-} */
+}
 
-/* // Create a market sell order
+// Create a market sell order
 async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
     try {
         let orderQuantity = quantity;
@@ -398,7 +398,7 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
         console.error(`Failed to create market sell order for ${symbol}:`, error.response ? error.response.data : error.message);
         throw error;
     }
-} */
+}
 
 // Start price polling
 function startPolling(symbols, io) {
@@ -999,11 +999,11 @@ module.exports = {
     getWebSocketStatus,
     testConnection,
     getAccountInfo,
-//    getTickerPrice,
+    getTickerPrice,
     getMultipleTickers,
     calculateQuantityFromUsdt,
-//    createMarketBuyOrder,
-//    createMarketSellOrder,
+    createMarketBuyOrder,
+    createMarketSellOrder,
 //    subscribeToTickerStream,
 //    unsubscribeFromTickerStream,
     executeBuyOrder,
