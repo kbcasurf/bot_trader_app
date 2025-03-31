@@ -1,9 +1,6 @@
 // Import socket.io client
 import { io } from 'socket.io-client';
 
-// Flag to track if prices are flowing
-let pricesAreFlowing = false;
-
 // Create and configure socket connection
 const socket = io({
     transports: ['websocket', 'polling'],
@@ -13,6 +10,15 @@ const socket = io({
     autoConnect: true,
     forceNew: true
 });
+
+// Add missing whenDomReady function
+function whenDomReady(callback) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', callback);
+  } else {
+    callback();
+  }
+}
 
 // Export the socket for other modules to use
 export { socket };
@@ -54,25 +60,30 @@ let tradingStatusText;
 let priceCheckInterval;
 let connectionCheckInterval;
 
+// Define supported crypto configurations
+const supportedCryptos = [
+    { symbol: 'BTC', fullName: 'Bitcoin', icon: './images/btc.svg' },
+    { symbol: 'SOL', fullName: 'Solana', icon: './images/sol.svg' },
+    { symbol: 'XRP', fullName: 'Ripple', icon: './images/xrp.svg' },
+    { symbol: 'PENDLE', fullName: 'Pendle', icon: './images/pendle.svg' },
+    { symbol: 'DOGE', fullName: 'Dogecoin', icon: './images/doge.svg' },
+    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: './images/near.svg' }
+];
 
 // Request initial data for all crypto cards
 function requestInitialData() {
     console.log('Requesting initial data for all crypto cards...');
     
-    // Define the supported crypto symbols
-    const cryptoSymbols = ['BTC', 'SOL', 'XRP', 'PENDLE', 'DOGE', 'NEAR'];
-    
     // Request data for each symbol
-    cryptoSymbols.forEach(symbol => {
+    supportedCryptos.forEach(crypto => {
         // Request transaction history
-        socket.emit('get-transactions', { symbol: `${symbol}USDT` });
-        console.log(`Requested transaction history for ${symbol}`);
+        socket.emit('get-transactions', { symbol: `${crypto.symbol}USDT` });
+        console.log(`Requested transaction history for ${crypto.symbol}`);
     });
     
     // Also request account information
     socket.emit('get-account-info');
 }
-
 
 // Initialize all components
 function initializeApp() {
@@ -95,9 +106,6 @@ function initializeApp() {
     
     // Attach event listeners
     attachEventListeners();
-    
-    // Wait a bit for components, then validate DOM
-    setTimeout(validateDomElements, 300);
     
     // Initialize trading status as disabled
     updateTradingStatus(false, "Initializing system...");
@@ -140,16 +148,6 @@ function setupSystemMonitoring() {
             // Re-evaluate if trading should be enabled/disabled
             reevaluateTradingStatus();
         }
-        
-        // Periodically log detailed price update status (every ~30 seconds)
-        if (now % 30000 < 5000) {
-            const priceStatus = Object.entries(systemStatus.lastPriceUpdates).map(([symbol, timestamp]) => {
-                const secondsAgo = timestamp > 0 ? Math.round((now - timestamp) / 1000) : 'never';
-                return `${symbol.toUpperCase()}: ${secondsAgo === 'never' ? 'No updates' : `${secondsAgo}s ago`}`;
-            }).join(', ');
-            
-            console.log(`Price update status: ${priceStatus}`);
-        }
     }, 5000);
     
     // Check overall connection health every 10 seconds
@@ -186,31 +184,22 @@ function setupSystemMonitoring() {
 function createCryptoCards() {
     console.log('Creating crypto cards...');
     
-    const supportedCryptos = [
-        { symbol: 'BTC', fullName: 'Bitcoin' },
-        { symbol: 'SOL', fullName: 'Solana' },
-        { symbol: 'XRP', fullName: 'Ripple' },
-        { symbol: 'PENDLE', fullName: 'Pendle' },
-        { symbol: 'DOGE', fullName: 'Dogecoin' },
-        { symbol: 'NEAR', fullName: 'NEAR Protocol' }
-    ];
-    
     const gridElement = document.querySelector('.crypto-grid');
     if (!gridElement) {
         console.error('Crypto grid element not found!');
         return;
     }
     
+    // Clear existing cards except for the BTC one which is in the HTML
+    const existingCards = gridElement.querySelectorAll('.crypto-card:not(#btc-card)');
+    existingCards.forEach(card => card.remove());
+    
     // Find the BTC card to use as a template
     const btcCard = document.getElementById('btc-card');
     if (!btcCard) {
-        console.error('BTC card template not found!');
+        console.error('BTC card template not found in the DOM!');
         return;
     }
-    
-    // Keep BTC card and remove any other existing cards
-    const existingCards = gridElement.querySelectorAll('.crypto-card:not(#btc-card)');
-    existingCards.forEach(card => card.remove());
     
     // Create cards for each supported crypto except BTC (already in HTML)
     supportedCryptos.slice(1).forEach(crypto => {
@@ -221,12 +210,22 @@ function createCryptoCards() {
         newCard.id = `${symbol}-card`;
         
         // Update card header
-        const header = newCard.querySelector('.crypto-header h3');
-        if (header) {
-            header.textContent = `${crypto.symbol}/USDT`;
+        const headerContainer = newCard.querySelector('.crypto-header-left');
+        if (headerContainer) {
+            const headerText = headerContainer.querySelector('h3');
+            if (headerText) {
+                headerText.textContent = `${crypto.symbol}/USDT`;
+            }
+            
+            // Update icon
+            const iconImage = headerContainer.querySelector('.crypto-icon');
+            if (iconImage) {
+                iconImage.src = crypto.icon;
+                iconImage.alt = crypto.fullName;
+            }
         }
         
-        // Find and update all elements with IDs
+        // Find ALL elements with IDs and update them
         const elementsWithIds = newCard.querySelectorAll('[id]');
         elementsWithIds.forEach(element => {
             // Replace 'btc' with the new symbol in all IDs
@@ -248,40 +247,6 @@ function createCryptoCards() {
             holdings.textContent = `0.00 ${crypto.symbol}`;
         }
         
-        // Update profit bar and text IDs
-        const profitBar = newCard.querySelector('.bar-fill');
-        if (profitBar) {
-            profitBar.id = `${symbol}-profit-bar`;
-        }
-        
-        const profitText = newCard.querySelector('.profit-loss-text span');
-        if (profitText) {
-            profitText.id = `${symbol}-profit-text`;
-        }
-        
-        // Update transaction history ID
-        const history = newCard.querySelector('.transaction-history ul');
-        if (history) {
-            history.id = `${symbol}-history`;
-        }
-        
-        // Update button IDs
-        const firstPurchaseBtn = newCard.querySelector('.first-purchase');
-        if (firstPurchaseBtn) {
-            firstPurchaseBtn.id = `${symbol}-first-purchase`;
-        }
-        
-        const sellAllBtn = newCard.querySelector('.sell-all');
-        if (sellAllBtn) {
-            sellAllBtn.id = `${symbol}-sell-all`;
-        }
-        
-        // Set the investment value
-        const investmentInput = newCard.querySelector('input[type="hidden"]');
-        if (investmentInput) {
-            investmentInput.id = `${symbol}-investment`;
-        }
-        
         // Add the new card to the grid
         gridElement.appendChild(newCard);
     });
@@ -299,7 +264,10 @@ function attachEventListeners() {
         button.addEventListener('click', function() {
             // Get parent card
             const card = this.closest('.crypto-card');
+            if (!card) return;
+            
             const investmentInput = card.querySelector('input[type="hidden"]');
+            if (!investmentInput) return;
             
             // Update active button
             card.querySelectorAll('.preset-btn').forEach(btn => {
@@ -323,8 +291,13 @@ function attachEventListeners() {
             }
             
             const card = this.closest('.crypto-card');
+            if (!card) return;
+            
             const symbol = card.id.replace('-card', '').toUpperCase() + 'USDT';
-            const investment = card.querySelector('input[type="hidden"]').value;
+            const investmentInput = card.querySelector('input[type="hidden"]');
+            if (!investmentInput) return;
+            
+            const investment = investmentInput.value;
             
             console.log(`Initiating first purchase for ${symbol} with investment ${investment}`);
             
@@ -347,8 +320,11 @@ function attachEventListeners() {
             }
             
             const card = this.closest('.crypto-card');
+            if (!card) return;
+            
             const symbol = card.id.replace('-card', '').toUpperCase() + 'USDT';
             const holdingsElement = card.querySelector('.holdings span');
+            if (!holdingsElement) return;
             
             // Check if there are any holdings to sell
             const holdingsText = holdingsElement.textContent;
@@ -409,18 +385,30 @@ function isTradingEnabled() {
     );
 }
 
+// Function to update WebSocket status indicator
+function updateWebSocketStatus(isConnected) {
+    // Find WebSocket status elements in your UI
+    const wsStatusElement = document.querySelector('#websocket-monitor .status-value#ws-connection-status');
+    
+    if (wsStatusElement) {
+        wsStatusElement.textContent = isConnected ? 'Connected' : 'Disconnected (No price updates)';
+        wsStatusElement.style.color = isConnected ? '#28a745' : '#dc3545';
+    }
+}
 
-
-
-/* 
-// Re-evaluate trading status based on all system statuses
+// Update reevaluateTradingStatus to prioritize WebSocket/price status
 function reevaluateTradingStatus() {
+    // Always check WebSocket/price updates first
+    if (!systemStatus.websocket) {
+        updateTradingStatus(false, "Trading: Paused (Waiting for price updates)");
+        return;
+    }
+    
+    // If prices are flowing, check other service statuses
     const allServicesConnected = (
-        systemStatus.backend &&
         systemStatus.database &&
         systemStatus.binance &&
-        systemStatus.telegram &&
-        systemStatus.websocket
+        systemStatus.telegram
     );
     
     // Create detailed status message
@@ -430,11 +418,9 @@ function reevaluateTradingStatus() {
         // Determine which services are disconnected
         const disconnectedServices = [];
         
-        if (!systemStatus.backend) disconnectedServices.push("Backend");
         if (!systemStatus.database) disconnectedServices.push("Database");
         if (!systemStatus.binance) disconnectedServices.push("Binance API");
         if (!systemStatus.telegram) disconnectedServices.push("Telegram API");
-        if (!systemStatus.websocket) disconnectedServices.push("WebSocket");
         
         // Create message based on disconnected services
         statusMessage += `Paused (Waiting for ${disconnectedServices.join(", ")})`;
@@ -447,10 +433,6 @@ function reevaluateTradingStatus() {
         updateTradingStatus(true, statusMessage);
     }
 }
- */
-
-
-
 
 // Update connection status indicators
 function updateConnectionStatus(isConnected) {
@@ -581,8 +563,13 @@ function updateTransactionHistory(symbol, transactions) {
     
     console.log(`Updating transaction history for ${symbol} with ${transactions.length} transactions`);
     
+    // Sort transactions by timestamp (newest first)
+    const sortedTransactions = [...transactions].sort((a, b) => 
+        new Date(b.timestamp) - new Date(a.timestamp)
+    );
+    
     // Add transactions to the history list
-    transactions.forEach(transaction => {
+    sortedTransactions.forEach(transaction => {
         const listItem = document.createElement('li');
         listItem.classList.add(transaction.type.toLowerCase());
         
@@ -598,55 +585,113 @@ function updateTransactionHistory(symbol, transactions) {
         
         historyElement.appendChild(listItem);
     });
+    
+    // Calculate and update profit/loss
+    calculateProfitLoss(symbol, transactions);
 }
 
-// Function to validate that all required price elements exist
-function validateDomElements() {
-    console.log('Validating DOM elements...');
+// Calculate profit and loss based on transaction history
+function calculateProfitLoss(symbol, transactions) {
+    if (!transactions || transactions.length === 0) return;
     
-    const requiredSymbols = ['btc', 'sol', 'xrp', 'doge', 'near', 'pendle'];
-    const missingElements = [];
+    // Clone the transactions array to avoid modifying the original
+    const txs = [...transactions];
     
-    requiredSymbols.forEach(symbol => {
-        const element = document.getElementById(`${symbol}-price`);
-        if (!element) {
-            console.error(`Missing required price element: ${symbol}-price`);
-            missingElements.push(`${symbol}-price`);
-        } else {
-            console.log(`Found price element: ${symbol}-price`);
+    // Sort transactions by timestamp (oldest first for calculation)
+    txs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    
+    let totalBuyAmount = 0;      // Total USDT invested
+    let totalBuyQuantity = 0;    // Total quantity purchased
+    let totalSellAmount = 0;     // Total USDT received from sales
+    let totalSellQuantity = 0;   // Total quantity sold
+    let remainingQuantity = 0;   // Current holdings
+    
+    // Calculate weighted average purchase price
+    txs.forEach(tx => {
+        const quantity = parseFloat(tx.quantity);
+        const price = parseFloat(tx.price);
+        const amount = quantity * price;
+        
+        if (tx.type === 'BUY') {
+            totalBuyAmount += amount;
+            totalBuyQuantity += quantity;
+            remainingQuantity += quantity;
+        } else if (tx.type === 'SELL') {
+            totalSellAmount += amount;
+            totalSellQuantity += quantity;
+            remainingQuantity -= quantity;
         }
     });
     
-    if (missingElements.length > 0) {
-        console.error('Some price elements are missing!', missingElements);
-        console.warn('Will attempt to fix missing elements by recreating crypto cards...');
+    // Get current price from UI
+    const priceElement = document.getElementById(`${symbol.toLowerCase()}-price`);
+    const currentPriceText = priceElement ? priceElement.textContent : 'Price: $0.00';
+    const currentPrice = parseFloat(currentPriceText.replace('Price: $', '')) || 0;
+    
+    // Calculate average buy price (weighted average)
+    const avgBuyPrice = totalBuyQuantity > 0 ? totalBuyAmount / totalBuyQuantity : 0;
+    
+    // Calculate current portfolio value
+    const currentValue = remainingQuantity * currentPrice;
+    
+    // Calculate cost basis (adjusted for sells)
+    const costBasis = (totalBuyQuantity > 0) 
+        ? (totalBuyAmount * (remainingQuantity / totalBuyQuantity)) 
+        : 0;
+    
+    // Calculate unrealized profit/loss
+    const unrealizedPL = costBasis > 0 ? currentValue - costBasis : 0;
+    
+    // Calculate profit/loss percentage relative to total investment
+    let plPercentage = 0;
+    if (costBasis > 0) {
+        plPercentage = (unrealizedPL / costBasis) * 100;
+    }
+    
+    // Update UI with profit/loss information
+    const textElement = document.getElementById(`${symbol.toLowerCase()}-profit-text`);
+    if (textElement) {
+        textElement.textContent = `${plPercentage.toFixed(2)}%`;
         
-        // Try to fix by recreating crypto cards
-        createCryptoCards();
-        attachEventListeners();
-        
-        // Check again
-        setTimeout(() => {
-            const stillMissing = [];
-            requiredSymbols.forEach(symbol => {
-                const element = document.getElementById(`${symbol}-price`);
-                if (!element) {
-                    stillMissing.push(`${symbol}-price`);
-                }
-            });
-            
-            if (stillMissing.length > 0) {
-                console.error('Still missing elements after fix attempt:', stillMissing);
-                alert(`Warning: Some price elements are missing: ${stillMissing.join(', ')}. Please refresh the page.`);
-            } else {
-                console.log('All missing elements have been fixed!');
-            }
-        }, 500);
+        // Add appropriate class based on profit/loss
+        if (plPercentage > 0) {
+            textElement.classList.add('profit');
+            textElement.classList.remove('loss');
+        } else if (plPercentage < 0) {
+            textElement.classList.add('loss');
+            textElement.classList.remove('profit');
+        } else {
+            textElement.classList.remove('profit', 'loss');
+        }
+    }
+    
+    // Update profit/loss indicator
+    updateProfitLossIndicator(symbol.toLowerCase(), plPercentage);
+}
+
+// Function to update profit/loss indicator
+function updateProfitLossIndicator(symbol, profitLossPercent) {
+    const indicator = document.getElementById(`${symbol}-profit-indicator`);
+    if (!indicator) return;
+    
+    // Calculate position (0% is center at 50%, range is -500% to +500%)
+    // Convert from -500% to +500% to 0% to 100%
+    const position = Math.min(Math.max((profitLossPercent + 500) / 1000 * 100, 0), 100);
+    
+    // Update indicator position
+    indicator.style.left = `${position}%`;
+    
+    // Update color based on profit/loss
+    if (profitLossPercent > 0) {
+        indicator.style.borderBottomColor = '#2ecc71'; // Green for profit
+    } else if (profitLossPercent < 0) {
+        indicator.style.borderBottomColor = '#e74c3c'; // Red for loss
     } else {
-        console.log('All required DOM elements found.');
+        indicator.style.borderBottomColor = '#f1c40f'; // Yellow for neutral
     }
 }
 
+// SOCKET EVENT HANDLERS
 
 // Make socket.on('connect') focus on re-requesting status
 socket.on('connect', () => {
@@ -662,7 +707,6 @@ socket.on('connect', () => {
     // to ensure system is ready
     setTimeout(requestInitialData, 1500);
 });
-
 
 socket.on('connect_error', (error) => {
     console.error('Socket.IO connection error:', error.message);
@@ -780,7 +824,7 @@ socket.on('price-update', (data) => {
         console.warn(`Could not find price element for symbol ${baseSymbol}`);
     }
     
-        // CRITICAL: If we're receiving price updates, the backend must be connected
+    // CRITICAL: If we're receiving price updates, the backend must be connected
     // Use the existing updateConnectionStatus function to update backend status
     updateConnectionStatus(true);
     
@@ -792,66 +836,14 @@ socket.on('price-update', (data) => {
     reevaluateTradingStatus();
 });
 
-
-// Function to update WebSocket status indicator
-function updateWebSocketStatus(isConnected) {
-    // Find WebSocket status elements in your UI
-    const wsStatusElement = document.querySelector('#websocket-monitor .status-value#ws-connection-status');
-    
-    if (wsStatusElement) {
-        wsStatusElement.textContent = isConnected ? 'Connected' : 'Disconnected (No price updates)';
-        wsStatusElement.style.color = isConnected ? '#28a745' : '#dc3545';
-    }
-}
-
-// Update reevaluateTradingStatus to prioritize WebSocket/price status
-function reevaluateTradingStatus() {
-    // Always check WebSocket/price updates first
-    if (!systemStatus.websocket) {
-        updateTradingStatus(false, "Trading: Paused (Waiting for price updates)");
-        return;
-    }
-    
-    // If prices are flowing, check other service statuses
-    const allServicesConnected = (
-        systemStatus.database &&
-        systemStatus.binance &&
-        systemStatus.telegram
-    );
-    
-    // Create detailed status message
-    let statusMessage = "Trading: ";
-    
-    if (!allServicesConnected) {
-        // Determine which services are disconnected
-        const disconnectedServices = [];
-        
-        if (!systemStatus.database) disconnectedServices.push("Database");
-        if (!systemStatus.binance) disconnectedServices.push("Binance API");
-        if (!systemStatus.telegram) disconnectedServices.push("Telegram API");
-        
-        // Create message based on disconnected services
-        statusMessage += `Paused (Waiting for ${disconnectedServices.join(", ")})`;
-        
-        // Ensure trading is disabled
-        updateTradingStatus(false, statusMessage);
-    } else {
-        // All services are connected, enable trading
-        statusMessage += "Active";
-        updateTradingStatus(true, statusMessage);
-    }
-}
-
-
 // Account info
 socket.on('account-info', (accountInfo) => {
     console.log('Account info received:', accountInfo);
     
     if (accountInfo && accountInfo.balances) {
         // Process each supported cryptocurrency
-        const supportedSymbols = ['BTC', 'SOL', 'XRP', 'DOGE', 'NEAR', 'PENDLE'];
-        
-        supportedSymbols.forEach(symbol => {
+        supportedCryptos.forEach(crypto => {
+            const symbol = crypto.symbol;
             // Find the balance for this cryptocurrency
             const balance = accountInfo.balances.find(b => b.asset === symbol);
             
@@ -870,7 +862,6 @@ socket.on('account-info', (accountInfo) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
-
 // Transaction updates
 socket.on('transaction-update', (data) => {
     const { symbol, transactions } = data;
@@ -880,7 +871,6 @@ socket.on('transaction-update', (data) => {
     // Mark response received
     systemStatus.lastBackendResponse = Date.now();
 });
-
 
 // Holdings updates
 socket.on('holdings-update', (data) => {
@@ -894,15 +884,10 @@ socket.on('holdings-update', (data) => {
         holdingsElement.textContent = `${parseFloat(amount).toFixed(6)} ${symbol}`;
     }
     
-    // Update profit/loss bar and text
-    const barElement = document.getElementById(`${symbol.toLowerCase()}-profit-bar`);
+    // Update profit/loss text
     const textElement = document.getElementById(`${symbol.toLowerCase()}-profit-text`);
     
-    if (barElement && textElement) {
-        // Calculate bar width (50% is neutral, 0% is -10% or worse, 100% is +10% or better)
-        const barWidth = Math.min(Math.max((profitLossPercent + 10) * 5, 0), 100);
-        barElement.style.width = `${barWidth}%`;
-        
+    if (textElement) {
         // Update text with profit/loss percentage
         textElement.textContent = `${profitLossPercent.toFixed(2)}%`;
         
@@ -918,10 +903,12 @@ socket.on('holdings-update', (data) => {
         }
     }
     
+    // Update profit/loss indicator
+    updateProfitLossIndicator(symbol.toLowerCase(), profitLossPercent);
+    
     // Mark response received
     systemStatus.lastBackendResponse = Date.now();
 });
-
 
 // Order results
 socket.on('buy-result', (result) => {
@@ -939,7 +926,6 @@ socket.on('buy-result', (result) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
-
 socket.on('sell-result', (result) => {
     if (result.success) {
         console.log('Sell order successful:', result);
@@ -955,7 +941,6 @@ socket.on('sell-result', (result) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
-
 socket.on('first-purchase-result', (result) => {
     if (!result.success) {
         alert(`First purchase failed: ${result.error}`);
@@ -966,7 +951,6 @@ socket.on('first-purchase-result', (result) => {
     // Mark response received
     systemStatus.lastBackendResponse = Date.now();
 });
-
 
 socket.on('sell-all-result', (result) => {
     if (!result.success) {
@@ -979,13 +963,11 @@ socket.on('sell-all-result', (result) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
-
 // Heartbeat events to keep connection alive
 socket.on('heartbeat', () => {
     // Update last response time
     systemStatus.lastBackendResponse = Date.now();
 });
-
 
 // Any other events from server
 socket.onAny((eventName) => {
@@ -993,8 +975,72 @@ socket.onAny((eventName) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
+// Element verification function
+function verifyElements() {
+    console.log("Verifying DOM elements...");
+    
+    const cryptoSymbols = supportedCryptos.map(crypto => crypto.symbol.toLowerCase());
+    const missingElements = [];
+    
+    cryptoSymbols.forEach(symbol => {
+        // Check critical elements
+        const elements = [
+            `${symbol}-price`,
+            `${symbol}-holdings`,
+            `${symbol}-history`,
+            `${symbol}-profit-text`,
+            `${symbol}-profit-indicator`
+        ];
+        
+        elements.forEach(id => {
+            const element = document.getElementById(id);
+            if (!element) {
+                missingElements.push(id);
+            }
+        });
+    });
+    
+    if (missingElements.length > 0) {
+        console.warn(`Missing ${missingElements.length} elements: ${missingElements.join(', ')}`);
+        console.log("Attempting to recreate crypto cards...");
+        
+        // Try to fix by recreating the crypto cards
+        createCryptoCards();
+        attachEventListeners();
+        
+        // Check again after recreating
+        setTimeout(() => {
+            const stillMissing = [];
+            
+            cryptoSymbols.forEach(symbol => {
+                const elements = [
+                    `${symbol}-price`,
+                    `${symbol}-holdings`,
+                    `${symbol}-history`,
+                    `${symbol}-profit-text`,
+                    `${symbol}-profit-indicator`
+                ];
+                
+                elements.forEach(id => {
+                    const element = document.getElementById(id);
+                    if (!element) {
+                        stillMissing.push(id);
+                    }
+                });
+            });
+            
+            if (stillMissing.length > 0) {
+                console.error(`Still missing elements after fix attempt: ${stillMissing.join(', ')}`);
+            } else {
+                console.log("All elements now present after fix");
+            }
+        }, 500);
+    } else {
+        console.log("All required elements found");
+    }
+}
 
-// Dom Ready Utilities
+// Initialize the application when the DOM is ready
 whenDomReady(() => {
     // Wait a short time for everything to render completely
     setTimeout(() => {
@@ -1007,5 +1053,8 @@ whenDomReady(() => {
         
         // Request initial data for crypto cards after a delay
         setTimeout(requestInitialData, 2000);
+        
+        // Verify elements after initialization
+        setTimeout(verifyElements, 3000);
     }, 500);
 });

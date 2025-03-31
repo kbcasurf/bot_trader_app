@@ -3,6 +3,10 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     const themeToggle = document.getElementById('theme-toggle');
+    if (!themeToggle) {
+        console.error('Theme toggle element not found');
+        return;
+    }
     
     // Check for saved theme preference or respect OS preference
     const savedTheme = localStorage.getItem('theme');

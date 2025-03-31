@@ -1,14 +1,15 @@
 // Get socket instance from main.js
 import { socket } from '../main.js';
+import { updateProfitLossIndicator } from './dashboard.js';
 
 // Crypto configuration for supported trading pairs
 const supportedCryptos = [
     { symbol: 'BTC', fullName: 'Bitcoin', icon: './images/btc.svg' },
     { symbol: 'SOL', fullName: 'Solana', icon: './images/sol.svg' },
     { symbol: 'XRP', fullName: 'Ripple', icon: './images/xrp.svg' },
-    { symbol: 'PENDLE', fullName: 'Pendle', icon: './images/pendle.svg' },
     { symbol: 'DOGE', fullName: 'Dogecoin', icon: './images/doge.svg' },
-    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: './images/near.svg' }
+    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: './images/near.svg' },
+    { symbol: 'PENDLE', fullName: 'Pendle', icon: './images/pendle.svg' }
 ];
 
 // Function to create crypto cards dynamically
@@ -191,28 +192,6 @@ function attachEventListeners() {
     });
 }
 
-// Function to update profit/loss indicator
-function updateProfitLossIndicator(symbol, profitLossPercent) {
-    const indicator = document.getElementById(`${symbol}-profit-indicator`);
-    if (!indicator) return;
-    
-    // Calculate position (0% is center at 50%, range is -500% to +500%)
-    // Convert from -500% to +500% to 0% to 100%
-    const position = Math.min(Math.max((profitLossPercent + 500) / 1000 * 100, 0), 100);
-    
-    // Update indicator position
-    indicator.style.left = `${position}%`;
-    
-    // Update color based on profit/loss
-    if (profitLossPercent > 0) {
-        indicator.style.borderBottomColor = '#2ecc71'; // Green for profit
-    } else if (profitLossPercent < 0) {
-        indicator.style.borderBottomColor = '#e74c3c'; // Red for loss
-    } else {
-        indicator.style.borderBottomColor = '#f1c40f'; // Yellow for neutral
-    }
-}
-
 // Initialize the crypto board when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     // Short delay to ensure all elements are rendered
@@ -271,14 +250,10 @@ socket.on('holdings-update', (data) => {
     updateProfitLossIndicator(symbol.toLowerCase(), profitLossPercent);
 });
 
-// Listen for transaction history updates
-socket.on('transaction-update', (data) => {
-    // Transaction update handling is now in dashboard.js
-});
-
 export {
     createCryptoCards,
     supportedCryptos,
     validateCryptoCards,
-    updateProfitLossIndicator
+    attachEventListeners,
+    requestInitialTransactions
 };

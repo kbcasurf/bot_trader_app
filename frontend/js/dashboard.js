@@ -1,6 +1,5 @@
 // Get socket instance from main.js
 import { socket } from '../main.js';
-import { updateProfitLossIndicator } from './cryptoBoard.js';
 
 /**
  * Function to update transaction history
@@ -136,10 +135,37 @@ function calculateProfitLoss(symbol, transactions) {
         }
     }
     
-    // Update profit/loss indicator position
+    // Update profit/loss indicator
     updateProfitLossIndicator(symbol.toLowerCase(), plPercentage);
     
     console.log(`${symbol} P/L: ${plPercentage.toFixed(2)}% (${unrealizedPL.toFixed(2)} USDT)`);
+}
+
+// Function to update profit/loss indicator position
+function updateProfitLossIndicator(symbol, profitLossPercent) {
+    const indicator = document.getElementById(`${symbol}-profit-indicator`);
+    if (!indicator) return;
+    
+    // Calculate position (0% is center at 50%, range is -500% to +500%)
+    // Convert from -500% to +500% to 0% to 100%
+    const position = Math.min(Math.max((profitLossPercent + 500) / 1000 * 100, 0), 100);
+    
+    // Update indicator position
+    indicator.style.left = `${position}%`;
+    
+    // Update color based on profit/loss
+    if (profitLossPercent > 0) {
+        indicator.style.borderBottomColor = '#2ecc71'; // Green for profit
+    } else if (profitLossPercent < 0) {
+        indicator.style.borderBottomColor = '#e74c3c'; // Red for loss
+    } else {
+        indicator.style.borderBottomColor = '#f1c40f'; // Yellow for neutral
+    }
+}
+
+// Request transactions when needed
+function requestTransactions(symbol) {
+    socket.emit('get-transactions', { symbol: symbol + 'USDT' });
 }
 
 // Listen for transaction updates
@@ -149,31 +175,9 @@ socket.on('transaction-update', (data) => {
     updateTransactionHistory(symbol, transactions);
 });
 
-// Listen for holdings updates (only update amount, profit loss is handled separately)
-socket.on('holdings-update', (data) => {
-    const { symbol, amount } = data;
-    console.log(`Received holdings update for ${symbol}: ${amount}`);
-    
-    // Update holdings display
-    const holdingsElement = document.getElementById(`${symbol.toLowerCase()}-holdings`);
-    if (holdingsElement) {
-        // Format the holdings amount with 6 decimal places for cryptocurrencies
-        holdingsElement.textContent = `${parseFloat(amount).toFixed(6)} ${symbol}`;
-    } else {
-        console.error(`Holdings element not found for ${symbol}`);
-    }
-    
-    // Request transaction history to recalculate profit/loss
-    socket.emit('get-transactions', { symbol: symbol + 'USDT' });
-});
-
-// Request transactions when needed
-function requestTransactions(symbol) {
-    socket.emit('get-transactions', { symbol: symbol + 'USDT' });
-}
-
 export {
     updateTransactionHistory,
     calculateProfitLoss,
+    updateProfitLossIndicator,
     requestTransactions
 };

@@ -24,7 +24,7 @@
     </header>
 
     <div class="crypto-grid">
-        <!-- This is just a sample card as a placeholder -->
+        <!-- Bitcoin card template - will be used to clone other cards -->
         <div class="crypto-card" id="btc-card">
             <div class="crypto-header">
                 <div class="crypto-header-left">
@@ -67,7 +67,6 @@
         </div>
     </div>
 
-
     <!-- Trading Status Section -->
     <div class="trading-status">
         <h3>Trading Status</h3>
@@ -76,7 +75,6 @@
             <span id="trading-status-text">Trading: Unknown</span>
         </div>
     </div>
-
 
     <div class="status-section">
         <div class="status-card" id="connection-status">
@@ -103,9 +101,16 @@
         </div>
     </div>
 
+    <!-- Optional: Add WebSocket monitor -->
+    <div id="websocket-monitor" style="display: none;">
+        <span class="status-label">WebSocket Status: </span>
+        <span class="status-value" id="ws-connection-status">Unknown</span>
+    </div>
+
+    <!-- Import scripts -->
+    <script src="./js/themeManager.js" type="module"></script>
     <script src="./js/dashboard.js" type="module"></script>
     <script src="./js/cryptoBoard.js" type="module"></script>
-    <script src="./js/themeManager.js" type="module"></script>
     <script src="./main.js" type="module"></script>
 </body>
 </html>
