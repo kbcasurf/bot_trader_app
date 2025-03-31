@@ -1,6 +1,9 @@
 // Import socket.io client
 import { io } from 'socket.io-client';
 
+// Flag to track if prices are flowing
+let pricesAreFlowing = false;
+
 // Create and configure socket connection
 const socket = io({
     transports: ['websocket', 'polling'],
@@ -21,8 +24,15 @@ const systemStatus = {
     binance: false,
     telegram: false,
     websocket: false,
-    lastPriceUpdate: 0,
-    lastBackendResponse: Date.now()
+    lastBackendResponse: Date.now(),
+    lastPriceUpdates: {
+        btc: 0,
+        sol: 0,
+        xrp: 0,
+        doge: 0,
+        near: 0,
+        pendle: 0
+    }
 };
 
 // Trading status flag - initialized to false for safety
@@ -97,13 +107,37 @@ function setupSystemMonitoring() {
     // Check for price updates every 5 seconds
     priceCheckInterval = setInterval(() => {
         const now = Date.now();
-        const timeSinceLastPriceUpdate = now - systemStatus.lastPriceUpdate;
+        let anyRecentPriceUpdates = false;
         
-        // If no price updates for 30 seconds, mark websocket as failed
-        if (systemStatus.lastPriceUpdate > 0 && timeSinceLastPriceUpdate > 30000) {
-            console.warn('No price updates received for 30 seconds');
-            systemStatus.websocket = false;
+        // Check if any cryptocurrency has received a price update in the last 20 seconds
+        Object.values(systemStatus.lastPriceUpdates).forEach(timestamp => {
+            if (timestamp > 0 && now - timestamp < 20000) {
+                anyRecentPriceUpdates = true;
+            }
+        });
+        
+        // Update the websocket status based on recent price updates
+        if (systemStatus.websocket !== anyRecentPriceUpdates) {
+            systemStatus.websocket = anyRecentPriceUpdates;
+            
+            // Log the status change
+            console.log(`WebSocket price flow status changed: ${anyRecentPriceUpdates ? 'ACTIVE' : 'INACTIVE'}`);
+            
+            // Update UI to reflect status
+            updateWebSocketStatus(anyRecentPriceUpdates);
+            
+            // Re-evaluate if trading should be enabled/disabled
             reevaluateTradingStatus();
+        }
+        
+        // Periodically log detailed price update status (every ~30 seconds)
+        if (now % 30000 < 5000) {
+            const priceStatus = Object.entries(systemStatus.lastPriceUpdates).map(([symbol, timestamp]) => {
+                const secondsAgo = timestamp > 0 ? Math.round((now - timestamp) / 1000) : 'never';
+                return `${symbol.toUpperCase()}: ${secondsAgo === 'never' ? 'No updates' : `${secondsAgo}s ago`}`;
+            }).join(', ');
+            
+            console.log(`Price update status: ${priceStatus}`);
         }
     }, 5000);
     
@@ -112,9 +146,9 @@ function setupSystemMonitoring() {
         const now = Date.now();
         const timeSinceLastResponse = now - systemStatus.lastBackendResponse;
         
-        // If no response for 15 seconds, backend might be disconnected
-        if (timeSinceLastResponse > 15000) {
-            console.warn('No backend response for 15 seconds');
+        // If no response for 10 seconds, backend might be disconnected
+        if (timeSinceLastResponse > 10000) {
+            console.warn('No backend response for 10 seconds');
             
             // If socket claims to be connected, test with a ping
             if (socket.connected) {
@@ -594,12 +628,12 @@ function validateDomElements() {
     }
 }
 
-// Connection events
+// Make socket.on('connect') focus on re-requesting status
 socket.on('connect', () => {
     console.log('Socket connected successfully with ID:', socket.id);
-
-    // Update the backend connection status
-    updateConnectionStatus(true);
+    
+    // Mark response received
+    systemStatus.lastBackendResponse = Date.now();
     
     // Request system status
     socket.emit('get-system-status');
@@ -704,6 +738,18 @@ socket.on('price-update', (data) => {
     // Normalize symbol format (remove USDT if it exists)
     const baseSymbol = symbol.replace('USDT', '').toLowerCase();
     
+    // IMPORTANT: Track this price update time
+    if (systemStatus.lastPriceUpdates.hasOwnProperty(baseSymbol)) {
+        systemStatus.lastPriceUpdates[baseSymbol] = Date.now();
+        
+        // Make sure websocket status is true when receiving price updates
+        if (!systemStatus.websocket) {
+            systemStatus.websocket = true;
+            updateWebSocketStatus(true);
+            reevaluateTradingStatus();
+        }
+    }
+    
     // Try to find the price element
     const priceElement = document.getElementById(`${baseSymbol}-price`);
     
@@ -711,18 +757,63 @@ socket.on('price-update', (data) => {
         // Format the price with 2 decimal places
         const formattedPrice = parseFloat(price).toFixed(2);
         priceElement.textContent = `Price: $${formattedPrice}`;
-        
-        // Mark price update received and websocket as active
-        systemStatus.lastPriceUpdate = Date.now();
-        systemStatus.websocket = true;
-        systemStatus.lastBackendResponse = Date.now();
-        
-        // Re-evaluate trading status
-        reevaluateTradingStatus();
     } else {
         console.warn(`Could not find price element for symbol ${baseSymbol}`);
     }
+    
+    // Mark response received
+    systemStatus.lastBackendResponse = Date.now();
 });
+
+// Function to update WebSocket status indicator
+function updateWebSocketStatus(isConnected) {
+    // Find WebSocket status elements in your UI
+    const wsStatusElement = document.querySelector('#websocket-monitor .status-value#ws-connection-status');
+    
+    if (wsStatusElement) {
+        wsStatusElement.textContent = isConnected ? 'Connected' : 'Disconnected (No price updates)';
+        wsStatusElement.style.color = isConnected ? '#28a745' : '#dc3545';
+    }
+}
+
+// Update reevaluateTradingStatus to prioritize WebSocket/price status
+function reevaluateTradingStatus() {
+    // Always check WebSocket/price updates first
+    if (!systemStatus.websocket) {
+        updateTradingStatus(false, "Trading: Paused (Waiting for price updates)");
+        return;
+    }
+    
+    // If prices are flowing, check other service statuses
+    const allServicesConnected = (
+        systemStatus.database &&
+        systemStatus.binance &&
+        systemStatus.telegram
+    );
+    
+    // Create detailed status message
+    let statusMessage = "Trading: ";
+    
+    if (!allServicesConnected) {
+        // Determine which services are disconnected
+        const disconnectedServices = [];
+        
+        if (!systemStatus.database) disconnectedServices.push("Database");
+        if (!systemStatus.binance) disconnectedServices.push("Binance API");
+        if (!systemStatus.telegram) disconnectedServices.push("Telegram API");
+        
+        // Create message based on disconnected services
+        statusMessage += `Paused (Waiting for ${disconnectedServices.join(", ")})`;
+        
+        // Ensure trading is disabled
+        updateTradingStatus(false, statusMessage);
+    } else {
+        // All services are connected, enable trading
+        statusMessage += "Active";
+        updateTradingStatus(true, statusMessage);
+    }
+}
+
 
 // Account info
 socket.on('account-info', (accountInfo) => {
