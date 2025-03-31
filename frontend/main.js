@@ -54,22 +54,6 @@ let tradingStatusText;
 let priceCheckInterval;
 let connectionCheckInterval;
 
-// Dom Ready Utilities
-whenDomReady(() => {
-    // Wait a short time for everything to render completely
-    setTimeout(() => {
-        initializeApp();
-        
-        // Request initial system status
-        socket.emit('get-system-status');
-        
-        console.log('Application initialized and ready');
-        
-        // Request initial data for crypto cards after a delay
-        setTimeout(requestInitialData, 2000);
-    }, 500);
-});
-
 
 // Request initial data for all crypto cards
 function requestInitialData() {
@@ -886,6 +870,7 @@ socket.on('account-info', (accountInfo) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
+
 // Transaction updates
 socket.on('transaction-update', (data) => {
     const { symbol, transactions } = data;
@@ -895,6 +880,7 @@ socket.on('transaction-update', (data) => {
     // Mark response received
     systemStatus.lastBackendResponse = Date.now();
 });
+
 
 // Holdings updates
 socket.on('holdings-update', (data) => {
@@ -936,6 +922,7 @@ socket.on('holdings-update', (data) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
+
 // Order results
 socket.on('buy-result', (result) => {
     if (result.success) {
@@ -952,6 +939,7 @@ socket.on('buy-result', (result) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
+
 socket.on('sell-result', (result) => {
     if (result.success) {
         console.log('Sell order successful:', result);
@@ -967,6 +955,7 @@ socket.on('sell-result', (result) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
+
 socket.on('first-purchase-result', (result) => {
     if (!result.success) {
         alert(`First purchase failed: ${result.error}`);
@@ -977,6 +966,7 @@ socket.on('first-purchase-result', (result) => {
     // Mark response received
     systemStatus.lastBackendResponse = Date.now();
 });
+
 
 socket.on('sell-all-result', (result) => {
     if (!result.success) {
@@ -989,11 +979,13 @@ socket.on('sell-all-result', (result) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
+
 // Heartbeat events to keep connection alive
 socket.on('heartbeat', () => {
     // Update last response time
     systemStatus.lastBackendResponse = Date.now();
 });
+
 
 // Any other events from server
 socket.onAny((eventName) => {
@@ -1001,7 +993,8 @@ socket.onAny((eventName) => {
     systemStatus.lastBackendResponse = Date.now();
 });
 
-// Initialize everything when DOM is ready
+
+// Dom Ready Utilities
 whenDomReady(() => {
     // Wait a short time for everything to render completely
     setTimeout(() => {
@@ -1011,5 +1004,8 @@ whenDomReady(() => {
         socket.emit('get-system-status');
         
         console.log('Application initialized and ready');
+        
+        // Request initial data for crypto cards after a delay
+        setTimeout(requestInitialData, 2000);
     }, 500);
 });
