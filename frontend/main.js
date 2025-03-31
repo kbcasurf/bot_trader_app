@@ -1,7 +1,10 @@
 // Import socket.io client
 import { io } from 'socket.io-client';
 
+
+let tradingActive = true; // Flag to track trading status
 let lastBackendResponseTime = Date.now();
+
 // Create and configure socket connection
 const socket = io({
     transports: ['websocket', 'polling'],
@@ -339,17 +342,16 @@ function implementConnectionMonitoring() {
                 }, 2000);
 
  
-            } 
-            /*
-            else {
-                // Socket knows it's disconnected
-                updateConnectionStatus(false);
+            }  else {
+            // Socket knows it's disconnected
+            updateConnectionStatus(false);
             }
-             */
+             
         }
     }, 10000);
     
 }
+
 
 // Update connection status indicators
 function updateConnectionStatus(isConnected) {
@@ -519,13 +521,14 @@ function validateDomElements() {
 // Connection events
 socket.on('connect', () => {
     console.log('Socket connected successfully with ID:', socket.id);
-    
+
     // Update the backend connection status
     updateConnectionStatus(true);
     
     // Force trading status to active when connected
     updateTradingStatus(true);
-    
+
+
     // Mark response received
     lastBackendResponseTime = Date.now();
     

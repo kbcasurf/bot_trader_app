@@ -1,9 +1,6 @@
 // Get socket instance from main.js
 import { socket } from '../main.js';
 
-// Track WebSocket trading status
-let tradingActive = false;
-
 // Crypto configuration for supported trading pairs
 const supportedCryptos = [
     { symbol: 'BTC', fullName: 'Bitcoin' },
@@ -76,9 +73,6 @@ function createCryptoCards() {
     
     // Reattach event listeners after creating new cards
     attachEventListeners();
-    
-    // Apply current trading status to buttons
-    updateTradingButtonsState();
 }
 
 // Function to validate that all crypto cards were created correctly
@@ -126,11 +120,6 @@ function attachEventListeners() {
     const firstPurchaseButtons = document.querySelectorAll('.first-purchase');
     firstPurchaseButtons.forEach(button => {
         button.addEventListener('click', function() {
-            if (!tradingActive) {
-                alert('Trading is currently paused due to WebSocket connection issues. Please try again when connection is restored.');
-                return;
-            }
-            
             const card = this.closest('.crypto-card');
             if (!card) return;
             
@@ -154,11 +143,6 @@ function attachEventListeners() {
     const sellAllButtons = document.querySelectorAll('.sell-all');
     sellAllButtons.forEach(button => {
         button.addEventListener('click', function() {
-            if (!tradingActive) {
-                alert('Trading is currently paused due to WebSocket connection issues. Please try again when connection is restored.');
-                return;
-            }
-            
             const card = this.closest('.crypto-card');
             if (!card) return;
             
@@ -183,23 +167,6 @@ function attachEventListeners() {
             });
         });
     });
-}
-
-// Function to update trading buttons based on WebSocket connection status
-function updateTradingButtonsState() {
-    const tradingButtons = document.querySelectorAll('.first-purchase, .sell-all');
-    
-    if (tradingActive) {
-        tradingButtons.forEach(button => {
-            button.disabled = false;
-            button.classList.remove('disabled');
-        });
-    } else {
-        tradingButtons.forEach(button => {
-            button.disabled = true;
-            button.classList.add('disabled');
-        });
-    }
 }
 
 // Initialize the crypto board when the DOM is loaded
@@ -252,22 +219,8 @@ socket.on('price-update', (data) => {
     }
 });
 
-// Listen for trading status updates
-socket.on('trading-status', (status) => {
-    tradingActive = status.active;
-    updateTradingButtonsState();
-});
-
 export {
     createCryptoCards,
     supportedCryptos,
-    updateTradingButtonsState,
-    validateCryptoCards
-};
-
-export default {
-    createCryptoCards,
-    supportedCryptos,
-    updateTradingButtonsState,
     validateCryptoCards
 };

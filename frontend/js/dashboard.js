@@ -1,9 +1,6 @@
 // Get socket instance from main.js
 import { socket } from '../main.js';
 
-// Track trading status
-let tradingActive = false;
-
 /**
  * WebSocket Monitor Component
  * Provides UI elements to monitor and control WebSocket connections
@@ -322,25 +319,6 @@ function updateTransactionHistory(symbol, transactions) {
     });
 }
 
-/**
- * Function to update trading button states based on WebSocket connection
- */
-function updateTradingButtonsState() {
-    const tradingButtons = document.querySelectorAll('.first-purchase, .sell-all');
-    
-    if (tradingActive) {
-        tradingButtons.forEach(button => {
-            button.disabled = false;
-            button.classList.remove('disabled');
-        });
-    } else {
-        tradingButtons.forEach(button => {
-            button.disabled = true;
-            button.classList.add('disabled');
-        });
-    }
-}
-
 // Initialize the WebSocket monitor when DOM is ready
 let wsMonitor;
 if (document.readyState === 'loading') {
@@ -399,14 +377,7 @@ socket.on('holdings-update', (data) => {
     }
 });
 
-// Listen for trading status updates
-socket.on('trading-status', (status) => {
-    tradingActive = status.active;
-    updateTradingButtonsState();
-});
-
 export {
     updateTransactionHistory,
-    updateTradingButtonsState,
     WebSocketMonitor
 };
