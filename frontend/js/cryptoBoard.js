@@ -4,12 +4,12 @@ import { updateProfitLossIndicator } from './dashboard.js';
 
 // Crypto configuration for supported trading pairs
 const supportedCryptos = [
-    { symbol: 'BTC', fullName: 'Bitcoin', icon: 'frontend/images/btc.svg' },
-    { symbol: 'SOL', fullName: 'Solana', icon: 'frontend/images/sol.svg' },
-    { symbol: 'XRP', fullName: 'Ripple', icon: 'frontend/images/xrp.svg' },
-    { symbol: 'DOGE', fullName: 'Dogecoin', icon: 'frontend/images/doge.svg' },
-    { symbol: 'NEAR', fullName: 'NEAR Protocol', icon: 'frontend/images/near.svg' },
-    { symbol: 'PENDLE', fullName: 'Pendle', icon: 'frontend/images/pendle.svg' }
+    { symbol: 'BTC', icon: 'frontend/images/btc.svg' },
+    { symbol: 'SOL', icon: 'frontend/images/sol.svg' },
+    { symbol: 'XRP', icon: 'frontend/images/xrp.svg' },
+    { symbol: 'DOGE', icon: 'frontend/images/doge.svg' },
+    { symbol: 'NEAR', icon: 'frontend/images/near.svg' },
+    { symbol: 'PENDLE', icon: 'frontend/images/pendle.svg' }
 ];
 
 // Function to create crypto cards dynamically
