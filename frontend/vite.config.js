@@ -46,7 +46,7 @@ export default {
           // Split vendor code into a separate chunk
           vendor: ['socket.io-client'],
           // Create a separate chunk for the application code
-          app: ['./main.js', './js/dashboard.js', './js/cryptoBoard.js']
+          app: ['./js/conns.js', './js/dashboard.js']
         }
       }
     }
