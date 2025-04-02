@@ -1,462 +1,586 @@
-// conns.js - Connection Management Module
-// Responsible for backend communication, WebSocket connections and data flow
+// dashboard.js - Dashboard Management Module
+// Responsible for UI updates, state management, and user interactions
 
-// Import socket.io client
-import { io } from 'socket.io-client';
+// Import connection module
+import * as Connections from './conns.js';
 
-// We won't import Dashboard directly to avoid circular dependencies
-// Instead, we'll use callback functions that Dashboard will register
-
-// Self-initialization when script is loaded
-let isInitialized = false;
-
-// Auto-initialize after DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    // Short delay to ensure all HTML elements are rendered
-    setTimeout(() => {
-        // Only initialize once
-        if (!isInitialized) {
-            initialize();
-            isInitialized = true;
-            console.log('Connection module auto-initialized');
-        }
-    }, 500);
-});
-
-// Create and configure socket connection
-const socket = io({
-    transports: ['websocket', 'polling'],
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    timeout: 30000,
-    autoConnect: true,
-    forceNew: true
-});
-
-// Event callbacks registry - this allows dashboard.js to register callbacks
-const eventCallbacks = {
-    // Connection events
-    'connect': [],
-    'disconnect': [],
-    'connect_error': [],
+// Configuration and state management
+const CONFIG = {
+    // Supported cryptocurrencies with their symbols and image paths
+    cryptos: [
+        { symbol: 'btc', name: 'Bitcoin', image: 'images/btc.svg' },
+        { symbol: 'sol', name: 'Solana', image: 'images/sol.svg' },
+        { symbol: 'xrp', name: 'Ripple', image: 'images/xrp.svg' },
+        { symbol: 'pendle', name: 'Pendle', image: 'images/pendle.svg' },
+        { symbol: 'doge', name: 'Dogecoin', image: 'images/doge.svg' },
+        { symbol: 'near', name: 'Near', image: 'images/near.svg' }
+    ],
     
-    // Status events
-    'database-status': [],
-    'binance-status': [],
-    'telegram-status': [],
-    'trading-status': [],
-    'websocket-status': [],
+    // Investment preset values
+    presets: [50, 100, 150, 200],
+    defaultPreset: 1, // Index of default preset (100)
     
-    // Data events
-    'price-update': [],
-    'transaction-update': [],
-    'holdings-update': [],
-    'account-info': [],
+    // Profit/Loss thresholds for color changes
+    profitThreshold: 5, // Percentage where the profit bar maxes out (green)
+    lossThreshold: -5, // Percentage where the loss bar maxes out (red)
     
-    // Order result events
-    'buy-result': [],
-    'sell-result': [],
-    'first-purchase-result': [],
-    'sell-all-result': []
+    // Auto-refresh interval in milliseconds
+    refreshInterval: 30000 // 30 seconds
 };
 
-// System status tracking
-const systemStatus = {
-    backend: false,
-    database: false,
-    binance: false,
-    telegram: false,
-    websocket: false,
-    lastBackendResponse: Date.now(),
-    lastPriceUpdates: {
-        btc: 0,
-        sol: 0,
-        xrp: 0,
-        doge: 0,
-        near: 0,
-        pendle: 0
-    }
+// UI state tracking
+const uiState = {
+    prices: {}, // Current prices for each cryptocurrency
+    holdings: {}, // Current holdings
+    profitLoss: {}, // Current profit/loss percentage
+    investments: {}, // Selected investment amounts
+    isProcessing: {}, // Flags for operations in progress
+    isDarkMode: false // Theme state
 };
 
-// Interval references for monitoring
-let connectionMonitorInterval = null;
-let priceMonitorInterval = null;
+// Interval reference for periodic refreshes
+let refreshInterval = null;
 
-// Initialize monitoring of connections and price updates
-function initializeMonitoring() {
-    // Clear any existing intervals first
-    if (connectionMonitorInterval) clearInterval(connectionMonitorInterval);
-    if (priceMonitorInterval) clearInterval(priceMonitorInterval);
+// Initialize dashboard after DOM is loaded
+function initialize() {
+    // Register for connection module events
+    registerEventHandlers();
     
-    // Monitor backend connection health every 10 seconds
-    connectionMonitorInterval = setInterval(() => {
-        const now = Date.now();
-        const timeSinceLastResponse = now - systemStatus.lastBackendResponse;
-        
-        // If no response for 10 seconds, backend might be disconnected
-        if (timeSinceLastResponse > 10000) {
-            console.warn('No backend response for 10 seconds');
-            
-            // If socket claims to be connected, test with a ping
-            if (socket.connected) {
-                console.log('Testing connection with ping...');
-                socket.emit('get-system-status');
-                
-                // Give it 2 seconds to respond
-                setTimeout(() => {
-                    const newTimeSinceResponse = Date.now() - systemStatus.lastBackendResponse;
-                    if (newTimeSinceResponse > 12000) {
-                        console.error('Connection test failed - marking backend as disconnected');
-                        updateConnectionStatus(false);
-                    }
-                }, 2000);
-            } else {
-                // Socket knows it's disconnected
-                updateConnectionStatus(false);
-            }
-        }
-    }, 10000);
+    // Create cryptocurrency cards
+    createCryptoCards();
     
-    // Monitor price updates every 5 seconds
-    priceMonitorInterval = setInterval(() => {
-        const now = Date.now();
-        let anyRecentPriceUpdates = false;
-        
-        // Check if any cryptocurrency has received a price update in the last 20 seconds
-        Object.values(systemStatus.lastPriceUpdates).forEach(timestamp => {
-            if (timestamp > 0 && now - timestamp < 20000) {
-                anyRecentPriceUpdates = true;
-            }
-        });
-        
-        // Update the websocket status based on recent price updates
-        if (systemStatus.websocket !== anyRecentPriceUpdates) {
-            systemStatus.websocket = anyRecentPriceUpdates;
-            
-            // Log the status change
-            console.log(`WebSocket price flow status changed: ${anyRecentPriceUpdates ? 'ACTIVE' : 'INACTIVE'}`);
-            
-            // Notify any registered callbacks
-            triggerCallbacks('websocket-status', { connected: anyRecentPriceUpdates });
-        }
-    }, 5000);
-}
-
-// Update connection status
-function updateConnectionStatus(isConnected) {
-    // Update system status
-    systemStatus.backend = isConnected;
-    systemStatus.lastBackendResponse = Date.now();
+    // Set up theme toggle
+    setupThemeToggle();
     
-    // If backend disconnects, all other services should be marked as disconnected
-    if (!isConnected) {
-        systemStatus.database = false;
-        systemStatus.binance = false;
-        systemStatus.telegram = false;
-        systemStatus.websocket = false;
-        
-        // Notify callbacks of all services being disconnected
-        triggerCallbacks('database-status', false);
-        triggerCallbacks('binance-status', false);
-        triggerCallbacks('telegram-status', false);
-        triggerCallbacks('websocket-status', { connected: false });
-    }
+    // Setup automatic updates
+    setupAutoRefresh();
     
-    // Notify any registered connect/disconnect callbacks
-    if (isConnected) {
-        triggerCallbacks('connect');
-    } else {
-        triggerCallbacks('disconnect', 'Backend connection lost');
-    }
+    // Log initialization status
+    console.log('Dashboard module initialized');
 }
 
-// Helper function to trigger event callbacks
-function triggerCallbacks(event, data) {
-    if (eventCallbacks[event]) {
-        eventCallbacks[event].forEach(callback => {
-            try {
-                callback(data);
-            } catch (error) {
-                console.error(`Error in ${event} callback:`, error);
-            }
-        });
-    }
-}
-
-// Register a callback for an event
-function on(event, callback) {
-    if (eventCallbacks[event]) {
-        eventCallbacks[event].push(callback);
-    } else {
-        console.warn(`Unknown event: ${event}`);
-    }
-}
-
-// Remove a callback for an event
-function off(event, callback) {
-    if (eventCallbacks[event]) {
-        const index = eventCallbacks[event].indexOf(callback);
-        if (index !== -1) {
-            eventCallbacks[event].splice(index, 1);
-        }
-    }
-}
-
-// Request system status from the backend
-function requestSystemStatus() {
-    socket.emit('get-system-status');
-}
-
-// Request transactions for a specific symbol
-function requestTransactions(symbol) {
-    socket.emit('get-transactions', { symbol: symbol + 'USDT' });
-}
-
-// Request account info
-function requestAccountInfo() {
-    socket.emit('get-account-info');
-}
-
-// Test Binance stream
-function testBinanceStream() {
-    socket.emit('test-binance-stream');
-}
-
-// Execute buy order
-function executeBuyOrder(symbol, amount) {
-    socket.emit('first-purchase', {
-        symbol: symbol + 'USDT',
-        investment: amount
-    });
-}
-
-// Execute sell order
-function executeSellOrder(symbol) {
-    socket.emit('sell-all', {
-        symbol: symbol + 'USDT'
-    });
-}
-
-// Function to get current system status
-function getSystemStatus() {
-    return { ...systemStatus };
-}
-
-// Initialize socket event listeners
-function initializeSocketListeners() {
-    // Socket connection events
-    socket.on('connect', () => {
-        console.log('Socket connected successfully with ID:', socket.id);
-        
-        // Mark response received
-        systemStatus.lastBackendResponse = Date.now();
-        
-        // Request system status
-        requestSystemStatus();
-        
-        // Trigger any registered connect callbacks
-        triggerCallbacks('connect');
-    });
-    
-    socket.on('disconnect', (reason) => {
-        console.log('Socket disconnected. Reason:', reason);
-        
-        // Update system status
-        updateConnectionStatus(false);
-        
-        // Trigger any registered disconnect callbacks
-        triggerCallbacks('disconnect', reason);
-    });
-    
-    socket.on('connect_error', (error) => {
-        console.error('Socket.IO connection error:', error.message);
-        
-        // Update system status
-        updateConnectionStatus(false);
-        
-        // Trigger any registered connect_error callbacks
-        triggerCallbacks('connect_error', error);
-        
-        // Try to reconnect with polling if WebSocket fails
-        if (socket.io.opts.transports[0] === 'websocket') {
-            console.log('WebSocket connection failed, falling back to polling');
-            socket.io.opts.transports = ['polling', 'websocket'];
-            socket.connect();
-        }
-    });
+// Register event handlers for connection module events
+function registerEventHandlers() {
+    // Connection status events
+    Connections.on('connect', handleConnectionEstablished);
+    Connections.on('disconnect', handleConnectionLost);
     
     // Backend service status events
-    socket.on('database-status', (isConnected) => {
-        systemStatus.database = isConnected;
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('database-status', isConnected);
-    });
+    Connections.on('database-status', updateDatabaseStatus);
+    Connections.on('binance-status', updateBinanceStatus);
+    Connections.on('telegram-status', updateTelegramStatus);
+    Connections.on('websocket-status', updateWebSocketStatus);
     
-    socket.on('binance-status', (isConnected) => {
-        systemStatus.binance = isConnected;
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('binance-status', isConnected);
-    });
+    // Price update events
+    Connections.on('price-update', updatePrice);
     
-    socket.on('telegram-status', (isConnected) => {
-        systemStatus.telegram = isConnected;
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('telegram-status', isConnected);
-    });
+    // Transaction update events
+    Connections.on('transaction-update', updateTransactions);
     
-    socket.on('trading-status', (status) => {
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('trading-status', status);
-    });
+    // Holdings update events
+    Connections.on('holdings-update', updateHoldings);
     
-    socket.on('websocket-status', (status) => {
-        systemStatus.websocket = status.connected || false;
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('websocket-status', status);
-    });
+    // Order result events
+    Connections.on('first-purchase-result', handleFirstPurchaseResult);
+    Connections.on('sell-all-result', handleSellAllResult);
+}
+
+// Create cryptocurrency cards for all supported cryptos
+function createCryptoCards() {
+    const cryptoGrid = document.querySelector('.crypto-grid');
+    const templateCard = document.getElementById('btc-card');
     
-    // Price updates
-    socket.on('price-update', (data) => {
-        if (!data) {
-            console.warn('Received empty price update data');
-            return;
+    // If no template card, log error and exit
+    if (!templateCard) {
+        console.error('BTC template card not found. Cannot create other crypto cards.');
+        return;
+    }
+    
+    // Make sure the template card is set specifically for BTC
+    configureCryptoCard(templateCard, CONFIG.cryptos[0]);
+    
+    // Create cards for the rest of the cryptocurrencies (skipping BTC which is index 0)
+    for (let i = 1; i < CONFIG.cryptos.length; i++) {
+        const crypto = CONFIG.cryptos[i];
+        
+        // Clone the template card
+        const newCard = templateCard.cloneNode(true);
+        newCard.id = `${crypto.symbol}-card`;
+        
+        // Configure the new card
+        configureCryptoCard(newCard, crypto);
+        
+        // Add the new card to the grid
+        cryptoGrid.appendChild(newCard);
+    }
+}
+
+// Configure a cryptocurrency card with specific data and event handlers
+function configureCryptoCard(card, crypto) {
+    // Set the symbol and name
+    const headerLeft = card.querySelector('.crypto-header-left');
+    if (headerLeft) {
+        const img = headerLeft.querySelector('img');
+        const heading = headerLeft.querySelector('h3');
+        
+        if (img) img.src = crypto.image;
+        if (img) img.alt = crypto.name;
+        if (heading) heading.textContent = `${crypto.symbol.toUpperCase()}/USDT`;
+    }
+    
+    // Set IDs for all elements
+    const priceElement = card.querySelector('.current-price');
+    const investmentInput = card.querySelector('input[type="hidden"]');
+    const firstPurchaseButton = card.querySelector('.first-purchase');
+    const holdingsElement = card.querySelector('.holdings span');
+    const profitIndicator = card.querySelector('.profit-loss-indicator');
+    const profitText = card.querySelector('.profit-loss-text span');
+    const historyList = card.querySelector('.transaction-history ul');
+    const sellButton = card.querySelector('.sell-all');
+    
+    if (priceElement) priceElement.id = `${crypto.symbol}-price`;
+    if (investmentInput) investmentInput.id = `${crypto.symbol}-investment`;
+    if (firstPurchaseButton) firstPurchaseButton.id = `${crypto.symbol}-first-purchase`;
+    if (holdingsElement) holdingsElement.id = `${crypto.symbol}-holdings`;
+    if (profitIndicator) profitIndicator.id = `${crypto.symbol}-profit-indicator`;
+    if (profitText) profitText.id = `${crypto.symbol}-profit-text`;
+    if (historyList) historyList.id = `${crypto.symbol}-history`;
+    if (sellButton) sellButton.id = `${crypto.symbol}-sell-all`;
+    
+    // Update state tracking
+    uiState.prices[crypto.symbol] = 0;
+    uiState.holdings[crypto.symbol] = 0;
+    uiState.profitLoss[crypto.symbol] = 0;
+    uiState.investments[crypto.symbol] = CONFIG.presets[CONFIG.defaultPreset];
+    uiState.isProcessing[crypto.symbol] = false;
+    
+    // Set up event handlers for the preset buttons
+    const presetButtons = card.querySelectorAll('.slider-presets .preset-btn');
+    presetButtons.forEach((button) => {
+        // Set active class for the default preset
+        if (parseFloat(button.dataset.value) === CONFIG.presets[CONFIG.defaultPreset]) {
+            button.classList.add('active');
         }
         
-        // Handle different possible symbol formats
-        let symbol = '';
-        let price = 0;
-        
-        if (data.symbol) {
-            symbol = data.symbol;
-        } else if (data.s) {
-            symbol = data.s;
-        } else {
-            console.warn('Price update missing symbol:', data);
-            return;
-        }
-        
-        if (data.price) {
-            price = data.price;
-        } else if (data.p) {
-            price = data.p;
-        } else if (data.a) {
-            price = data.a; // Use ask price from bookTicker
-        } else if (data.b) {
-            price = data.b; // Use bid price from bookTicker
-        } else if (data.c) {
-            price = data.c; // Use close price from ticker
-        } else {
-            console.warn('Price update missing price value:', data);
-            return;
-        }
-        
-        // Normalize symbol format (remove USDT if it exists)
-        const baseSymbol = symbol.replace('USDT', '').toLowerCase();
-        
-        // Track this price update time
-        if (systemStatus.lastPriceUpdates.hasOwnProperty(baseSymbol)) {
-            systemStatus.lastPriceUpdates[baseSymbol] = Date.now();
+        button.addEventListener('click', () => {
+            // Remove active class from all buttons
+            presetButtons.forEach(btn => btn.classList.remove('active'));
             
-            // Make sure websocket status is true when receiving price updates
-            if (!systemStatus.websocket) {
-                systemStatus.websocket = true;
-                triggerCallbacks('websocket-status', { connected: true });
-            }
-        }
-        
-        // Ensure backend is marked as connected when we get price updates
-        if (!systemStatus.backend) {
-            updateConnectionStatus(true);
-        }
-        
-        // Mark response received
-        systemStatus.lastBackendResponse = Date.now();
-        
-        // Trigger price update callbacks
-        triggerCallbacks('price-update', {
-            symbol: baseSymbol,
-            price: parseFloat(price)
+            // Add active class to clicked button
+            button.classList.add('active');
+            
+            // Update investment value
+            const value = parseFloat(button.dataset.value);
+            investmentInput.value = value;
+            uiState.investments[crypto.symbol] = value;
         });
     });
     
-    // Account info
-    socket.on('account-info', (accountInfo) => {
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('account-info', accountInfo);
-    });
+    // Set up first purchase button
+    if (firstPurchaseButton) {
+        firstPurchaseButton.addEventListener('click', () => {
+            // Check if another operation is in progress
+            if (uiState.isProcessing[crypto.symbol]) {
+                console.warn(`Operation already in progress for ${crypto.symbol}`);
+                return;
+            }
+            
+            // Get investment amount
+            const investmentAmount = uiState.investments[crypto.symbol];
+            
+            // Confirm purchase
+            if (confirm(`Buy ${crypto.name} for $${investmentAmount}?`)) {
+                // Set processing flag
+                uiState.isProcessing[crypto.symbol] = true;
+                firstPurchaseButton.classList.add('disabled');
+                firstPurchaseButton.textContent = 'Processing...';
+                
+                // Execute buy order
+                Connections.executeBuyOrder(crypto.symbol, investmentAmount);
+                
+                // Request transactions update
+                Connections.requestTransactions(crypto.symbol);
+            }
+        });
+    }
     
-    // Transaction updates
-    socket.on('transaction-update', (data) => {
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('transaction-update', data);
-    });
+    // Set up sell all button
+    if (sellButton) {
+        sellButton.addEventListener('click', () => {
+            // Check if another operation is in progress
+            if (uiState.isProcessing[crypto.symbol]) {
+                console.warn(`Operation already in progress for ${crypto.symbol}`);
+                return;
+            }
+            
+            // Check if there are holdings to sell
+            if (uiState.holdings[crypto.symbol] <= 0) {
+                alert(`You don't have any ${crypto.name} to sell.`);
+                return;
+            }
+            
+            // Confirm sell
+            if (confirm(`Sell all your ${crypto.name} holdings?`)) {
+                // Set processing flag
+                uiState.isProcessing[crypto.symbol] = true;
+                sellButton.classList.add('disabled');
+                sellButton.textContent = 'Processing...';
+                
+                // Execute sell order
+                Connections.executeSellOrder(crypto.symbol);
+            }
+        });
+    }
     
-    // Holdings updates
-    socket.on('holdings-update', (data) => {
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('holdings-update', data);
-    });
+    // Request transactions for this cryptocurrency
+    setTimeout(() => {
+        Connections.requestTransactions(crypto.symbol);
+    }, 1000 + CONFIG.cryptos.indexOf(crypto) * 200); // Stagger requests
+}
+
+// Handle successful connection to backend
+function handleConnectionEstablished() {
+    console.log('Connection to backend established');
     
-    // Order results
-    socket.on('buy-result', (result) => {
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('buy-result', result);
-        
-        // Request updated account info if successful
-        if (result.success) {
-            requestAccountInfo();
-        }
-    });
+    // Update status indicators
+    updateBackendStatus(true);
     
-    socket.on('sell-result', (result) => {
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('sell-result', result);
-        
-        // Request updated account info if successful
-        if (result.success) {
-            requestAccountInfo();
-        }
-    });
+    // Request system status
+    Connections.requestSystemStatus();
     
-    socket.on('first-purchase-result', (result) => {
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('first-purchase-result', result);
-    });
+    // Request account info
+    Connections.requestAccountInfo();
     
-    socket.on('sell-all-result', (result) => {
-        systemStatus.lastBackendResponse = Date.now();
-        triggerCallbacks('sell-all-result', result);
-    });
-    
-    // Heartbeat events to keep connection alive
-    socket.on('heartbeat', () => {
-        systemStatus.lastBackendResponse = Date.now();
-    });
-    
-    // Any other events from server
-    socket.onAny((eventName) => {
-        systemStatus.lastBackendResponse = Date.now();
+    // Request transactions for all cryptocurrencies
+    CONFIG.cryptos.forEach(crypto => {
+        setTimeout(() => {
+            Connections.requestTransactions(crypto.symbol);
+        }, 500 + CONFIG.cryptos.indexOf(crypto) * 200); // Stagger requests
     });
 }
 
-// Initialize the connection module
-function initialize() {
-    initializeSocketListeners();
-    initializeMonitoring();
-    console.log('Connection module initialized');
+// Handle lost connection to backend
+function handleConnectionLost(reason) {
+    console.warn('Connection to backend lost:', reason);
+    
+    // Update status indicators
+    updateBackendStatus(false);
+    updateDatabaseStatus(false);
+    updateBinanceStatus(false);
+    updateTelegramStatus(false);
+    updateWebSocketStatus({ connected: false });
+}
+
+// Update backend connection status
+function updateBackendStatus(isConnected) {
+    const statusDot = document.getElementById('backend-status-dot');
+    const statusText = document.getElementById('backend-status-text');
+    
+    if (statusDot && statusText) {
+        statusDot.className = isConnected ? 'status-dot connected' : 'status-dot disconnected';
+        statusText.textContent = `Backend: ${isConnected ? 'Connected' : 'Disconnected'}`;
+    }
+}
+
+// Update database connection status
+function updateDatabaseStatus(isConnected) {
+    const statusDot = document.getElementById('db-status-dot');
+    const statusText = document.getElementById('db-status-text');
+    
+    if (statusDot && statusText) {
+        statusDot.className = isConnected ? 'status-dot connected' : 'status-dot disconnected';
+        statusText.textContent = `Database: ${isConnected ? 'Connected' : 'Disconnected'}`;
+    }
+}
+
+// Update Binance API connection status
+function updateBinanceStatus(isConnected) {
+    const statusDot = document.getElementById('binance-status-dot');
+    const statusText = document.getElementById('binance-status-text');
+    
+    if (statusDot && statusText) {
+        statusDot.className = isConnected ? 'status-dot connected' : 'status-dot disconnected';
+        statusText.textContent = `Binance: ${isConnected ? 'Connected' : 'Disconnected'}`;
+    }
+}
+
+// Update Telegram bot connection status
+function updateTelegramStatus(isConnected) {
+    const statusDot = document.getElementById('telegram-status-dot');
+    const statusText = document.getElementById('telegram-status-text');
+    
+    if (statusDot && statusText) {
+        statusDot.className = isConnected ? 'status-dot connected' : 'status-dot disconnected';
+        statusText.textContent = `Telegram: ${isConnected ? 'Connected' : 'Disconnected'}`;
+    }
+}
+
+// Update WebSocket connection status
+function updateWebSocketStatus(status) {
+    // Optional WebSocket monitor update
+    const wsMonitor = document.getElementById('websocket-monitor');
+    const wsStatus = document.getElementById('ws-connection-status');
+    
+    if (wsMonitor && wsStatus) {
+        wsMonitor.style.display = 'block';
+        wsStatus.textContent = status.connected ? 'Connected' : 'Disconnected';
+        wsStatus.className = `status-value ${status.connected ? 'connected' : 'disconnected'}`;
+    }
+}
+
+// Update cryptocurrency price
+function updatePrice(data) {
+    // Check for valid data
+    if (!data || !data.symbol || !data.price) {
+        console.warn('Invalid price update data:', data);
+        return;
+    }
+    
+    const symbol = data.symbol.toLowerCase();
+    const price = parseFloat(data.price);
+    
+    // Update state
+    uiState.prices[symbol] = price;
+    
+    // Update UI
+    const priceElement = document.getElementById(`${symbol}-price`);
+    if (priceElement) {
+        priceElement.textContent = `Price: $${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    
+    // Update profit/loss if we have holdings
+    updateProfitLoss(symbol);
+}
+
+// Update transaction history
+function updateTransactions(data) {
+    // Check for valid data
+    if (!data || !data.transactions) {
+        console.warn('Invalid transaction data:', data);
+        return;
+    }
+    
+    const symbol = data.symbol.toLowerCase();
+    const transactions = data.transactions;
+    
+    // Get the history list element
+    const historyList = document.getElementById(`${symbol}-history`);
+    if (!historyList) {
+        console.warn(`History list element not found for ${symbol}`);
+        return;
+    }
+    
+    // Clear the list
+    historyList.innerHTML = '';
+    
+    // If no transactions, show message
+    if (!transactions.length) {
+        const noTransactionsItem = document.createElement('li');
+        noTransactionsItem.className = 'no-transactions';
+        noTransactionsItem.textContent = 'No transactions yet';
+        historyList.appendChild(noTransactionsItem);
+        return;
+    }
+    
+    // Add transactions to the list
+    transactions.forEach(transaction => {
+        const item = document.createElement('li');
+        item.className = transaction.type.toLowerCase();
+        
+        // Format date
+        const date = new Date(transaction.timestamp);
+        const formattedDate = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        
+        // Format transaction details
+        item.textContent = `${transaction.type} - ${transaction.quantity} ${symbol.toUpperCase()} at $${parseFloat(transaction.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} - ${formattedDate}`;
+        
+        historyList.appendChild(item);
+    });
+}
+
+// Update holdings
+function updateHoldings(data) {
+    // Check for valid data
+    if (!data || !data.symbol) {
+        console.warn('Invalid holdings data:', data);
+        return;
+    }
+    
+    const symbol = data.symbol.toLowerCase();
+    const amount = parseFloat(data.amount) || 0;
+    const profitLossPercent = parseFloat(data.profitLossPercent) || 0;
+    
+    // Update state
+    uiState.holdings[symbol] = amount;
+    uiState.profitLoss[symbol] = profitLossPercent;
+    
+    // Update UI - holdings
+    const holdingsElement = document.getElementById(`${symbol}-holdings`);
+    if (holdingsElement) {
+        holdingsElement.textContent = `${amount.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 })} ${symbol.toUpperCase()}`;
+    }
+    
+    // Update profit/loss display
+    updateProfitLossDisplay(symbol, profitLossPercent);
+    
+    // Reset processing flag
+    uiState.isProcessing[symbol] = false;
+    
+    // Reset button states
+    resetButtonStates(symbol);
+}
+
+// Update profit/loss
+function updateProfitLoss(symbol) {
+    // Skip if we don't have both price and holdings
+    if (!uiState.prices[symbol] || !uiState.holdings[symbol]) {
+        return;
+    }
+    
+    // For now, we'll just update the display with the current value
+    // The actual profit/loss calculation should come from the backend
+    updateProfitLossDisplay(symbol, uiState.profitLoss[symbol]);
+}
+
+// Update profit/loss display
+function updateProfitLossDisplay(symbol, percentage) {
+    const indicator = document.getElementById(`${symbol}-profit-indicator`);
+    const text = document.getElementById(`${symbol}-profit-text`);
+    
+    if (indicator && text) {
+        // Calculate position on the profit/loss bar (0-100%)
+        const range = CONFIG.profitThreshold - CONFIG.lossThreshold;
+        const position = ((percentage - CONFIG.lossThreshold) / range) * 100;
+        
+        // Constrain position to 0-100%
+        const clampedPosition = Math.max(0, Math.min(100, position));
+        
+        // Set indicator position
+        indicator.style.left = `${clampedPosition}%`;
+        
+        // Set text with appropriate color
+        text.textContent = `${percentage.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+        
+        if (percentage > 0) {
+            text.className = 'profit';
+        } else if (percentage < 0) {
+            text.className = 'loss';
+        } else {
+            text.className = '';
+        }
+    }
+}
+
+// Handle first purchase result
+function handleFirstPurchaseResult(result) {
+    // No symbol in result, can't determine which cryptocurrency
+    if (!result) {
+        console.warn('Invalid first purchase result:', result);
+        return;
+    }
+    
+    // For now, we'll reset all processing flags for simplicity
+    CONFIG.cryptos.forEach(crypto => {
+        uiState.isProcessing[crypto.symbol] = false;
+        resetButtonStates(crypto.symbol);
+    });
+    
+    // Show appropriate message
+    if (result.success) {
+        console.log('First purchase successful');
+    } else {
+        alert(`Purchase failed: ${result.error || 'Unknown error'}`);
+    }
+}
+
+// Handle sell all result
+function handleSellAllResult(result) {
+    // No symbol in result, can't determine which cryptocurrency
+    if (!result) {
+        console.warn('Invalid sell all result:', result);
+        return;
+    }
+    
+    // For now, we'll reset all processing flags for simplicity
+    CONFIG.cryptos.forEach(crypto => {
+        uiState.isProcessing[crypto.symbol] = false;
+        resetButtonStates(crypto.symbol);
+    });
+    
+    // Show appropriate message
+    if (result.success) {
+        console.log('Sell all successful');
+    } else {
+        alert(`Sell failed: ${result.error || 'Unknown error'}`);
+    }
+}
+
+// Reset button states after operation completes
+function resetButtonStates(symbol) {
+    const buyButton = document.getElementById(`${symbol}-first-purchase`);
+    const sellButton = document.getElementById(`${symbol}-sell-all`);
+    
+    if (buyButton) {
+        buyButton.classList.remove('disabled');
+        buyButton.textContent = 'Buy Crypto';
+    }
+    
+    if (sellButton) {
+        sellButton.classList.remove('disabled');
+        sellButton.textContent = 'Sell All';
+    }
+}
+
+// Set up theme toggle
+function setupThemeToggle() {
+    const themeToggle = document.getElementById('theme-toggle');
+    
+    if (themeToggle) {
+        // Check for saved theme preference
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'dark') {
+            document.body.classList.add('dark-mode');
+            themeToggle.checked = true;
+            uiState.isDarkMode = true;
+        }
+        
+        // Add event listener for theme toggle
+        themeToggle.addEventListener('change', () => {
+            if (themeToggle.checked) {
+                document.body.classList.add('dark-mode');
+                localStorage.setItem('theme', 'dark');
+                uiState.isDarkMode = true;
+            } else {
+                document.body.classList.remove('dark-mode');
+                localStorage.setItem('theme', 'light');
+                uiState.isDarkMode = false;
+            }
+        });
+    }
+}
+
+// Set up automatic refresh
+function setupAutoRefresh() {
+    // Clear any existing interval
+    if (refreshInterval) {
+        clearInterval(refreshInterval);
+    }
+    
+    // Start new refresh interval
+    refreshInterval = setInterval(() => {
+        // Request system status
+        Connections.requestSystemStatus();
+        
+        // Request transactions for all cryptocurrencies
+        CONFIG.cryptos.forEach(crypto => {
+            Connections.requestTransactions(crypto.symbol);
+        });
+        
+        console.log('Auto-refresh: Updated data from server');
+    }, CONFIG.refreshInterval);
 }
 
 // Export public API
 export {
-    initialize,
-    on,
-    off,
-    socket,
-    requestSystemStatus,
-    requestTransactions,
-    requestAccountInfo,
-    executeBuyOrder,
-    executeSellOrder,
-    testBinanceStream,
-    getSystemStatus
+    initialize
 };
