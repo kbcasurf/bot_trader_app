@@ -35,7 +35,15 @@ const uiState = {
     profitLoss: {}, // Current profit/loss percentage
     investments: {}, // Selected investment amounts
     isProcessing: {}, // Flags for operations in progress
-    isDarkMode: false // Theme state
+    isDarkMode: false, // Theme state
+    lastBuyPrices: {}, // Tracks the last purchase price for each crypto
+    initialPrices: {}, // Tracks the initial purchase price for each crypto
+    autoBuyEnabled: true, // Flag to enable/disable automatic buying
+    autoSellEnabled: true, // Flag to enable/disable automatic selling
+    tradingThresholds: {
+        buy: -5, // Buy when price drops this percentage from last purchase
+        sell: 5  // Sell when price rises this percentage from initial purchase
+    }
 };
 
 // Interval reference for periodic refreshes
@@ -392,10 +400,29 @@ function updateTransactions(data) {
         const formattedDate = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
         
         // Format transaction details
-        item.textContent = `${transaction.type} - ${transaction.quantity} ${symbol.toUpperCase()} at $${parseFloat(transaction.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} - ${formattedDate}`;
+        item.textContent = `${transaction.type} - ${transaction.quantity} ${symbol.toUpperCase()} at ${parseFloat(transaction.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} - ${formattedDate}`;
+        
+        // Store the transaction data as a data attribute for easier retrieval
+        item.dataset.type = transaction.type;
+        item.dataset.price = transaction.price;
+        item.dataset.quantity = transaction.quantity;
+        item.dataset.timestamp = transaction.timestamp;
         
         historyList.appendChild(item);
     });
+    
+    // Clear any cached transaction data for this symbol
+    if (window.transactionCache && window.transactionCache[symbol]) {
+        delete window.transactionCache[symbol];
+    }
+    
+    // Recalculate profit/loss with new transaction data
+    if (uiState.prices[symbol] && uiState.holdings[symbol] !== undefined) {
+        // Small delay to ensure the DOM is updated
+        setTimeout(() => {
+            updateProfitLoss(symbol);
+        }, 100);
+    }
 }
 
 // Update holdings
@@ -430,16 +457,187 @@ function updateHoldings(data) {
     resetButtonStates(symbol);
 }
 
-// Update profit/loss
+// Update profit/loss and trigger trading decisions
 function updateProfitLoss(symbol) {
     // Skip if we don't have both price and holdings
-    if (!uiState.prices[symbol] || !uiState.holdings[symbol]) {
+    if (!uiState.prices[symbol] || !uiState.holdings[symbol] === undefined) {
         return;
     }
     
-    // For now, we'll just update the display with the current value
-    // The actual profit/loss calculation should come from the backend
-    updateProfitLossDisplay(symbol, uiState.profitLoss[symbol]);
+    // Get current price
+    const currentPrice = uiState.prices[symbol];
+    
+    // Get stored transaction data for this symbol
+    const transactions = getTransactionsForSymbol(symbol);
+    if (!transactions || transactions.length === 0) {
+        return; // No transactions yet, nothing to calculate
+    }
+    
+    // Get initial purchase price (the very first buy transaction)
+    const initialBuyTx = transactions.find(tx => tx.type.toLowerCase() === 'buy');
+    const initialPrice = initialBuyTx ? parseFloat(initialBuyTx.price) : null;
+    
+    // Get last purchase price (the most recent buy transaction)
+    const buyTransactions = transactions.filter(tx => tx.type.toLowerCase() === 'buy');
+    const lastBuyTx = buyTransactions.length > 0 ? 
+        buyTransactions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0] : null;
+    const lastPurchasePrice = lastBuyTx ? parseFloat(lastBuyTx.price) : null;
+    
+    // Skip if we don't have the necessary price data
+    if (!initialPrice || !lastPurchasePrice) {
+        return;
+    }
+    
+    // Calculate profit/loss percentage from initial price
+    const profitLossPercent = ((currentPrice - initialPrice) / initialPrice) * 100;
+    
+    // Calculate percentage change from last purchase
+    const percentFromLastPurchase = ((currentPrice - lastPurchasePrice) / lastPurchasePrice) * 100;
+    
+    // Store profit/loss percentage in state
+    uiState.profitLoss[symbol] = profitLossPercent;
+    
+    // Update the display
+    updateProfitLossDisplay(symbol, profitLossPercent);
+    
+    // Check if we need to take action (only if not currently processing)
+    if (uiState.isProcessing[symbol]) {
+        return;
+    }
+    
+    // TRADING AUTOMATION LOGIC
+    
+    // If price is 5% above initial purchase price, sell all holdings
+    if (profitLossPercent >= 5) {
+        console.log(`${symbol.toUpperCase()}: Price is 5% above initial purchase. Triggering sell.`);
+        // Only sell if we have holdings
+        if (uiState.holdings[symbol] > 0) {
+            triggerSellAll(symbol);
+        }
+    }
+    // If price is 5% below last purchase price, buy more
+    else if (percentFromLastPurchase <= -5) {
+        console.log(`${symbol.toUpperCase()}: Price is 5% below last purchase. Triggering buy.`);
+        triggerBuyMore(symbol);
+    }
+}
+
+// Get transactions for a specific symbol
+function getTransactionsForSymbol(symbol) {
+    // Look for transactions in data we have
+    // Note: This function assumes transactions are stored in the DOM or a global cache
+    // You might need to adapt this based on how you're storing transaction data
+    
+    const historyList = document.getElementById(`${symbol}-history`);
+    
+    // If we don't have transactions in the DOM, we have none to process
+    if (!historyList || historyList.querySelector('.no-transactions')) {
+        return [];
+    }
+    
+    // Parse transaction history from DOM if needed
+    // For now, we'll use a mock implementation
+    // In a real implementation, you'd want to store this data properly
+    const transactionItems = historyList.querySelectorAll('li:not(.no-transactions)');
+    
+    // Check if we've already parsed the transactions
+    if (window.transactionCache && window.transactionCache[symbol]) {
+        return window.transactionCache[symbol];
+    }
+    
+    // Initialize cache if needed
+    if (!window.transactionCache) {
+        window.transactionCache = {};
+    }
+    
+    // Parse transactions from DOM
+    const transactions = [];
+    transactionItems.forEach(item => {
+        // Parse transaction details from text
+        // Format example: "BUY - 0.001 BTC at $40000.00 - 2023-01-01 12:00"
+        const text = item.textContent;
+        const type = item.classList.contains('buy') ? 'BUY' : 'SELL';
+        
+        // Extract price using regex
+        const priceMatch = text.match(/at \$([0-9,.]+)/);
+        const price = priceMatch ? priceMatch[1].replace(/,/g, '') : null;
+        
+        // Extract quantity using regex
+        const qtyMatch = text.match(/([0-9.]+) [A-Z]+/);
+        const quantity = qtyMatch ? qtyMatch[1] : null;
+        
+        // Approximate timestamp (we don't need exact timestamps for this purpose)
+        const timestamp = new Date().toISOString();
+        
+        if (price && quantity) {
+            transactions.push({
+                type,
+                price,
+                quantity,
+                timestamp
+            });
+        }
+    });
+    
+    // Cache the parsed transactions
+    window.transactionCache[symbol] = transactions;
+    
+    return transactions;
+}
+
+// Trigger a sell all operation
+function triggerSellAll(symbol) {
+    // Abort if already processing
+    if (uiState.isProcessing[symbol]) {
+        return;
+    }
+    
+    // Get UI elements
+    const sellButton = document.getElementById(`${symbol}-sell-all`);
+    
+    // Set processing state
+    uiState.isProcessing[symbol] = true;
+    
+    // Update UI
+    if (sellButton) {
+        sellButton.classList.add('disabled');
+        sellButton.textContent = 'Auto-Selling...';
+    }
+    
+    // Log the action
+    console.log(`Auto-executing sell for ${symbol.toUpperCase()} based on 5% profit threshold`);
+    
+    // Execute the sell order
+    Connections.executeSellOrder(symbol);
+}
+
+// Trigger a buy more operation
+function triggerBuyMore(symbol) {
+    // Abort if already processing
+    if (uiState.isProcessing[symbol]) {
+        return;
+    }
+    
+    // Get UI elements
+    const buyButton = document.getElementById(`${symbol}-first-purchase`);
+    
+    // Use the standard amount for additional purchases ($50)
+    const additionalPurchaseAmount = 50;
+    
+    // Set processing state
+    uiState.isProcessing[symbol] = true;
+    
+    // Update UI
+    if (buyButton) {
+        buyButton.classList.add('disabled');
+        buyButton.textContent = 'Auto-Buying...';
+    }
+    
+    // Log the action
+    console.log(`Auto-executing buy for ${symbol.toUpperCase()} based on 5% dip threshold - Amount: ${additionalPurchaseAmount}`);
+    
+    // Execute buy order with fixed additional amount ($50)
+    Connections.executeBuyOrder(symbol, additionalPurchaseAmount);
 }
 
 // Update profit/loss display
@@ -479,11 +677,31 @@ function handleFirstPurchaseResult(result) {
         return;
     }
     
-    // For now, we'll reset all processing flags for simplicity
-    CONFIG.cryptos.forEach(crypto => {
-        uiState.isProcessing[crypto.symbol] = false;
-        resetButtonStates(crypto.symbol);
-    });
+    // Extract symbol from result if available, otherwise reset all
+    let symbolToReset = null;
+    if (result.symbol) {
+        symbolToReset = result.symbol.replace('USDT', '').toLowerCase();
+    }
+    
+    if (symbolToReset) {
+        // Reset only the specific symbol
+        uiState.isProcessing[symbolToReset] = false;
+        resetButtonStates(symbolToReset);
+        
+        // Clear transaction cache for this symbol
+        if (window.transactionCache && window.transactionCache[symbolToReset]) {
+            delete window.transactionCache[symbolToReset];
+        }
+        
+        // Request updated transaction data
+        Connections.requestTransactions(symbolToReset);
+    } else {
+        // For now, we'll reset all processing flags for simplicity
+        CONFIG.cryptos.forEach(crypto => {
+            uiState.isProcessing[crypto.symbol] = false;
+            resetButtonStates(crypto.symbol);
+        });
+    }
     
     // Show appropriate message
     if (result.success) {
@@ -501,17 +719,125 @@ function handleSellAllResult(result) {
         return;
     }
     
-    // For now, we'll reset all processing flags for simplicity
-    CONFIG.cryptos.forEach(crypto => {
-        uiState.isProcessing[crypto.symbol] = false;
-        resetButtonStates(crypto.symbol);
-    });
+    // Extract symbol from result if available, otherwise reset all
+    let symbolToReset = null;
+    if (result.symbol) {
+        symbolToReset = result.symbol.replace('USDT', '').toLowerCase();
+    }
+    
+    if (symbolToReset) {
+        // Reset only the specific symbol
+        uiState.isProcessing[symbolToReset] = false;
+        resetButtonStates(symbolToReset);
+        
+        // Clear transaction cache for this symbol
+        if (window.transactionCache && window.transactionCache[symbolToReset]) {
+            delete window.transactionCache[symbolToReset];
+        }
+        
+        // Request updated transaction data
+        Connections.requestTransactions(symbolToReset);
+    } else {
+        // For now, we'll reset all processing flags for simplicity
+        CONFIG.cryptos.forEach(crypto => {
+            uiState.isProcessing[crypto.symbol] = false;
+            resetButtonStates(crypto.symbol);
+        });
+    }
     
     // Show appropriate message
     if (result.success) {
         console.log('Sell all successful');
     } else {
         alert(`Sell failed: ${result.error || 'Unknown error'}`);
+    }
+}
+
+// Handle buy result (for both manual and automatic buys)
+function handleBuyResult(result) {
+    if (!result) {
+        console.warn('Invalid buy result:', result);
+        return;
+    }
+    
+    // Extract symbol if available
+    let symbolToUpdate = null;
+    if (result.symbol) {
+        symbolToUpdate = result.symbol.replace('USDT', '').toLowerCase();
+    } else if (result.newBalance !== undefined) {
+        // Try to determine symbol from other fields if possible
+        // This would need adaptation based on your API response format
+    }
+    
+    // Reset processing state if we have a symbol
+    if (symbolToUpdate) {
+        uiState.isProcessing[symbolToUpdate] = false;
+        resetButtonStates(symbolToUpdate);
+        
+        // Clear transaction cache for this symbol
+        if (window.transactionCache && window.transactionCache[symbolToUpdate]) {
+            delete window.transactionCache[symbolToUpdate];
+        }
+        
+        // Request updated data
+        Connections.requestTransactions(symbolToUpdate);
+    } else {
+        // Reset all if we can't determine the specific symbol
+        CONFIG.cryptos.forEach(crypto => {
+            uiState.isProcessing[crypto.symbol] = false;
+            resetButtonStates(crypto.symbol);
+        });
+    }
+    
+    // Log result
+    if (result.success) {
+        console.log('Buy operation successful');
+    } else {
+        console.error('Buy operation failed:', result.error || 'Unknown error');
+    }
+}
+
+// Handle sell result (for both manual and automatic sells)
+function handleSellResult(result) {
+    if (!result) {
+        console.warn('Invalid sell result:', result);
+        return;
+    }
+    
+    // Extract symbol if available
+    let symbolToUpdate = null;
+    if (result.symbol) {
+        symbolToUpdate = result.symbol.replace('USDT', '').toLowerCase();
+    } else if (result.newBalance !== undefined) {
+        // Try to determine symbol from other fields if possible
+        // This would need adaptation based on your API response format
+    }
+    
+    // Reset processing state if we have a symbol
+    if (symbolToUpdate) {
+        uiState.isProcessing[symbolToUpdate] = false;
+        resetButtonStates(symbolToUpdate);
+        
+        // Clear transaction cache for this symbol
+        if (window.transactionCache && window.transactionCache[symbolToUpdate]) {
+            delete window.transactionCache[symbolToUpdate];
+        }
+        
+        // Request updated data
+        Connections.requestTransactions(symbolToUpdate);
+    } else {
+        // Reset all if we can't determine the specific symbol
+        CONFIG.cryptos.forEach(crypto => {
+            uiState.isProcessing[crypto.symbol] = false;
+            resetButtonStates(crypto.symbol);
+        });
+    }
+    
+    // Log result
+    if (result.success) {
+        console.log('Sell operation successful');
+    } else {
+        console.error('Sell operation failed:', result.error || 'Unknown error');
     }
 }
 
