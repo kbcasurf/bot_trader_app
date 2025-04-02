@@ -8,8 +8,8 @@
 
 :root {
     /* Light theme variables */
-    --bg-color: #f5f8fa;
-    --card-bg: #ffffff;
+    --bg-color: #bccdd8;
+    --card-bg: #9cbdd1;
     --text-color: #333333;
     --header-color: #2c3e50;
     --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
