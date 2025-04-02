@@ -131,8 +131,11 @@ function configureCryptoCard(card, crypto) {
         const img = headerLeft.querySelector('img');
         const heading = headerLeft.querySelector('h3');
         
-        if (img) img.src = crypto.image;
-        if (img) img.alt = crypto.name;
+        if (img) {
+            // Use absolute paths for images to ensure they load correctly
+            img.src = `/images/${crypto.symbol}.svg`;
+            img.alt = crypto.name;
+        }
         if (heading) heading.textContent = `${crypto.symbol.toUpperCase()}/USDT`;
     }
     

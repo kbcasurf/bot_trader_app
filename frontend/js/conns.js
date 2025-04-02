@@ -26,9 +26,10 @@ document.addEventListener('DOMContentLoaded', () => {
 // Create and configure socket connection
 const socket = io({
     transports: ['websocket', 'polling'],
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    timeout: 30000,
+    reconnectionAttempts: 15,
+    reconnectionDelay: 2000,
+    reconnectionDelayMax: 10000,
+    timeout: 60000,
     autoConnect: true,
     forceNew: true
 });
@@ -68,6 +69,7 @@ const systemStatus = {
     telegram: false,
     websocket: false,
     lastBackendResponse: Date.now(),
+    reconnectAttempts: 0,
     lastPriceUpdates: {
         btc: 0,
         sol: 0,
@@ -81,12 +83,14 @@ const systemStatus = {
 // Interval references for monitoring
 let connectionMonitorInterval = null;
 let priceMonitorInterval = null;
+let reconnectTimeout = null;
 
 // Initialize monitoring of connections and price updates
 function initializeMonitoring() {
     // Clear any existing intervals first
     if (connectionMonitorInterval) clearInterval(connectionMonitorInterval);
     if (priceMonitorInterval) clearInterval(priceMonitorInterval);
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
     
     // Monitor backend connection health every 10 seconds
     connectionMonitorInterval = setInterval(() => {
@@ -100,19 +104,31 @@ function initializeMonitoring() {
             // If socket claims to be connected, test with a ping
             if (socket.connected) {
                 console.log('Testing connection with ping...');
-                socket.emit('get-system-status');
+                socket.emit('ping', { timestamp: Date.now() }, (response) => {
+                    if (response && response.pong) {
+                        console.log('Ping successful, connection is alive');
+                        systemStatus.lastBackendResponse = Date.now();
+                        updateConnectionStatus(true);
+                    } else {
+                        console.error('Ping failed, trying to reconnect');
+                        socket.disconnect();
+                        scheduleReconnect();
+                    }
+                });
                 
-                // Give it 2 seconds to respond
+                // Give it 5 seconds to respond
                 setTimeout(() => {
                     const newTimeSinceResponse = Date.now() - systemStatus.lastBackendResponse;
-                    if (newTimeSinceResponse > 12000) {
+                    if (newTimeSinceResponse > 15000) {
                         console.error('Connection test failed - marking backend as disconnected');
                         updateConnectionStatus(false);
+                        socket.disconnect();
+                        scheduleReconnect();
                     }
-                }, 2000);
+                }, 5000);
             } else {
-                // Socket knows it's disconnected
-                updateConnectionStatus(false);
+                // Socket knows it's disconnected, try to reconnect
+                scheduleReconnect();
             }
         }
     }, 10000);
@@ -140,6 +156,39 @@ function initializeMonitoring() {
             triggerCallbacks('websocket-status', { connected: anyRecentPriceUpdates });
         }
     }, 5000);
+}
+
+// Schedule a reconnection attempt with exponential backoff
+function scheduleReconnect() {
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+    }
+    
+    // Calculate backoff delay
+    const baseDelay = 2000; // 2 seconds base
+    const maxDelay = 60000; // Maximum 60 seconds
+    systemStatus.reconnectAttempts += 1;
+    
+    // Calculate delay with exponential backoff and some randomization
+    let delay = Math.min(baseDelay * Math.pow(1.5, Math.min(systemStatus.reconnectAttempts, 10)), maxDelay);
+    delay = delay * (0.8 + Math.random() * 0.4); // Add 20% randomization
+    
+    console.log(`Scheduling reconnection attempt ${systemStatus.reconnectAttempts} in ${Math.round(delay / 1000)} seconds`);
+    
+    reconnectTimeout = setTimeout(() => {
+        console.log('Attempting to reconnect...');
+        
+        // If reconnect succeeds, this will trigger the 'connect' event
+        // which will reset reconnectAttempts
+        if (socket.disconnected) {
+            try {
+                socket.connect();
+            } catch (error) {
+                console.error('Error during reconnect attempt:', error);
+                scheduleReconnect(); // Try again
+            }
+        }
+    }, delay);
 }
 
 // Update connection status
@@ -209,7 +258,9 @@ function requestSystemStatus() {
 
 // Request transactions for a specific symbol
 function requestTransactions(symbol) {
-    socket.emit('get-transactions', { symbol: symbol + 'USDT' });
+    // Ensure symbol is properly formatted for Binance API (uppercase)
+    const formattedSymbol = formatSymbol(symbol);
+    socket.emit('get-transactions', { symbol: formattedSymbol });
 }
 
 // Request account info
@@ -224,17 +275,33 @@ function testBinanceStream() {
 
 // Execute buy order
 function executeBuyOrder(symbol, amount) {
+    // Ensure symbol is properly formatted for Binance API (uppercase)
+    const formattedSymbol = formatSymbol(symbol);
     socket.emit('first-purchase', {
-        symbol: symbol + 'USDT',
+        symbol: formattedSymbol,
         investment: amount
     });
 }
 
 // Execute sell order
 function executeSellOrder(symbol) {
+    // Ensure symbol is properly formatted for Binance API (uppercase)
+    const formattedSymbol = formatSymbol(symbol);
     socket.emit('sell-all', {
-        symbol: symbol + 'USDT'
+        symbol: formattedSymbol
     });
+}
+
+// Helper function to ensure proper symbol format for Binance API
+function formatSymbol(symbol) {
+    // Extract base symbol without USDT
+    let baseSymbol = symbol;
+    if (symbol.toUpperCase().endsWith('USDT')) {
+        baseSymbol = symbol.slice(0, -4);
+    }
+    
+    // Return in proper format: uppercase base symbol + uppercase USDT
+    return baseSymbol.toUpperCase() + 'USDT';
 }
 
 // Function to get current system status
@@ -248,6 +315,9 @@ function initializeSocketListeners() {
     socket.on('connect', () => {
         console.log('Socket connected successfully with ID:', socket.id);
         
+        // Reset reconnect counter
+        systemStatus.reconnectAttempts = 0;
+        
         // Mark response received
         systemStatus.lastBackendResponse = Date.now();
         
@@ -256,6 +326,9 @@ function initializeSocketListeners() {
         
         // Trigger any registered connect callbacks
         triggerCallbacks('connect');
+        
+        // Update connection status
+        updateConnectionStatus(true);
     });
     
     socket.on('disconnect', (reason) => {
@@ -263,6 +336,9 @@ function initializeSocketListeners() {
         
         // Update system status
         updateConnectionStatus(false);
+        
+        // Schedule reconnection
+        scheduleReconnect();
         
         // Trigger any registered disconnect callbacks
         triggerCallbacks('disconnect', reason);
@@ -281,7 +357,9 @@ function initializeSocketListeners() {
         if (socket.io.opts.transports[0] === 'websocket') {
             console.log('WebSocket connection failed, falling back to polling');
             socket.io.opts.transports = ['polling', 'websocket'];
-            socket.connect();
+            
+            // Schedule reconnection
+            scheduleReconnect();
         }
     });
     
@@ -426,6 +504,12 @@ function initializeSocketListeners() {
     socket.on('sell-all-result', (result) => {
         systemStatus.lastBackendResponse = Date.now();
         triggerCallbacks('sell-all-result', result);
+    });
+    
+    // Ping/pong for connection health check
+    socket.on('pong', (data) => {
+        systemStatus.lastBackendResponse = Date.now();
+        console.log('Received pong response:', data);
     });
     
     // Heartbeat events to keep connection alive

@@ -11,6 +11,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
       - ./.env:/app/.env
+      # Explicitly map the images directory to ensure it's accessible
+      - ./frontend/images:/app/images
     environment:
       - NODE_ENV=development
       - VITE_BACKEND_URL=http://backend:3000  # Add explicit backend URL

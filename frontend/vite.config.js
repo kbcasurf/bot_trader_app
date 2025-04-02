@@ -47,8 +47,14 @@ export default {
           vendor: ['socket.io-client'],
           // Create a separate chunk for the application code
           app: ['./js/conns.js', './js/dashboard.js']
-        }
+        },
+        // Ensure assets are handled correctly
+        assetFileNames: 'assets/[name]-[hash][extname]',
       }
-    }
-  }
+    },
+    // Make sure assets are copied to the dist folder
+    assetsInclude: ['**/*.svg', '**/*.png', '**/*.jpg', '**/*.jpeg', '**/*.gif'],
+  },
+  // Explicitly specify public directory for static assets
+  publicDir: 'images'
 }
