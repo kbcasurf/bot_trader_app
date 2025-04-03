@@ -2,7 +2,7 @@
 // Responsible for backend communication, WebSocket connections and data flow
 
 // Import socket.io client
-import { io } from 'socket.io-client';
+const { io } = require('socket.io-client');
 
 // Self-initialization when script is loaded
 let isInitialized = false;
