@@ -12,8 +12,15 @@ const tradingEngine = require('./js/trading-engine');
 // Load environment variables
 dotenv.config({ path: '/app/.env' });
 
+// Initialize Express app
+const app = express();
+// Create HTTP server - THIS NEEDS TO HAPPEN BEFORE TRYING TO USE THE SERVER VARIABLE
+const server = http.createServer(app);
+
+// PORT variable needs to be defined
+const PORT = process.env.PORT || 3000;
+
 // Start the server
-const PORT = process.env.PORT;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     
@@ -32,43 +39,6 @@ server.listen(PORT, () => {
         setupHeartbeat();
     })();
 });
-
-// Handle graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('Shutting down server...');
-    
-    // Disconnect all WebSockets
-    try {
-        await binanceAPI.closeAllConnections();
-        console.log('All WebSocket connections closed');
-    } catch (error) {
-        console.error('Error closing WebSocket connections:', error);
-    }
-    
-    // Close database pool
-    try {
-        await pool.end();
-        console.log('Database pool closed');
-    } catch (error) {
-        console.error('Error closing database pool:', error);
-    }
-    
-    // Close server
-    server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
-    });
-    
-    // Force exit after 5 seconds if server doesn't close properly
-    setTimeout(() => {
-        console.error('Forcing server shutdown after timeout');
-        process.exit(1);
-    }, 5000);
-});
-// Initialize Express app
-const app = express();
-// Create HTTP server - THIS NEEDS TO HAPPEN BEFORE TRYING TO USE THE SERVER VARIABLE
-const server = http.createServer(app);
 
 // Initialize Socket.io with proper CORS settings
 const io = socketIo(server, {
@@ -1048,4 +1018,37 @@ io.on('connection', (socket) => {
             tradingEngine.processPriceUpdate(io, data.symbol, data.price);
         }
     });
+});
+
+// Handle graceful shutdown
+process.on('SIGINT', async () => {
+    console.log('Shutting down server...');
+    
+    // Disconnect all WebSockets
+    try {
+        await binanceAPI.closeAllConnections();
+        console.log('All WebSocket connections closed');
+    } catch (error) {
+        console.error('Error closing WebSocket connections:', error);
+    }
+    
+    // Close database pool
+    try {
+        await pool.end();
+        console.log('Database pool closed');
+    } catch (error) {
+        console.error('Error closing database pool:', error);
+    }
+    
+    // Close server
+    server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+    });
+    
+    // Force exit after 5 seconds if server doesn't close properly
+    setTimeout(() => {
+        console.error('Forcing server shutdown after timeout');
+        process.exit(1);
+    }, 5000);
 });

@@ -7,9 +7,9 @@ dotenv.config({ path: '/app/.env' });
 
 // Trading thresholds
 const TRADING_CONFIG = {
-    PROFIT_THRESHOLD: parseFloat(process.env.PROFIT_THRESHOLD) || 5, // Percentage profit target
-    LOSS_THRESHOLD: parseFloat(process.env.LOSS_THRESHOLD) || 5,     // Percentage loss threshold for additional purchases
-    ADDITIONAL_PURCHASE_AMOUNT: parseFloat(process.env.ADDITIONAL_PURCHASE_AMOUNT) || 50 // Amount in USDT for additional purchases
+    PROFIT_THRESHOLD: parseFloat(process.env.PROFIT_THRESHOLD), // Percentage profit target
+    LOSS_THRESHOLD: parseFloat(process.env.LOSS_THRESHOLD),     // Percentage loss threshold for additional purchases
+    ADDITIONAL_PURCHASE_AMOUNT: parseFloat(process.env.ADDITIONAL_PURCHASE_AMOUNT)// Amount in USDT for additional purchases
 };
 
 // Module dependencies - will be injected at runtime

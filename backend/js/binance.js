@@ -108,43 +108,6 @@ function getWebSocketStatus() {
 
 
 
-/* 
-// Renew WebSocket connection manually
-function renewWebSocketConnection(io) {
-    if (!wsInstance) {
-        console.log('No active WebSocket connection to renew');
-        return false;
-    }
-    
-    console.log('Manually renewing WebSocket connection');
-    
-    // Start polling as fallback during renewal
-    startPolling(wsState.activeSymbols, io);
-    
-    // Reset reconnect attempt counter
-    wsState.reconnectAttempt = 0;
-    wsState.isReconnecting = false;
-    
-    // Close the connection (will trigger reconnect)
-    if (wsInstance.readyState === WebSocket.OPEN) {
-        wsInstance.close(1000, "Manual renewal requested");
-    } else {
-        // If not open, clean up and reconnect manually
-        cleanupWebSocket(wsInstance);
-        wsInstance = null;
-        
-        // Reset state and initiate new connection
-        setTimeout(() => {
-            connectToWebSocket(wsState.activeSymbols, io);
-        }, 1000);
-    }
-    
-    return true;
-} */
-
-
-
-
 // Test Binance API connection
 async function testConnection() {
     try {
