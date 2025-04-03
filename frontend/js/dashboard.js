@@ -21,8 +21,8 @@ const CONFIG = {
     defaultPreset: 1, // Index of default preset (100)
     
     // Profit/Loss thresholds for color changes
-    profitThreshold: 5, // Percentage where the profit bar maxes out (green)
-    lossThreshold: -5, // Percentage where the loss bar maxes out (red)
+    profitThreshold: 100, // Percentage where the profit bar maxes out (green)
+    lossThreshold: -100, // Percentage where the loss bar maxes out (red)
     
     // Auto-refresh interval in milliseconds
     refreshInterval: 30000 // 30 seconds
@@ -161,11 +161,11 @@ function configureCryptoCard(card, crypto) {
         thresholdsElement.className = 'trade-thresholds';
         thresholdsElement.innerHTML = `
             <div class="threshold buy">
-                <span class="label">Next Buy at:</span>
+                <span class="label">Buy:</span>
                 <span class="value" id="${crypto.symbol}-next-buy-price">$0.00</span>
             </div>
             <div class="threshold sell">
-                <span class="label">Sell All at:</span>
+                <span class="label">Sell:</span>
                 <span class="value" id="${crypto.symbol}-sell-price">$0.00</span>
             </div>
         `;
@@ -180,10 +180,10 @@ function configureCryptoCard(card, crypto) {
     uiState.profitLoss[crypto.symbol] = 0;
     uiState.investments[crypto.symbol] = CONFIG.presets[CONFIG.defaultPreset];
     uiState.isProcessing[crypto.symbol] = false;
-    uiState.thresholds[crypto.symbol] = {
+/*     uiState.thresholds[crypto.symbol] = {
         nextBuy: 0,
         nextSell: 0
-    };
+    }; */
     uiState.initialPrices[crypto.symbol] = 0;
     uiState.lastBuyPrices[crypto.symbol] = 0;
     
