@@ -648,7 +648,7 @@ console.log('Connection module resources cleaned up');
 window.addEventListener('beforeunload', cleanup);
 
 // Export public API
-export {
+module.exports = {
 initialize,
 on,
 off,
