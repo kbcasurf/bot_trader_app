@@ -36,14 +36,9 @@ const uiState = {
     investments: {}, // Selected investment amounts
     isProcessing: {}, // Flags for operations in progress
     isDarkMode: false, // Theme state
-    lastBuyPrices: {}, // Tracks the last purchase price for each crypto
-    initialPrices: {}, // Tracks the initial purchase price for each crypto
-    autoBuyEnabled: true, // Flag to enable/disable automatic buying
-    autoSellEnabled: true, // Flag to enable/disable automatic selling
-    tradingThresholds: {
-        buy: -5, // Buy when price drops this percentage from last purchase
-        sell: 5  // Sell when price rises this percentage from initial purchase
-    }
+    thresholds: {}, // Will store next buy/sell threshold prices
+    initialPrices: {}, // Will store initial purchase prices
+    lastBuyPrices: {}, // Will store last purchase prices
 };
 
 // Interval reference for periodic refreshes
@@ -158,12 +153,39 @@ function configureCryptoCard(card, crypto) {
     if (historyList) historyList.id = `${crypto.symbol}-history`;
     if (sellButton) sellButton.id = `${crypto.symbol}-sell-all`;
     
+    // Add threshold price display after holdings
+    const holdingsElement2 = card.querySelector('.holdings');
+    if (holdingsElement2) {
+        // Create thresholds element
+        const thresholdsElement = document.createElement('div');
+        thresholdsElement.className = 'trade-thresholds';
+        thresholdsElement.innerHTML = `
+            <div class="threshold buy">
+                <span class="label">Next Buy at:</span>
+                <span class="value" id="${crypto.symbol}-next-buy-price">$0.00</span>
+            </div>
+            <div class="threshold sell">
+                <span class="label">Sell All at:</span>
+                <span class="value" id="${crypto.symbol}-sell-price">$0.00</span>
+            </div>
+        `;
+        
+        // Insert after holdings
+        holdingsElement2.parentNode.insertBefore(thresholdsElement, holdingsElement2.nextSibling);
+    }
+    
     // Update state tracking
     uiState.prices[crypto.symbol] = 0;
     uiState.holdings[crypto.symbol] = 0;
     uiState.profitLoss[crypto.symbol] = 0;
     uiState.investments[crypto.symbol] = CONFIG.presets[CONFIG.defaultPreset];
     uiState.isProcessing[crypto.symbol] = false;
+    uiState.thresholds[crypto.symbol] = {
+        nextBuy: 0,
+        nextSell: 0
+    };
+    uiState.initialPrices[crypto.symbol] = 0;
+    uiState.lastBuyPrices[crypto.symbol] = 0;
     
     // Set up event handlers for the preset buttons
     const presetButtons = card.querySelectorAll('.slider-presets .preset-btn');
@@ -359,6 +381,9 @@ function updatePrice(data) {
         priceElement.textContent = `Price: $${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
     
+    // Update threshold display with new price
+    updateThresholdDisplay(symbol);
+    
     // Update profit/loss if we have holdings
     updateProfitLoss(symbol);
 }
@@ -398,21 +423,47 @@ function updateTransactions(data) {
         const item = document.createElement('li');
         item.className = transaction.type.toLowerCase();
         
+        // Add automated class if transaction was automated
+        if (transaction.automated) {
+            item.classList.add('automated');
+        }
+        
         // Format date
         const date = new Date(transaction.timestamp);
         const formattedDate = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
         
         // Format transaction details
-        item.textContent = `${transaction.type} - ${transaction.quantity} ${symbol.toUpperCase()} at ${parseFloat(transaction.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} - ${formattedDate}`;
+        item.textContent = `${transaction.type} - ${parseFloat(transaction.quantity).toLocaleString(undefined, { 
+            minimumFractionDigits: 8, 
+            maximumFractionDigits: 8 
+        })} ${symbol.toUpperCase()} at $${parseFloat(transaction.price).toLocaleString(undefined, { 
+            minimumFractionDigits: 2, 
+            maximumFractionDigits: 2 
+        })} - ${formattedDate}`;
         
         // Store the transaction data as a data attribute for easier retrieval
         item.dataset.type = transaction.type;
         item.dataset.price = transaction.price;
         item.dataset.quantity = transaction.quantity;
         item.dataset.timestamp = transaction.timestamp;
+        item.dataset.automated = transaction.automated ? 'true' : 'false';
         
         historyList.appendChild(item);
     });
+    
+    // Update reference prices if provided
+    if (data.refPrices) {
+        uiState.thresholds[symbol] = {
+            nextBuy: parseFloat(data.refPrices.next_buy_threshold) || 0,
+            nextSell: parseFloat(data.refPrices.next_sell_threshold) || 0
+        };
+        
+        uiState.initialPrices[symbol] = parseFloat(data.refPrices.initial_purchase_price) || 0;
+        uiState.lastBuyPrices[symbol] = parseFloat(data.refPrices.last_purchase_price) || 0;
+        
+        // Update threshold display
+        updateThresholdDisplay(symbol);
+    }
     
     // Clear any cached transaction data for this symbol
     if (window.transactionCache && window.transactionCache[symbol]) {
@@ -440,6 +491,22 @@ function updateHoldings(data) {
     const amount = parseFloat(data.amount) || 0;
     const profitLossPercent = parseFloat(data.profitLossPercent) || 0;
     
+    // Update threshold prices if provided
+    if (data.nextBuyThreshold !== undefined) {
+        uiState.thresholds[symbol] = {
+            nextBuy: parseFloat(data.nextBuyThreshold) || 0,
+            nextSell: parseFloat(data.nextSellThreshold) || 0
+        };
+    }
+    
+    if (data.initialPrice !== undefined) {
+        uiState.initialPrices[symbol] = parseFloat(data.initialPrice) || 0;
+    }
+    
+    if (data.lastBuyPrice !== undefined) {
+        uiState.lastBuyPrices[symbol] = parseFloat(data.lastBuyPrice) || 0;
+    }
+    
     // Update state
     uiState.holdings[symbol] = amount;
     uiState.profitLoss[symbol] = profitLossPercent;
@@ -449,6 +516,9 @@ function updateHoldings(data) {
     if (holdingsElement) {
         holdingsElement.textContent = `${amount.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 })} ${symbol.toUpperCase()}`;
     }
+    
+    // Update threshold prices display
+    updateThresholdDisplay(symbol);
     
     // Update profit/loss display
     updateProfitLossDisplay(symbol, profitLossPercent);
@@ -460,10 +530,53 @@ function updateHoldings(data) {
     resetButtonStates(symbol);
 }
 
+// Update threshold display
+function updateThresholdDisplay(symbol) {
+    const nextBuyElement = document.getElementById(`${symbol}-next-buy-price`);
+    const nextSellElement = document.getElementById(`${symbol}-sell-price`);
+    
+    if (!nextBuyElement || !nextSellElement) {
+        return;
+    }
+    
+    const thresholds = uiState.thresholds[symbol] || { nextBuy: 0, nextSell: 0 };
+    const currentPrice = uiState.prices[symbol] || 0;
+    
+    // Update next buy price
+    if (thresholds.nextBuy > 0) {
+        nextBuyElement.textContent = `$${thresholds.nextBuy.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        
+        // Add visual indicator if price is close to buy threshold
+        if (currentPrice <= thresholds.nextBuy * 1.01) {
+            nextBuyElement.classList.add('imminent');
+        } else {
+            nextBuyElement.classList.remove('imminent');
+        }
+    } else {
+        nextBuyElement.textContent = 'N/A';
+        nextBuyElement.classList.remove('imminent');
+    }
+    
+    // Update sell price
+    if (thresholds.nextSell > 0) {
+        nextSellElement.textContent = `$${thresholds.nextSell.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        
+        // Add visual indicator if price is close to sell threshold
+        if (currentPrice >= thresholds.nextSell * 0.99) {
+            nextSellElement.classList.add('imminent');
+        } else {
+            nextSellElement.classList.remove('imminent');
+        }
+    } else {
+        nextSellElement.textContent = 'N/A';
+        nextSellElement.classList.remove('imminent');
+    }
+}
+
 // Update profit/loss and trigger trading decisions
 function updateProfitLoss(symbol) {
     // Skip if we don't have both price and holdings
-    if (!uiState.prices[symbol] || !uiState.holdings[symbol] === undefined) {
+    if (!uiState.prices[symbol] || uiState.holdings[symbol] === undefined) {
         return;
     }
     
@@ -494,43 +607,16 @@ function updateProfitLoss(symbol) {
     // Calculate profit/loss percentage from initial price
     const profitLossPercent = ((currentPrice - initialPrice) / initialPrice) * 100;
     
-    // Calculate percentage change from last purchase
-    const percentFromLastPurchase = ((currentPrice - lastPurchasePrice) / lastPurchasePrice) * 100;
-    
     // Store profit/loss percentage in state
     uiState.profitLoss[symbol] = profitLossPercent;
     
     // Update the display
     updateProfitLossDisplay(symbol, profitLossPercent);
-    
-    // Check if we need to take action (only if not currently processing)
-    if (uiState.isProcessing[symbol]) {
-        return;
-    }
-    
-    // TRADING AUTOMATION LOGIC
-    
-    // If price is 5% above initial purchase price, sell all holdings
-    if (profitLossPercent >= 5) {
-        console.log(`${symbol.toUpperCase()}: Price is 5% above initial purchase. Triggering sell.`);
-        // Only sell if we have holdings
-        if (uiState.holdings[symbol] > 0) {
-            triggerSellAll(symbol);
-        }
-    }
-    // If price is 5% below last purchase price, buy more
-    else if (percentFromLastPurchase <= -5) {
-        console.log(`${symbol.toUpperCase()}: Price is 5% below last purchase. Triggering buy.`);
-        triggerBuyMore(symbol);
-    }
 }
 
 // Get transactions for a specific symbol
 function getTransactionsForSymbol(symbol) {
     // Look for transactions in data we have
-    // Note: This function assumes transactions are stored in the DOM or a global cache
-    // You might need to adapt this based on how you're storing transaction data
-    
     const historyList = document.getElementById(`${symbol}-history`);
     
     // If we don't have transactions in the DOM, we have none to process
@@ -539,8 +625,6 @@ function getTransactionsForSymbol(symbol) {
     }
     
     // Parse transaction history from DOM if needed
-    // For now, we'll use a mock implementation
-    // In a real implementation, you'd want to store this data properly
     const transactionItems = historyList.querySelectorAll('li:not(.no-transactions)');
     
     // Check if we've already parsed the transactions
@@ -556,28 +640,21 @@ function getTransactionsForSymbol(symbol) {
     // Parse transactions from DOM
     const transactions = [];
     transactionItems.forEach(item => {
-        // Parse transaction details from text
-        // Format example: "BUY - 0.001 BTC at $40000.00 - 2023-01-01 12:00"
-        const text = item.textContent;
         const type = item.classList.contains('buy') ? 'BUY' : 'SELL';
         
-        // Extract price using regex
-        const priceMatch = text.match(/at \$([0-9,.]+)/);
-        const price = priceMatch ? priceMatch[1].replace(/,/g, '') : null;
-        
-        // Extract quantity using regex
-        const qtyMatch = text.match(/([0-9.]+) [A-Z]+/);
-        const quantity = qtyMatch ? qtyMatch[1] : null;
-        
-        // Approximate timestamp (we don't need exact timestamps for this purpose)
-        const timestamp = new Date().toISOString();
+        // Extract price using data attributes
+        const price = item.dataset.price || null;
+        const quantity = item.dataset.quantity || null;
+        const timestamp = item.dataset.timestamp || new Date().toISOString();
+        const automated = item.dataset.automated === 'true';
         
         if (price && quantity) {
             transactions.push({
                 type,
                 price,
                 quantity,
-                timestamp
+                timestamp,
+                automated
             });
         }
     });
@@ -586,61 +663,6 @@ function getTransactionsForSymbol(symbol) {
     window.transactionCache[symbol] = transactions;
     
     return transactions;
-}
-
-// Trigger a sell all operation
-function triggerSellAll(symbol) {
-    // Abort if already processing
-    if (uiState.isProcessing[symbol]) {
-        return;
-    }
-    
-    // Get UI elements
-    const sellButton = document.getElementById(`${symbol}-sell-all`);
-    
-    // Set processing state
-    uiState.isProcessing[symbol] = true;
-    
-    // Update UI
-    if (sellButton) {
-        sellButton.classList.add('disabled');
-        sellButton.textContent = 'Auto-Selling...';
-    }
-    
-    // Log the action
-    console.log(`Auto-executing sell for ${symbol.toUpperCase()} based on 5% profit threshold`);
-    
-    // Execute the sell order
-    Connections.executeSellOrder(symbol);
-}
-
-// Trigger a buy more operation
-function triggerBuyMore(symbol) {
-    // Abort if already processing
-    if (uiState.isProcessing[symbol]) {
-        return;
-    }
-    
-    // Get UI elements
-    const buyButton = document.getElementById(`${symbol}-first-purchase`);
-    
-    // Use the standard amount for additional purchases ($50)
-    const additionalPurchaseAmount = 50;
-    
-    // Set processing state
-    uiState.isProcessing[symbol] = true;
-    
-    // Update UI
-    if (buyButton) {
-        buyButton.classList.add('disabled');
-        buyButton.textContent = 'Auto-Buying...';
-    }
-    
-    // Log the action
-    console.log(`Auto-executing buy for ${symbol.toUpperCase()} based on 5% dip threshold - Amount: ${additionalPurchaseAmount}`);
-    
-    // Execute buy order with fixed additional amount ($50)
-    Connections.executeBuyOrder(symbol, additionalPurchaseAmount);
 }
 
 // Update profit/loss display
@@ -699,7 +721,7 @@ function handleFirstPurchaseResult(result) {
         // Request updated transaction data
         Connections.requestTransactions(symbolToReset);
     } else {
-        // For now, we'll reset all processing flags for simplicity
+        // Reset all processing flags for simplicity
         CONFIG.cryptos.forEach(crypto => {
             uiState.isProcessing[crypto.symbol] = false;
             resetButtonStates(crypto.symbol);
@@ -741,7 +763,7 @@ function handleSellAllResult(result) {
         // Request updated transaction data
         Connections.requestTransactions(symbolToReset);
     } else {
-        // For now, we'll reset all processing flags for simplicity
+        // Reset all processing flags for simplicity
         CONFIG.cryptos.forEach(crypto => {
             uiState.isProcessing[crypto.symbol] = false;
             resetButtonStates(crypto.symbol);
@@ -753,94 +775,6 @@ function handleSellAllResult(result) {
         console.log('Sell all successful');
     } else {
         alert(`Sell failed: ${result.error || 'Unknown error'}`);
-    }
-}
-
-// Handle buy result (for both manual and automatic buys)
-function handleBuyResult(result) {
-    if (!result) {
-        console.warn('Invalid buy result:', result);
-        return;
-    }
-    
-    // Extract symbol if available
-    let symbolToUpdate = null;
-    if (result.symbol) {
-        symbolToUpdate = result.symbol.replace('USDT', '').toLowerCase();
-    } else if (result.newBalance !== undefined) {
-        // Try to determine symbol from other fields if possible
-        // This would need adaptation based on your API response format
-    }
-    
-    // Reset processing state if we have a symbol
-    if (symbolToUpdate) {
-        uiState.isProcessing[symbolToUpdate] = false;
-        resetButtonStates(symbolToUpdate);
-        
-        // Clear transaction cache for this symbol
-        if (window.transactionCache && window.transactionCache[symbolToUpdate]) {
-            delete window.transactionCache[symbolToUpdate];
-        }
-        
-        // Request updated data
-        Connections.requestTransactions(symbolToUpdate);
-    } else {
-        // Reset all if we can't determine the specific symbol
-        CONFIG.cryptos.forEach(crypto => {
-            uiState.isProcessing[crypto.symbol] = false;
-            resetButtonStates(crypto.symbol);
-        });
-    }
-    
-    // Log result
-    if (result.success) {
-        console.log('Buy operation successful');
-    } else {
-        console.error('Buy operation failed:', result.error || 'Unknown error');
-    }
-}
-
-// Handle sell result (for both manual and automatic sells)
-function handleSellResult(result) {
-    if (!result) {
-        console.warn('Invalid sell result:', result);
-        return;
-    }
-    
-    // Extract symbol if available
-    let symbolToUpdate = null;
-    if (result.symbol) {
-        symbolToUpdate = result.symbol.replace('USDT', '').toLowerCase();
-    } else if (result.newBalance !== undefined) {
-        // Try to determine symbol from other fields if possible
-        // This would need adaptation based on your API response format
-    }
-    
-    // Reset processing state if we have a symbol
-    if (symbolToUpdate) {
-        uiState.isProcessing[symbolToUpdate] = false;
-        resetButtonStates(symbolToUpdate);
-        
-        // Clear transaction cache for this symbol
-        if (window.transactionCache && window.transactionCache[symbolToUpdate]) {
-            delete window.transactionCache[symbolToUpdate];
-        }
-        
-        // Request updated data
-        Connections.requestTransactions(symbolToUpdate);
-    } else {
-        // Reset all if we can't determine the specific symbol
-        CONFIG.cryptos.forEach(crypto => {
-            uiState.isProcessing[crypto.symbol] = false;
-            resetButtonStates(crypto.symbol);
-        });
-    }
-    
-    // Log result
-    if (result.success) {
-        console.log('Sell operation successful');
-    } else {
-        console.error('Sell operation failed:', result.error || 'Unknown error');
     }
 }
 

@@ -1,3 +1,4 @@
+// backend/main.js
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -6,9 +7,64 @@ const dotenv = require('dotenv');
 const mariadb = require('mariadb');
 const binanceAPI = require('./js/binance');
 const telegramBot = require('./js/telegram');
+const tradingEngine = require('./js/trading-engine');
 
 // Load environment variables
 dotenv.config({ path: '/app/.env' });
+
+// Start the server
+const PORT = process.env.PORT;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    
+    // Test connections on startup
+    (async () => {
+        await testDatabaseConnection();
+        const binanceConnected = await testBinanceConnection();
+        await testTelegramConnection();
+        
+        // Initialize WebSockets if Binance is connected
+        if (binanceConnected) {
+            await initializeWebSockets();
+        }
+        
+        // Setup heartbeat mechanism
+        setupHeartbeat();
+    })();
+});
+
+// Handle graceful shutdown
+process.on('SIGINT', async () => {
+    console.log('Shutting down server...');
+    
+    // Disconnect all WebSockets
+    try {
+        await binanceAPI.closeAllConnections();
+        console.log('All WebSocket connections closed');
+    } catch (error) {
+        console.error('Error closing WebSocket connections:', error);
+    }
+    
+    // Close database pool
+    try {
+        await pool.end();
+        console.log('Database pool closed');
+    } catch (error) {
+        console.error('Error closing database pool:', error);
+    }
+    
+    // Close server
+    server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+    });
+    
+    // Force exit after 5 seconds if server doesn't close properly
+    setTimeout(() => {
+        console.error('Forcing server shutdown after timeout');
+        process.exit(1);
+    }, 5000);
+});
 
 // Initialize Express app
 const app = express();
@@ -88,6 +144,9 @@ const pool = mariadb.createPool({
     connectionLimit: 5
 });
 
+// Initialize trading engine with dependencies
+tradingEngine.initialize(pool, binanceAPI, telegramBot);
+
 // System status object
 let systemStatus = {
     database: false,
@@ -97,9 +156,6 @@ let systemStatus = {
 
 // WebSocket connection status
 let websocketConnected = false;
-
-
-
 
 // Test database connection
 async function testDatabaseConnection() {
@@ -120,8 +176,6 @@ async function testDatabaseConnection() {
     }
 }
 
-
-
 // Test Binance API connection
 async function testBinanceConnection() {
     try {
@@ -138,8 +192,6 @@ async function testBinanceConnection() {
     }
 }
 
-
-
 // Test Telegram Bot connection
 async function testTelegramConnection() {
     try {
@@ -155,8 +207,6 @@ async function testTelegramConnection() {
         return false;
     }
 }
-
-
 
 // Initialize WebSocket connections if Binance is connected
 async function initializeWebSockets() {
@@ -182,9 +232,6 @@ async function initializeWebSockets() {
     }
 }
 
-
-
-
 // Add a heartbeat mechanism to keep connections alive
 function setupHeartbeat() {
     // Periodically send a heartbeat event to all connected clients
@@ -192,8 +239,6 @@ function setupHeartbeat() {
         io.emit('heartbeat', { timestamp: Date.now() });
     }, 30000); // Every 30 seconds
 }
-
-
 
 // Function to check and update the circuit breaker
 function checkCircuitBreaker(success) {
@@ -234,8 +279,6 @@ function checkCircuitBreaker(success) {
     return CIRCUIT_BREAKER.tripped;
 }
 
-
-
 // Helper function to get transactions for a symbol
 async function getTransactions(symbol) {
     let conn;
@@ -254,8 +297,6 @@ async function getTransactions(symbol) {
     }
 }
 
-
-
 // Helper function to get holdings for a symbol
 async function getHoldings(symbol) {
     let conn;
@@ -273,8 +314,6 @@ async function getHoldings(symbol) {
         if (conn) conn.release();
     }
 }
-
-
 
 // Validate trading parameters
 function validateTradeParams(params) {
@@ -306,8 +345,6 @@ function validateTradeParams(params) {
     }};
 }
 
-
-
 // Socket.io connection handling
 io.on('connection', (socket) => {
     // Add ping handler for connection testing
@@ -326,7 +363,6 @@ io.on('connection', (socket) => {
         }
     });
 
-
     // Handle client disconnection
     socket.on('disconnect', (reason) => {
         console.log(`Client ${socket.id} disconnected. Reason: ${reason}`);
@@ -344,9 +380,6 @@ io.on('connection', (socket) => {
         }
     });
     
-
-    
-
     // Add a new socket.io event handler for checking WebSocket status
     socket.on('get-websocket-status', async () => {
         try {
@@ -364,9 +397,6 @@ io.on('connection', (socket) => {
         }
     });
 
-
-
-
     // Handle get account info request
     socket.on('get-account-info', async () => {
         try {
@@ -378,10 +408,92 @@ io.on('connection', (socket) => {
             socket.emit('account-info', { error: error.message });
         }
     });
-    
 
-
-
+    // Handle get transactions request
+    socket.on('get-transactions', async (data) => {
+        try {
+            console.log('Received get-transactions request:', data);
+            
+            if (!data || !data.symbol) {
+                socket.emit('transaction-update', { 
+                    symbol: 'unknown',
+                    transactions: [],
+                    success: false,
+                    error: 'Missing symbol in request'
+                });
+                return;
+            }
+            
+            // Extract base symbol without USDT
+            const baseSymbol = data.symbol.replace('USDT', '');
+            const fullSymbol = data.symbol.endsWith('USDT') ? data.symbol : data.symbol + 'USDT';
+            
+            // Get transactions for the symbol from database
+            let conn;
+            try {
+                conn = await pool.getConnection();
+                const rows = await conn.query(
+                    'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC LIMIT 10',
+                    [fullSymbol]
+                );
+                
+                console.log(`Found ${rows.length} transactions for ${fullSymbol}`);
+                
+                // Get reference prices
+                const refPrices = await tradingEngine.getReferencePrices(fullSymbol);
+                
+                // Send transaction history to client
+                socket.emit('transaction-update', {
+                    symbol: baseSymbol,
+                    transactions: rows,
+                    success: true,
+                    refPrices: refPrices
+                });
+                
+                // Also recalculate and send holdings
+                const holdings = await tradingEngine.getHoldings(fullSymbol);
+                
+                // Get current price to calculate profit/loss
+                const priceData = await binanceAPI.getTickerPrice(fullSymbol);
+                const currentPrice = parseFloat(priceData.price);
+                
+                // Calculate profit/loss percentage if we have holdings and price
+                let profitLossPercent = 0;
+                if (holdings.quantity > 0 && holdings.avg_price > 0 && currentPrice > 0) {
+                    profitLossPercent = tradingEngine.calculateProfitLoss(holdings.avg_price, currentPrice);
+                }
+                
+                socket.emit('holdings-update', {
+                    symbol: baseSymbol,
+                    amount: holdings.quantity,
+                    avgPrice: holdings.avg_price,
+                    currentPrice: currentPrice,
+                    initialPrice: refPrices.initial_purchase_price,
+                    lastBuyPrice: refPrices.last_purchase_price,
+                    nextBuyThreshold: refPrices.next_buy_threshold,
+                    nextSellThreshold: refPrices.next_sell_threshold,
+                    profitLossPercent: profitLossPercent
+                });
+                
+            } catch (error) {
+                console.error('Error querying transactions:', error);
+                socket.emit('transaction-update', { 
+                    symbol: baseSymbol,
+                    transactions: [],
+                    success: false,
+                    error: 'Database error'
+                });
+            } finally {
+                if (conn) conn.release();
+            }
+        } catch (error) {
+            console.error('Error processing get-transactions request:', error);
+            socket.emit('transaction-update', { 
+                success: false,
+                error: 'Server error'
+            });
+        }
+    });
 
     // Handle buy order
     socket.on('buy-order', async (data) => {
@@ -455,10 +567,10 @@ io.on('connection', (socket) => {
                         );
                         
                         // Update holdings
-                        await conn.query(
-                            'INSERT INTO holdings (symbol, quantity, avg_price) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = quantity + ?, avg_price = ((avg_price * quantity) + (? * ?)) / (quantity + ?)',
-                            [data.symbol, result.amount, result.price, result.amount, result.price, result.amount, result.amount]
-                        );
+                        await tradingEngine.updateHoldings(data.symbol);
+                        
+                        // Update reference prices
+                        await tradingEngine.updateReferencePrices(data.symbol, result.price);
                         
                         conn.release();
                         
@@ -466,14 +578,22 @@ io.on('connection', (socket) => {
                         const transactions = await getTransactions(data.symbol);
                         io.emit('transaction-update', {
                             symbol: data.symbol.replace('USDT', ''),
-                            transactions: transactions
+                            transactions: transactions,
+                            refPrices: await tradingEngine.getReferencePrices(data.symbol)
                         });
                         
                         // Send holdings update to clients
                         const holdings = await getHoldings(data.symbol);
+                        const refPrices = await tradingEngine.getReferencePrices(data.symbol);
+                        
                         io.emit('holdings-update', {
                             symbol: data.symbol.replace('USDT', ''),
                             amount: holdings.quantity,
+                            avgPrice: holdings.avg_price,
+                            initialPrice: refPrices.initial_purchase_price,
+                            lastBuyPrice: refPrices.last_purchase_price,
+                            nextBuyThreshold: refPrices.next_buy_threshold,
+                            nextSellThreshold: refPrices.next_sell_threshold,
                             profitLossPercent: ((result.price - holdings.avg_price) / holdings.avg_price) * 100
                         });
                     } catch (dbError) {
@@ -493,9 +613,6 @@ io.on('connection', (socket) => {
         }
     });
     
-
-
-
     // Handle sell order
     socket.on('sell-order', async (data) => {
         try {
@@ -568,10 +685,10 @@ io.on('connection', (socket) => {
                         );
                         
                         // Update holdings
-                        await conn.query(
-                            'UPDATE holdings SET quantity = GREATEST(0, quantity - ?), avg_price = CASE WHEN quantity <= ? THEN 0 ELSE avg_price END WHERE symbol = ?',
-                            [result.amount, result.amount, data.symbol]
-                        );
+                        await tradingEngine.updateHoldings(data.symbol);
+                        
+                        // Update reference prices
+                        await tradingEngine.updateReferencePrices(data.symbol, result.price);
                         
                         conn.release();
                         
@@ -579,14 +696,22 @@ io.on('connection', (socket) => {
                         const transactions = await getTransactions(data.symbol);
                         io.emit('transaction-update', {
                             symbol: data.symbol.replace('USDT', ''),
-                            transactions: transactions
+                            transactions: transactions,
+                            refPrices: await tradingEngine.getReferencePrices(data.symbol)
                         });
                         
                         // Send holdings update to clients
                         const holdings = await getHoldings(data.symbol);
+                        const refPrices = await tradingEngine.getReferencePrices(data.symbol);
+                        
                         io.emit('holdings-update', {
                             symbol: data.symbol.replace('USDT', ''),
                             amount: holdings.quantity,
+                            avgPrice: holdings.avg_price,
+                            initialPrice: refPrices.initial_purchase_price,
+                            lastBuyPrice: refPrices.last_purchase_price,
+                            nextBuyThreshold: refPrices.next_buy_threshold,
+                            nextSellThreshold: refPrices.next_sell_threshold,
                             profitLossPercent: holdings.quantity > 0 ? ((result.price - holdings.avg_price) / holdings.avg_price) * 100 : 0
                         });
                     } catch (dbError) {
@@ -605,9 +730,7 @@ io.on('connection', (socket) => {
             checkCircuitBreaker(false);
         }
     });
-
-
-
+    
     // Handle test Binance WebSocket stream
     socket.on('test-binance-stream', async () => {
         try {
@@ -620,25 +743,12 @@ io.on('connection', (socket) => {
             if (status.totalConnections === 0) {
                 binanceAPI.initializeWebSockets(io);
             }
-
-       
+ 
             socket.emit('binance-test-result', {
                 success: true,
                 message: 'WebSocket test initiated',
-                websocketStatus: status,
-                prices: pricesResult.prices || {}
+                websocketStatus: status
             });
-            
-            // Emit price updates to all clients
-            if (pricesResult.success && pricesResult.prices) {
-                Object.entries(pricesResult.prices).forEach(([symbol, price]) => {
-                    io.emit('price-update', {
-                        symbol,
-                        price,
-                        source: 'api-test'
-                    });
-                });
-            }
         } catch (error) {
             console.error('Error in test-binance-stream:', error);
             socket.emit('binance-test-result', {
@@ -647,7 +757,6 @@ io.on('connection', (socket) => {
             });
         }
     });
-
     
     // Listen for WebSocket status updates
     socket.on('websocket-status', (status) => {
@@ -664,9 +773,6 @@ io.on('connection', (socket) => {
         }
     });
     
-
-
-
     // Handle first purchase
     socket.on('first-purchase', async (data) => {
         try {
@@ -716,7 +822,7 @@ io.on('connection', (socket) => {
             const quantity = investment / currentPrice;
             
             // Execute buy order
-            console.log(`Executing buy order: ${quantity} ${data.symbol} at $${currentPrice}`);
+            console.log(`Executing buy order: ${quantity} ${data.symbol} at ${currentPrice}`);
             const result = await binanceAPI.executeBuyOrder(data.symbol, investment, 'usdt');
             
             // Update circuit breaker status
@@ -736,14 +842,14 @@ io.on('connection', (socket) => {
                 try {
                     await conn.query(
                         'INSERT INTO transactions (symbol, type, price, quantity, investment) VALUES (?, ?, ?, ?, ?)',
-                        [data.symbol, 'BUY', currentPrice, quantity, investment]
+                        [data.symbol, 'BUY', currentPrice, result.amount, investment]
                     );
                     
                     // Update holdings
-                    await conn.query(
-                        'INSERT INTO holdings (symbol, quantity, avg_price) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = quantity + ?, avg_price = ((avg_price * quantity) + (? * ?)) / (quantity + ?)',
-                        [data.symbol, quantity, currentPrice, quantity, currentPrice, quantity, quantity]
-                    );
+                    await tradingEngine.updateHoldings(data.symbol);
+                    
+                    // Update reference prices
+                    await tradingEngine.updateReferencePrices(data.symbol, currentPrice);
                 } finally {
                     conn.release();
                 }
@@ -756,7 +862,7 @@ io.on('connection', (socket) => {
                         symbol: data.symbol,
                         type: 'BUY',
                         price: currentPrice,
-                        quantity: quantity,
+                        quantity: result.amount,
                         investment: investment,
                         timestamp: Date.now()
                     });
@@ -770,14 +876,22 @@ io.on('connection', (socket) => {
             const transactions = await getTransactions(data.symbol);
             io.emit('transaction-update', {
                 symbol: data.symbol.replace('USDT', ''),
-                transactions: transactions
+                transactions: transactions,
+                refPrices: await tradingEngine.getReferencePrices(data.symbol)
             });
             
             // Send holdings update to clients
             const holdings = await getHoldings(data.symbol);
+            const refPrices = await tradingEngine.getReferencePrices(data.symbol);
+            
             io.emit('holdings-update', {
                 symbol: data.symbol.replace('USDT', ''),
                 amount: holdings.quantity,
+                avgPrice: holdings.avg_price,
+                initialPrice: refPrices.initial_purchase_price,
+                lastBuyPrice: refPrices.last_purchase_price,
+                nextBuyThreshold: refPrices.next_buy_threshold,
+                nextSellThreshold: refPrices.next_sell_threshold,
                 profitLossPercent: ((currentPrice - holdings.avg_price) / holdings.avg_price) * 100
             });
             
@@ -791,271 +905,147 @@ io.on('connection', (socket) => {
         }
     });
 
-
-    
-// Add a route to get transaction history and send to dashboard/database
-socket.on('get-transactions', async (data) => {
-    try {
-        console.log('Received get-transactions request:', data);
-        
-        if (!data || !data.symbol) {
-            socket.emit('transaction-update', { 
-                symbol: 'unknown',
-                transactions: [],
-                success: false,
-                error: 'Missing symbol in request'
-            });
-            return;
-        }
-        
-        // Extract base symbol without USDT
-        const baseSymbol = data.symbol.replace('USDT', '');
-        
-        // Get transactions for the symbol from database
-        let conn;
+    // Handle sell all
+    socket.on('sell-all', async (data) => {
         try {
-            conn = await pool.getConnection();
-            const rows = await conn.query(
-                'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC',
-                [data.symbol]
-            );
-            
-            console.log(`Found ${rows.length} transactions for ${data.symbol}`);
-            
-            // Send transaction history to client
-            socket.emit('transaction-update', {
-                symbol: baseSymbol,
-                transactions: rows,
-                success: true
-            });
-            
-            // Also recalculate and send holdings
+            // Check if WebSocket is connected
+            if (!websocketConnected) {
+                socket.emit('sell-all-result', {
+                    success: false,
+                    error: 'Trading is paused due to WebSocket connection issues. Please try again later.'
+                });
+                return;
+            }
+
+            // Check if circuit breaker is tripped
+            if (CIRCUIT_BREAKER.tripped) {
+                socket.emit('sell-all-result', {
+                    success: false,
+                    error: 'Trading is currently suspended due to multiple consecutive errors. Please try again later.'
+                });
+                return;
+            }
+
+            console.log(`Sell all request: ${JSON.stringify(data)}`);
+
+            if (!data.symbol) {
+                socket.emit('sell-all-result', {
+                    success: false,
+                    error: 'Missing required parameter (symbol)'
+                });
+                return;
+            }
+
+            // Get current holdings
             const holdings = await getHoldings(data.symbol);
-            
-            // Get current price to calculate profit/loss
+            console.log(`Current holdings for ${data.symbol}:`, holdings);
+
+            if (!holdings || parseFloat(holdings.quantity) <= 0) {
+                socket.emit('sell-all-result', {
+                    success: false,
+                    error: 'No holdings to sell'
+                });
+                return;
+            }
+
+            // Get current price
             const priceData = await binanceAPI.getTickerPrice(data.symbol);
             const currentPrice = parseFloat(priceData.price);
-            
-            // Calculate profit/loss percentage if we have holdings and price
-            let profitLossPercent = 0;
-            if (holdings.quantity > 0 && holdings.avg_price > 0 && currentPrice > 0) {
-                profitLossPercent = ((currentPrice - holdings.avg_price) / holdings.avg_price) * 100;
-            }
-            
-            socket.emit('holdings-update', {
-                symbol: baseSymbol,
-                amount: holdings.quantity,
-                avgPrice: holdings.avg_price,
-                currentPrice: currentPrice,
-                profitLossPercent: profitLossPercent
-            });
-            
-        } catch (error) {
-            console.error('Error querying transactions:', error);
-            socket.emit('transaction-update', { 
-                symbol: baseSymbol,
-                transactions: [],
-                success: false,
-                error: 'Database error'
-            });
-        } finally {
-            if (conn) conn.release();
-        }
-    } catch (error) {
-        console.error('Error processing get-transactions request:', error);
-        socket.emit('transaction-update', { 
-            success: false,
-            error: 'Server error'
-        });
-    }
-});
 
+            // Calculate total value
+            const totalValue = holdings.quantity * currentPrice;
 
-// Handle sell all
-socket.on('sell-all', async (data) => {
-    try {
-        // Check if WebSocket is connected
-        if (!websocketConnected) {
-            socket.emit('sell-all-result', {
-                success: false,
-                error: 'Trading is paused due to WebSocket connection issues. Please try again later.'
-            });
-            return;
-        }
+            // Execute sell order using executeSellOrder instead of createMarketSellOrder directly
+            console.log(`Executing sell order: ${holdings.quantity} ${data.symbol} at ${currentPrice.toFixed(4)}`);
+            const result = await binanceAPI.executeSellOrder(data.symbol, holdings.quantity, 'amount');
 
-        // Check if circuit breaker is tripped
-        if (CIRCUIT_BREAKER.tripped) {
-            socket.emit('sell-all-result', {
-                success: false,
-                error: 'Trading is currently suspended due to multiple consecutive errors. Please try again later.'
-            });
-            return;
-        }
-
-        console.log(`Sell all request: ${JSON.stringify(data)}`);
-
-        if (!data.symbol) {
-            socket.emit('sell-all-result', {
-                success: false,
-                error: 'Missing required parameter (symbol)'
-            });
-            return;
-        }
-
-        // Get current holdings
-        const holdings = await getHoldings(data.symbol);
-        console.log(`Current holdings for ${data.symbol}:`, holdings);
-
-        if (!holdings || parseFloat(holdings.quantity) <= 0) {
-            socket.emit('sell-all-result', {
-                success: false,
-                error: 'No holdings to sell'
-            });
-            return;
-        }
-
-        // Get current price
-        const priceData = await binanceAPI.getTickerPrice(data.symbol);
-        const currentPrice = parseFloat(priceData.price);
-
-        // Calculate total value
-        const totalValue = holdings.quantity * currentPrice;
-
-        // Execute sell order using executeSellOrder instead of createMarketSellOrder directly
-        console.log(`Executing sell order: ${holdings.quantity} ${data.symbol} at $${currentPrice.toFixed(4)}`);
-        const result = await binanceAPI.executeSellOrder(data.symbol, holdings.quantity, 'amount');
-
-        // Check if the sell operation was successful
-        if (!result || !result.success) {
-            socket.emit('sell-all-result', {
-                success: false,
-                error: result?.error || 'Failed to execute sell order'
-            });
-            
-            // Update circuit breaker status
-            checkCircuitBreaker(false);
-            return;
-        }
-
-        // Update circuit breaker status
-        checkCircuitBreaker(true);
-
-        // Store transaction in database if connected
-        if (systemStatus.database) {
-            const conn = await pool.getConnection();
-            try {
-                await conn.query(
-                    'INSERT INTO transactions (symbol, type, price, quantity, investment) VALUES (?, ?, ?, ?, ?)',
-                    [data.symbol, 'SELL', currentPrice, holdings.quantity, totalValue]
-                );
-
-                // Update holdings
-                await conn.query(
-                    'UPDATE holdings SET quantity = 0, avg_price = 0 WHERE symbol = ?',
-                    [data.symbol]
-                );
-            } finally {
-                conn.release();
-            }
-        }
-
-        // Send Telegram notification
-        if (systemStatus.telegram) {
-            try {
-                await telegramBot.sendTradeNotification({
-                    symbol: data.symbol,
-                    type: 'SELL',
-                    price: currentPrice,
-                    quantity: holdings.quantity,
-                    investment: totalValue,
-                    timestamp: Date.now()
+            // Check if the sell operation was successful
+            if (!result || !result.success) {
+                socket.emit('sell-all-result', {
+                    success: false,
+                    error: result?.error || 'Failed to execute sell order'
                 });
-                console.log('Telegram notification sent for sell all');
-            } catch (telegramError) {
-                console.error('Error sending Telegram notification:', telegramError);
+                
+                // Update circuit breaker status
+                checkCircuitBreaker(false);
+                return;
             }
+
+            // Update circuit breaker status
+            checkCircuitBreaker(true);
+
+            // Store transaction in database if connected
+            if (systemStatus.database) {
+                const conn = await pool.getConnection();
+                try {
+                    await conn.query(
+                        'INSERT INTO transactions (symbol, type, price, quantity, investment) VALUES (?, ?, ?, ?, ?)',
+                        [data.symbol, 'SELL', currentPrice, holdings.quantity, totalValue]
+                    );
+
+                    // Update holdings
+                    await tradingEngine.updateHoldings(data.symbol);
+                    
+                    // Update reference prices
+                    await tradingEngine.updateReferencePrices(data.symbol, currentPrice);
+                } finally {
+                    conn.release();
+                }
+            }
+
+            // Send Telegram notification
+            if (systemStatus.telegram) {
+                try {
+                    await telegramBot.sendTradeNotification({
+                        symbol: data.symbol,
+                        type: 'SELL',
+                        price: currentPrice,
+                        quantity: holdings.quantity,
+                        investment: totalValue,
+                        timestamp: Date.now()
+                    });
+                    console.log('Telegram notification sent for sell all');
+                } catch (telegramError) {
+                    console.error('Error sending Telegram notification:', telegramError);
+                }
+            }
+
+            // Send transaction update to clients
+            const transactions = await getTransactions(data.symbol);
+            io.emit('transaction-update', {
+                symbol: data.symbol.replace('USDT', ''),
+                transactions: transactions,
+                refPrices: await tradingEngine.getReferencePrices(data.symbol)
+            });
+
+            // Send holdings update to clients
+            const refPrices = await tradingEngine.getReferencePrices(data.symbol);
+            io.emit('holdings-update', {
+                symbol: data.symbol.replace('USDT', ''),
+                amount: 0,
+                avgPrice: 0,
+                initialPrice: refPrices.initial_purchase_price,
+                lastBuyPrice: refPrices.last_purchase_price,
+                nextBuyThreshold: refPrices.next_buy_threshold,
+                nextSellThreshold: refPrices.next_sell_threshold,
+                profitLossPercent: 0
+            });
+
+            socket.emit('sell-all-result', { success: true });
+        } catch (err) {
+            console.error('Sell all error:', err);
+            socket.emit('sell-all-result', { success: false, error: err.message });
+
+            // Update circuit breaker
+            checkCircuitBreaker(false);
         }
-
-        // Send transaction update to clients
-        const transactions = await getTransactions(data.symbol);
-        io.emit('transaction-update', {
-            symbol: data.symbol.replace('USDT', ''),
-            transactions: transactions
-        });
-
-        // Send holdings update to clients
-        io.emit('holdings-update', {
-            symbol: data.symbol.replace('USDT', ''),
-            amount: 0,
-            profitLossPercent: 0
-        });
-
-        socket.emit('sell-all-result', { success: true });
-    } catch (err) {
-        console.error('Sell all error:', err);
-        socket.emit('sell-all-result', { success: false, error: err.message });
-
-        // Update circuit breaker
-        checkCircuitBreaker(false);
-    }
-})
-});
-
-
-
-// Start the server
-const PORT = process.env.PORT;
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    
-    // Test connections on startup
-    (async () => {
-        await testDatabaseConnection();
-        const binanceConnected = await testBinanceConnection();
-        await testTelegramConnection();
-        
-        // Initialize WebSockets if Binance is connected
-        if (binanceConnected) {
-            await initializeWebSockets();
-        }
-        
-        // Setup heartbeat mechanism
-        setupHeartbeat();
-    })();
-});
-
-
-
-
-// Handle graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('Shutting down server...');
-    
-    // Disconnect all WebSockets
-    try {
-        await binanceAPI.closeAllConnections();
-        console.log('All WebSocket connections closed');
-    } catch (error) {
-        console.error('Error closing WebSocket connections:', error);
-    }
-    
-    // Close database pool
-    try {
-        await pool.end();
-        console.log('Database pool closed');
-    } catch (error) {
-        console.error('Error closing database pool:', error);
-    }
-    
-    // Close server
-    server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
     });
-    
-    // Force exit after 5 seconds if server doesn't close properly
-    setTimeout(() => {
-        console.error('Forcing server shutdown after timeout');
-        process.exit(1);
-    }, 5000);
+
+    // Handle price updates (for trading engine)
+    socket.on('price-update', (data) => {
+        if (data && data.symbol && data.price) {
+            // Process through trading engine to check for automated trading conditions
+            tradingEngine.processPriceUpdate(io, data.symbol, data.price);
+        }
+    });
 });

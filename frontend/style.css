@@ -426,3 +426,87 @@ input:checked + .slider:before {
         justify-content: center;
     }
 }
+/* Add these styles to the end of style.css */
+
+/* Threshold display styles */
+.trade-thresholds {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 15px;
+    font-size: 14px;
+  }
+  
+  .threshold {
+    padding: 5px 10px;
+    border-radius: 5px;
+    width: 48%;
+  }
+  
+  .threshold.buy {
+    background-color: rgba(46, 204, 113, 0.1);
+    border: 1px solid var(--buy-button);
+  }
+  
+  .threshold.sell {
+    background-color: rgba(231, 76, 60, 0.1);
+    border: 1px solid var(--sell-button);
+  }
+  
+  .threshold .label {
+    font-weight: bold;
+    margin-right: 5px;
+  }
+  
+  .threshold .value {
+    font-family: monospace;
+  }
+  
+  .threshold .value.imminent {
+    font-weight: bold;
+    animation: pulse 1s infinite;
+  }
+  
+  @keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+  }
+  
+  /* Automated transaction indicator */
+  .transaction-history li.automated {
+    position: relative;
+  }
+  
+  .transaction-history li.automated::after {
+    content: "AUTO";
+    font-size: 9px;
+    background-color: var(--header-color);
+    color: white;
+    padding: 1px 3px;
+    border-radius: 3px;
+    position: absolute;
+    right: 5px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  
+  /* Make transaction history taller to accommodate more entries */
+  .transaction-history ul {
+    max-height: 180px;
+  }
+  
+  /* Dark mode support for thresholds */
+  .dark-mode .threshold.buy {
+    background-color: rgba(46, 204, 113, 0.2);
+  }
+  
+  .dark-mode .threshold.sell {
+    background-color: rgba(231, 76, 60, 0.2);
+  }
+  
+  /* Enhanced disabled button style */
+  .action-btn.disabled {
+    opacity: var(--disabled-opacity);
+    cursor: not-allowed;
+    pointer-events: none;
+  }

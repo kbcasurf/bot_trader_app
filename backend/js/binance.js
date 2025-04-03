@@ -683,7 +683,7 @@ function connectToWebSocket(symbols, io) {
         // Subscribe to all symbols
         const subscribeMsg = {
             method: "SUBSCRIBE",
-            params: symbols.map(symbol => `${symbol.toLowerCase()}@ticker`),
+            params: symbols.map(symbol => `${symbol.toLowerCase()}@bookTicker`),
             id: Date.now()
         };
         
@@ -710,6 +710,8 @@ function connectToWebSocket(symbols, io) {
         stopPolling();
     });
     
+
+
     // Message handler
     ws.on('message', (data) => {
         try {
@@ -747,9 +749,24 @@ function connectToWebSocket(symbols, io) {
                 
                 // Log only occasionally to avoid flooding
                 if (Math.random() < 0.1) {
-                //    console.log(`Ticker update for ${symbol}: ${price}`);
+                    // console.log(`Ticker update for ${symbol}: ${price}`);
                 }
-            } else {
+            }
+            // For bookTicker data
+            else if (parsedData.s && (parsedData.b || parsedData.a)) {
+                // Extract symbol and price (using best ask price)
+                const symbol = parsedData.s;
+                const price = parsedData.a || parsedData.b; // Prefer ask price, fall back to bid
+                
+                // Emit price update to clients
+                io.emit('price-update', {
+                    symbol,
+                    price,
+                    data: parsedData,
+                    source: 'websocket'
+                });
+            }
+            else {
                 // Log other message types (truncated to avoid huge logs)
                 const msgStr = JSON.stringify(parsedData);
                 console.log(`Received WebSocket message: ${msgStr.length > 100 ? msgStr.substring(0, 100) + '...' : msgStr}`);
@@ -758,7 +775,10 @@ function connectToWebSocket(symbols, io) {
             console.error('Error handling WebSocket message:', error.message);
         }
     });
-    
+
+
+
+
     // Pong handler to mark connection as alive
     ws.on('pong', () => {
         ws.isAlive = true;
