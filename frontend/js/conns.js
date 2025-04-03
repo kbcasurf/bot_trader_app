@@ -4,9 +4,6 @@
 // Import socket.io client
 import { io } from 'socket.io-client';
 
-// We won't import Dashboard directly to avoid circular dependencies
-// Instead, we'll use callback functions that Dashboard will register
-
 // Self-initialization when script is loaded
 let isInitialized = false;
 
@@ -23,16 +20,51 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 500);
 });
 
-// Create and configure socket connection
-const socket = io({
+// Create and configure socket connection with more fault tolerance
+let SOCKET_OPTIONS = {
     transports: ['websocket', 'polling'],
     reconnectionAttempts: 15,
     reconnectionDelay: 2000,
     reconnectionDelayMax: 10000,
     timeout: 60000,
     autoConnect: true,
-    forceNew: true
-});
+    forceNew: true,
+    path: '/socket.io/' // Make sure path is correctly specified
+};
+
+// Read environment variable for backend URL if it exists
+const backendUrl = window.VITE_BACKEND_URL;
+console.log('Connecting to backend at:', backendUrl);
+
+// Initialize socket with error handling
+let socket;
+try {
+    socket = io(backendUrl, SOCKET_OPTIONS);
+    console.log('Socket.io client initialized');
+} catch (error) {
+    console.error('Error initializing socket.io client:', error);
+    // Create a dummy socket object to prevent errors when methods are called
+    socket = {
+        connected: false,
+        disconnected: true,
+        on: () => {},
+        emit: () => {},
+        connect: () => {},
+        disconnect: () => {},
+        io: { opts: { transports: [] } }
+    };
+    
+    // Try to reinitialize after a delay
+    setTimeout(() => {
+        try {
+            socket = io(backendUrl, SOCKET_OPTIONS);
+            console.log('Socket.io client reinitialized after error');
+        } catch (retryError) {
+            console.error('Failed to reinitialize socket.io client:', retryError);
+        }
+    }, 5000);
+}
+
 
 // Event callbacks registry - this allows dashboard.js to register callbacks
 const eventCallbacks = {

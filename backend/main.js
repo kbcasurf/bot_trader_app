@@ -77,7 +77,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
     // Collect health information
     const health = {
         uptime: process.uptime(),
@@ -90,8 +90,46 @@ app.get('/health', (req, res) => {
         }
     };
     
-    // Send health status with 200 OK
-    res.status(200).json(health);
+    try {
+        // Do a quick database connection test
+        let dbHealthy = false;
+        try {
+            const conn = await pool.getConnection();
+            await conn.query('SELECT 1 AS health_check');
+            await conn.release();
+            dbHealthy = true;
+        } catch (dbError) {
+            console.error('Health check database error:', dbError);
+            health.databaseError = dbError.message;
+        }
+        
+        // Update database status
+        health.services.database = dbHealthy;
+        systemStatus.database = dbHealthy;
+        
+        // Send health status with appropriate HTTP status
+        if (dbHealthy && systemStatus.binance) {
+            res.status(200).json(health);
+        } else {
+            res.status(503).json({
+                ...health,
+                message: 'One or more critical services are unhealthy',
+                recommendations: [
+                    'Check database connection',
+                    'Verify Binance API credentials',
+                    'Ensure all containers are running'
+                ]
+            });
+        }
+    } catch (error) {
+        console.error('Error in health check endpoint:', error);
+        res.status(500).json({
+            uptime: process.uptime(),
+            message: 'Error performing health check',
+            error: error.message,
+            timestamp: Date.now()
+        });
+    }
 });
 
 // Add a simple endpoint
@@ -109,7 +147,7 @@ io.use((socket, next) => {
     next();
 });
 
-// Database connection pool
+// Database connection pool with more robust configuration
 const pool = mariadb.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -120,8 +158,46 @@ const pool = mariadb.createPool({
     idleTimeout: 60000,         // Release idle connections after 1 minute
     resetAfterUse: true,        // Reset connection state after use
     connReleaseTimeout: 5000,   // Ensure connections are released if query idle
-    trace: true,               // Set to true only for debugging
-    multipleStatements: false   // Safety measure to prevent SQL injection
+    trace: true,                // Set to true only for debugging
+    multipleStatements: false,  // Safety measure to prevent SQL injection
+    connectTimeout: 20000,      // Connection timeout
+    socketTimeout: 60000,       // Socket timeout
+    // Make sure the pool object has the required methods for monitoring
+    activeConnections: function() {
+        return this.activeConnections ? this.activeConnections() : 0;
+    },
+    totalConnections: function() {
+        return this.totalConnections ? this.totalConnections() : 0;
+    }
+});
+
+// Log pool creation success
+console.log('Database connection pool created with configuration:', {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    database: process.env.DB_NAME,
+    connectionLimit: 20
+});
+
+// Add error handling for the pool
+pool.on('connection', (conn) => {
+    console.log('New database connection established');
+    
+    conn.on('error', (err) => {
+        console.error('Database connection error:', err);
+    });
+});
+
+pool.on('acquire', (conn) => {
+    console.log('Database connection acquired');
+});
+
+pool.on('release', (conn) => {
+    console.log('Database connection released');
+});
+
+pool.on('enqueue', () => {
+    console.warn('Waiting for available database connection slot');
 });
 
 // Initialize trading engine with dependencies
@@ -1327,50 +1403,71 @@ io.on('connection', (socket) => {
     });
 
 
+
+
+
+
 // Connection pool monitoring function
 function monitorConnectionPool() {
     setInterval(async () => {
         try {
-            // Check active connections
-            const activeConnections = pool.activeConnections();
-            const totalConnections = pool.totalConnections();
+            // First check if pool exists and has the necessary methods
+            if (!pool) {
+                console.log('Database pool status: Pool not initialized');
+                return;
+            }
+            
+            // Safely access active connections
+            let activeConnections = 0;
+            let totalConnections = 0;
+            
+            try {
+                // Use optional chaining to safely call methods
+                activeConnections = typeof pool.activeConnections === 'function' ? pool.activeConnections() : 0;
+                totalConnections = typeof pool.totalConnections === 'function' ? pool.totalConnections() : 0;
+            } catch (methodError) {
+                console.error('Error getting connection counts:', methodError.message);
+            }
             
             console.log(`Database pool status: Active=${activeConnections}, Total=${totalConnections}`);
             
+            // Safely access connection limit
+            const connectionLimit = pool.config?.connectionLimit || 20; // Default to 20 if not defined
+            
             // If we're running at >80% of capacity, take action
-            if (activeConnections > (pool.config.connectionLimit * 0.8)) {
-                console.warn(`High database connection usage: ${activeConnections}/${pool.config.connectionLimit}`);
+            if (activeConnections > (connectionLimit * 0.8)) {
+                console.warn(`High database connection usage: ${activeConnections}/${connectionLimit}`);
                 
-                // Try to recycle idle connections
+                // Try to recycle idle connections with a ping
                 try {
                     await pool.query('SELECT 1 AS ping');
-                } catch (error) {
-                    console.error('Error pinging database:', error);
+                } catch (pingError) {
+                    console.error('Error pinging database:', pingError.message);
                 }
                 
                 // If we're at or near the limit, take more drastic action
-                if (activeConnections >= pool.config.connectionLimit) {
+                if (activeConnections >= connectionLimit) {
                     console.error('DATABASE CONNECTION POOL EXHAUSTED - EMERGENCY MEASURES');
                     
-                    // Attempt to release any stuck connections
-                    // This is a last resort to prevent complete system failure
+                    // Try to force close any idle connections
                     try {
-                        // This is an internal method to force connection cleanup
-                        // It's not ideal but can help in emergency situations
-                        // pool._removeIdleConnections();
-                        
-                        // Force a garbage collection if possible
-                        if (global.gc) {
-                            console.log('Forcing garbage collection');
-                            global.gc();
+                        if (typeof pool._removeIdleConnections === 'function') {
+                            pool._removeIdleConnections();
+                            console.log('Removed idle connections');
                         }
-                    } catch (error) {
-                        console.error('Error attempting emergency connection cleanup:', error);
+                    } catch (idleError) {
+                        console.error('Error removing idle connections:', idleError.message);
+                    }
+                    
+                    // Force a garbage collection if possible
+                    if (global.gc) {
+                        console.log('Forcing garbage collection');
+                        global.gc();
                     }
                 }
             }
         } catch (error) {
-            console.error('Error monitoring connection pool:', error);
+            console.error('Error monitoring connection pool:', error.message);
         }
     }, 15000); // Check every 15 seconds
 }
