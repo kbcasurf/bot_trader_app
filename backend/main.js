@@ -65,10 +65,27 @@ process.on('SIGINT', async () => {
         process.exit(1);
     }, 5000);
 });
-
 // Initialize Express app
 const app = express();
+// Create HTTP server - THIS NEEDS TO HAPPEN BEFORE TRYING TO USE THE SERVER VARIABLE
 const server = http.createServer(app);
+
+// Initialize Socket.io with proper CORS settings
+const io = socketIo(server, {
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST', 'OPTIONS'],
+        credentials: false
+    },
+    transports: ['polling', 'websocket'],
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    connectTimeout: 30000,
+    allowUpgrades: true,
+    perMessageDeflate: {
+        threshold: 1024 // Compress data if it exceeds 1KB
+    }
+});
 
 // Circuit breaker settings to prevent excessive trading during errors
 const CIRCUIT_BREAKER = {
@@ -111,23 +128,6 @@ app.get('/', (req, res) => {
 // Add middleware to parse JSON payloads
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Initialize Socket.io with proper CORS settings
-const io = socketIo(server, {
-    cors: {
-        origin: '*',
-        methods: ['GET', 'POST', 'OPTIONS'],
-        credentials: false
-    },
-    transports: ['polling', 'websocket'],
-    pingTimeout: 60000,
-    pingInterval: 25000,
-    connectTimeout: 30000,
-    allowUpgrades: true,
-    perMessageDeflate: {
-        threshold: 1024 // Compress data if it exceeds 1KB
-    }
-});
 
 // Debug middleware for Socket.IO connections
 io.use((socket, next) => {
@@ -822,7 +822,7 @@ io.on('connection', (socket) => {
             const quantity = investment / currentPrice;
             
             // Execute buy order
-            console.log(`Executing buy order: ${quantity} ${data.symbol} at ${currentPrice}`);
+            console.log(`Executing buy order: ${quantity} ${data.symbol} at $${currentPrice}`);
             const result = await binanceAPI.executeBuyOrder(data.symbol, investment, 'usdt');
             
             // Update circuit breaker status
