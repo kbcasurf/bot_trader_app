@@ -90,6 +90,7 @@ let connectionMonitorInterval = null;
 let priceMonitorInterval = null;
 let reconnectTimeout = null;
 
+
 /**
  * Initialize the trading engine with dependencies
  * @param {Object} dbPool - Database connection pool
@@ -103,8 +104,11 @@ function initialize(dbPool, binanceAPI, telegramBot, socketIo) {
         return;
     }
     
+    // Store database pool reference
+    this.dbPool = dbPool;
+    
     io = socketIo;
-    console.log('Trading engine initialized');
+    console.log('Trading engine initialized with database pool:', dbPool ? 'valid' : 'invalid');
     initialized = true;
     
     // Initialize monitoring
@@ -118,6 +122,7 @@ function initialize(dbPool, binanceAPI, telegramBot, socketIo) {
         console.warn('Socket.io not provided, trading engine will run without real-time updates');
     }
 }
+
 
 // Initialize monitoring of connections and price updates
 function initializeMonitoring() {
@@ -500,6 +505,12 @@ async function getTransactions(symbol, dbPool) {
 
 // Get holdings for a symbol
 async function getHoldings(symbol, dbPool) {
+    // Check if we received a valid database pool
+    if (!dbPool) {
+        console.error('Database pool not provided to getHoldings function');
+        return { symbol, quantity: 0, avg_price: 0 };
+    }
+
     let conn;
     try {
         conn = await dbPool.getConnection();
@@ -510,6 +521,7 @@ async function getHoldings(symbol, dbPool) {
         
         // Release connection immediately after query
         await conn.release();
+        conn = null; // Set to null so we don't try to release it again
         
         return rows[0] || { symbol, quantity: 0, avg_price: 0 };
     } catch (err) {
@@ -517,7 +529,7 @@ async function getHoldings(symbol, dbPool) {
         return { symbol, quantity: 0, avg_price: 0 };
     } finally {
         // Double-check connection release in finally block
-        if (conn && conn.isValid && typeof conn.isValid === 'function' && conn.isValid()) {
+        if (conn) {
             try {
                 await conn.release();
             } catch (releaseError) {
@@ -529,6 +541,18 @@ async function getHoldings(symbol, dbPool) {
 
 // Get reference prices for a symbol
 async function getReferencePrices(symbol, dbPool) {
+    // Check if we received a valid database pool
+    if (!dbPool) {
+        console.error('Database pool not provided to getReferencePrices function');
+        return {
+            symbol,
+            initial_purchase_price: 0,
+            last_purchase_price: 0,
+            next_buy_threshold: 0,
+            next_sell_threshold: 0
+        };
+    }
+
     let conn;
     try {
         conn = await dbPool.getConnection();
@@ -538,6 +562,7 @@ async function getReferencePrices(symbol, dbPool) {
         );
         
         await conn.release();
+        conn = null; // Set to null so we don't try to release it again
         
         // Default values if no record exists
         return rows[0] || {
@@ -557,7 +582,7 @@ async function getReferencePrices(symbol, dbPool) {
             next_sell_threshold: 0
         };
     } finally {
-        if (conn && conn.isValid && typeof conn.isValid === 'function' && conn.isValid()) {
+        if (conn) {
             try {
                 await conn.release();
             } catch (releaseError) {
@@ -566,6 +591,9 @@ async function getReferencePrices(symbol, dbPool) {
         }
     }
 }
+
+
+
 
 // Store a transaction in the database
 async function storeTransaction(dbPool, transaction) {
