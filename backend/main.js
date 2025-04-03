@@ -18,7 +18,11 @@ const app = express();
 const server = http.createServer(app);
 
 // PORT variable needs to be defined
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
+
+// Add a cache for price calculation timestamps to avoid unnecessary DB calls
+const priceCalculationCache = {};
+
 
 // Start the server
 server.listen(PORT, () => {
@@ -111,10 +115,13 @@ const pool = mariadb.createPool({
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    connectionLimit: 20,        // Increase from 5 to 20
-    acquireTimeout: 15000,      // Increase timeout
-    idleTimeout: 60000,         // Add idle timeout
-    resetAfterUse: true         // Reset connections after use
+    connectionLimit: 20,        // Keep at 20 but manage them better
+    acquireTimeout: 30000,      // Increased timeout for busy periods
+    idleTimeout: 60000,         // Release idle connections after 1 minute
+    resetAfterUse: true,        // Reset connection state after use
+    connReleaseTimeout: 5000,   // Ensure connections are released if query idle
+    trace: true,               // Set to true only for debugging
+    multipleStatements: false   // Safety measure to prevent SQL injection
 });
 
 // Initialize trading engine with dependencies
@@ -256,6 +263,8 @@ function checkCircuitBreaker(success) {
     return CIRCUIT_BREAKER.tripped;
 }
 
+
+
 // Helper function to get transactions for a symbol
 async function getTransactions(symbol) {
     let conn;
@@ -265,12 +274,22 @@ async function getTransactions(symbol) {
             'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC',
             [symbol]
         );
+        
+        console.log(`Found ${rows.length} transactions for ${symbol}`);
+        
         return rows;
     } catch (err) {
-        console.error('Error getting transactions:', err);
+        console.error('Error querying transactions:', err);
         return [];
     } finally {
-        if (conn) conn.release();
+        if (conn) {
+            // Always release the connection back to the pool
+            try {
+                await conn.release();
+            } catch (releaseError) {
+                console.error('Error releasing connection:', releaseError);
+            }
+        }
     }
 }
 
@@ -283,14 +302,92 @@ async function getHoldings(symbol) {
             'SELECT * FROM holdings WHERE symbol = ?',
             [symbol]
         );
+        
+        // Release connection immediately after query
+        await conn.release();
+        
         return rows[0] || { symbol, quantity: 0, avg_price: 0 };
     } catch (err) {
         console.error('Error getting holdings:', err);
         return { symbol, quantity: 0, avg_price: 0 };
     } finally {
-        if (conn) conn.release();
+        // Double-check connection release in finally block
+        if (conn && conn.isValid()) {
+            try {
+                await conn.release();
+            } catch (releaseError) {
+                // Already released, ignore
+            }
+        }
     }
 }
+
+// New batch function to get data for multiple symbols with a single connection
+async function batchGetData(symbols) {
+    if (!symbols || !symbols.length) {
+        return {};
+    }
+    
+    let conn;
+    try {
+        conn = await pool.getConnection();
+        
+        const results = {};
+        
+        // Get transactions for all symbols in one connection
+        for (const symbol of symbols) {
+            try {
+                // Get transactions
+                const txRows = await conn.query(
+                    'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC',
+                    [symbol]
+                );
+                
+                // Get holdings
+                const holdingsRows = await conn.query(
+                    'SELECT * FROM holdings WHERE symbol = ?',
+                    [symbol]
+                );
+                
+                // Get reference prices
+                const refPriceRows = await conn.query(
+                    'SELECT * FROM reference_prices WHERE symbol = ?',
+                    [symbol]
+                );
+                
+                // Store all data
+                results[symbol] = {
+                    transactions: txRows,
+                    holdings: holdingsRows[0] || { symbol, quantity: 0, avg_price: 0 },
+                    refPrices: refPriceRows[0] || { 
+                        initial_purchase_price: 0, 
+                        last_purchase_price: 0, 
+                        next_buy_threshold: 0, 
+                        next_sell_threshold: 0 
+                    }
+                };
+            } catch (error) {
+                console.error(`Error processing batch data for ${symbol}:`, error);
+                results[symbol] = { error: true };
+            }
+        }
+        
+        return results;
+    } catch (error) {
+        console.error('Error in batch data processing:', error);
+        return {};
+    } finally {
+        if (conn) {
+            try {
+                await conn.release();
+            } catch (releaseError) {
+                console.error('Error releasing connection:', releaseError);
+            }
+        }
+    }
+}
+
+
 
 // Validate trading parameters
 function validateTradeParams(params) {
@@ -323,18 +420,19 @@ function validateTradeParams(params) {
 }
 
 
+// Add this pool monitoring function to track and manage connections
 function setupDatabaseMonitoring() {
     setInterval(async () => {
         try {
             // Get pool status
-            const conn = await pool.getConnection();
             const activeConnections = pool.activeConnections();
             const totalConnections = pool.totalConnections();
             
             console.log(`Database pool status: Active=${activeConnections}, Total=${totalConnections}`);
             
             if (activeConnections > (pool.config.connectionLimit * 0.8)) {
-                console.warn('High number of active connections - forcing some to close');
+                console.warn(`High number of active connections (${activeConnections}/${pool.config.connectionLimit}) - forcing reset`);
+                
                 // Force reset some connections if too many are active
                 try {
                     await pool.query('SELECT 1 AS reset');
@@ -342,12 +440,10 @@ function setupDatabaseMonitoring() {
                     console.error('Error during connection reset query:', error);
                 }
             }
-            
-            conn.release();
         } catch (error) {
             console.error('Error monitoring database connections:', error);
         }
-    }, 60000); // Check every minute
+    }, 30000); // Check every 30 seconds
 }
 
 
@@ -403,6 +499,99 @@ io.on('connection', (socket) => {
             });
         }
     });
+
+
+    // Add this implementation for batch data request handling
+    socket.on('batch-get-data', async (data) => {
+        try {
+            if (!data || !data.symbols || !Array.isArray(data.symbols)) {
+                socket.emit('batch-data-update', { 
+                    success: false, 
+                    error: 'Invalid request format - symbols array required' 
+                });
+                return;
+            }
+            
+            // Get all data for these symbols using a single connection
+            const batchResults = {};
+            
+            // Use a single connection for all operations
+            let conn;
+            
+            try {
+                conn = await pool.getConnection();
+                
+                // Process each symbol
+                for (const symbol of data.symbols) {
+                    try {
+                        // Get transactions
+                        const transactions = await conn.query(
+                            'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC',
+                            [symbol]
+                        );
+                        
+                        // Get holdings
+                        const holdingsRows = await conn.query(
+                            'SELECT * FROM holdings WHERE symbol = ?',
+                            [symbol]
+                        );
+                        
+                        // Get reference prices
+                        const refPriceRows = await conn.query(
+                            'SELECT * FROM reference_prices WHERE symbol = ?',
+                            [symbol]
+                        );
+                        
+                        // Store all data for this symbol
+                        batchResults[symbol] = {
+                            transactions: transactions,
+                            holdings: holdingsRows[0] || { symbol, quantity: 0, avg_price: 0 },
+                            refPrices: refPriceRows[0] || { 
+                                symbol,
+                                initial_purchase_price: 0,
+                                last_purchase_price: 0,
+                                last_sell_price: 0,
+                                next_buy_threshold: 0,
+                                next_sell_threshold: 0
+                            }
+                        };
+                    } catch (err) {
+                        console.error(`Error processing batch data for ${symbol}:`, err);
+                        batchResults[symbol] = { error: err.message };
+                    }
+                }
+            } catch (error) {
+                console.error('Error getting batch data:', error);
+                socket.emit('batch-data-update', { 
+                    success: false, 
+                    error: 'Database error' 
+                });
+                return;
+            } finally {
+                // Always release the connection
+                if (conn) {
+                    try {
+                        await conn.release();
+                    } catch (releaseError) {
+                        console.error('Error releasing connection:', releaseError);
+                    }
+                }
+            }
+            
+            // Send all results back in a single response
+            socket.emit('batch-data-update', {
+                success: true,
+                data: batchResults
+            });
+        } catch (error) {
+            console.error('Error processing batch data request:', error);
+            socket.emit('batch-data-update', { 
+                success: false, 
+                error: 'Server error' 
+            });
+        }
+    });
+
 
     // Handle get account info request
     socket.on('get-account-info', async () => {
@@ -1049,13 +1238,146 @@ io.on('connection', (socket) => {
     });
 
     // Handle price updates (for trading engine)
-    socket.on('price-update', (data) => {
-        if (data && data.symbol && data.price) {
-            // Process through trading engine to check for automated trading conditions
-            tradingEngine.processPriceUpdate(io, data.symbol, data.price);
+    socket.on('price-update', async (data) => {
+        if (!data.symbol || !data.price) {
+            return;
+        }
+        
+        try {
+            const symbol = data.symbol;
+            const price = parseFloat(data.price);
+            
+            // Process price update through trading engine (this is your existing logic)
+            tradingEngine.processPriceUpdate(io, symbol, price);
+            
+            // We'll add optimization to avoid the frontend making separate DB calls
+            // Let's send holdings and P/L data with the price update when appropriate
+            
+            // Only do this calculation periodically (once per minute per symbol)
+            const cacheKey = `price_calc_${symbol}`;
+            const now = Date.now();
+            const lastCalc = priceCalculationCache[cacheKey] || 0;
+            
+            // If it's been at least 60 seconds since the last calculation
+            if (now - lastCalc >= 60000) {
+                priceCalculationCache[cacheKey] = now;
+                
+                // Get holdings and reference prices from the database using a single connection
+                let conn;
+                try {
+                    conn = await pool.getConnection();
+                    
+                    // Get holdings
+                    const holdingsRows = await conn.query(
+                        'SELECT * FROM holdings WHERE symbol = ?',
+                        [symbol]
+                    );
+                    
+                    // Get reference prices
+                    const refPriceRows = await conn.query(
+                        'SELECT * FROM reference_prices WHERE symbol = ?',
+                        [symbol]
+                    );
+                    
+                    // Release connection as soon as we have the data
+                    await conn.release();
+                    conn = null;
+                    
+                    const holdings = holdingsRows[0] || { symbol, quantity: 0, avg_price: 0 };
+                    const refPrices = refPriceRows[0] || { 
+                        initial_purchase_price: 0, 
+                        last_purchase_price: 0,
+                        next_buy_threshold: 0,
+                        next_sell_threshold: 0
+                    };
+                    
+                    // Calculate profit/loss percentage
+                    let profitLossPercent = 0;
+                    if (holdings.quantity > 0 && parseFloat(holdings.avg_price) > 0) {
+                        profitLossPercent = ((price - parseFloat(holdings.avg_price)) / parseFloat(holdings.avg_price)) * 100;
+                    }
+                    
+                    // Send extra data with the price update to avoid separate DB calls
+                    io.emit('holdings-update', {
+                        symbol: symbol.replace('USDT', ''),
+                        amount: parseFloat(holdings.quantity),
+                        avgPrice: parseFloat(holdings.avg_price),
+                        initialPrice: parseFloat(refPrices.initial_purchase_price),
+                        lastBuyPrice: parseFloat(refPrices.last_purchase_price),
+                        nextBuyThreshold: parseFloat(refPrices.next_buy_threshold),
+                        nextSellThreshold: parseFloat(refPrices.next_sell_threshold),
+                        profitLossPercent: profitLossPercent,
+                        currentPrice: price
+                    });
+                } catch (error) {
+                    console.error('Error getting data for price update:', error);
+                } finally {
+                    if (conn) {
+                        try {
+                            await conn.release();
+                        } catch (releaseError) {
+                            console.error('Error releasing connection:', releaseError);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error in price-update handler:', error);
         }
     });
-});
+
+
+// Connection pool monitoring function
+function monitorConnectionPool() {
+    setInterval(async () => {
+        try {
+            // Check active connections
+            const activeConnections = pool.activeConnections();
+            const totalConnections = pool.totalConnections();
+            
+            console.log(`Database pool status: Active=${activeConnections}, Total=${totalConnections}`);
+            
+            // If we're running at >80% of capacity, take action
+            if (activeConnections > (pool.config.connectionLimit * 0.8)) {
+                console.warn(`High database connection usage: ${activeConnections}/${pool.config.connectionLimit}`);
+                
+                // Try to recycle idle connections
+                try {
+                    await pool.query('SELECT 1 AS ping');
+                } catch (error) {
+                    console.error('Error pinging database:', error);
+                }
+                
+                // If we're at or near the limit, take more drastic action
+                if (activeConnections >= pool.config.connectionLimit) {
+                    console.error('DATABASE CONNECTION POOL EXHAUSTED - EMERGENCY MEASURES');
+                    
+                    // Attempt to release any stuck connections
+                    // This is a last resort to prevent complete system failure
+                    try {
+                        // This is an internal method to force connection cleanup
+                        // It's not ideal but can help in emergency situations
+                        // pool._removeIdleConnections();
+                        
+                        // Force a garbage collection if possible
+                        if (global.gc) {
+                            console.log('Forcing garbage collection');
+                            global.gc();
+                        }
+                    } catch (error) {
+                        console.error('Error attempting emergency connection cleanup:', error);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error monitoring connection pool:', error);
+        }
+    }, 15000); // Check every 15 seconds
+}
+
+// Start connection pool monitoring
+monitorConnectionPool();
+
 
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
@@ -1089,3 +1411,4 @@ process.on('SIGINT', async () => {
         process.exit(1);
     }, 5000);
 });
+})

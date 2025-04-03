@@ -21,11 +21,23 @@ const CONFIG = {
     defaultPreset: 1, // Index of default preset (100)
     
     // Profit/Loss thresholds for color changes
-    profitThreshold: 100, // Percentage where the profit bar maxes out (green)
-    lossThreshold: -100, // Percentage where the loss bar maxes out (red)
+    profitThreshold: 5, // Percentage where the profit bar maxes out (green)
+    lossThreshold: -5, // Percentage where the loss bar maxes out (red)
     
-    // Auto-refresh interval in milliseconds
-    refreshInterval: 30000 // 30 seconds
+    // Auto-refresh intervals in milliseconds
+    refreshInterval: 30000, // 30 seconds for general refresh
+    priceRefreshInterval: 10000, // 10 seconds for price updates
+    
+    // Data loading settings
+    dataLoadingStagger: 200, // Milliseconds to stagger initial requests
+    
+    // Request throttling settings
+    minRequestInterval: {
+        transactions: 5000,    // 5 seconds between transaction requests for same symbol
+        status: 15000,         // 15 seconds between status checks
+        account: 30000         // 30 seconds between account info requests
+    },
+    maxRequestsPerMinute: 20   // Maximum requests per minute
 };
 
 // UI state tracking
@@ -39,10 +51,19 @@ const uiState = {
     thresholds: {}, // Will store next buy/sell threshold prices
     initialPrices: {}, // Will store initial purchase prices
     lastBuyPrices: {}, // Will store last purchase prices
+    lastUpdated: {}, // Timestamp of last data update for each type
+    dataCache: {}, // Cache for data to reduce duplicate processing
+    requestTracker: {
+        lastRequests: {}, // Timestamps of last requests by type
+        countInLastMinute: 0, // Counter for rate limiting
+        minuteStart: Date.now() // Start of current minute window
+    }
 };
 
-// Interval reference for periodic refreshes
+// Interval references for periodic refreshes
 let refreshInterval = null;
+let priceRefreshInterval = null;
+let requestTrackerInterval = null;
 
 // Initialize dashboard after DOM is loaded
 function initialize() {
@@ -55,11 +76,71 @@ function initialize() {
     // Set up theme toggle
     setupThemeToggle();
     
+    // Load initial data
+    loadInitialData();
+    
     // Setup automatic updates
     setupAutoRefresh();
     
+    // Initialize request tracking for throttling
+    initializeRequestTracking();
+    
     // Log initialization status
-    console.log('Dashboard module initialized');
+    console.log('Dashboard module initialized with optimized data handling');
+}
+
+// Initialize request tracking for throttling
+function initializeRequestTracking() {
+    // Reset request counter every minute
+    requestTrackerInterval = setInterval(() => {
+        uiState.requestTracker.countInLastMinute = 0;
+        uiState.requestTracker.minuteStart = Date.now();
+    }, 60000);
+}
+
+// Throttled request function to prevent overwhelming the server
+function throttledRequest(requestType, symbol, requestFunction) {
+    const now = Date.now();
+    
+    // If we've made too many requests in the current minute window, delay this one
+    if (uiState.requestTracker.countInLastMinute >= CONFIG.maxRequestsPerMinute) {
+        console.warn(`Request rate limit reached (${uiState.requestTracker.countInLastMinute}/${CONFIG.maxRequestsPerMinute}). Skipping ${requestType} request.`);
+        return false;
+    }
+    
+    // Check if we've made this specific request recently
+    if (symbol) {
+        // For symbol-specific requests
+        if (!uiState.requestTracker.lastRequests[requestType]) {
+            uiState.requestTracker.lastRequests[requestType] = {};
+        }
+        
+        const lastRequest = uiState.requestTracker.lastRequests[requestType][symbol] || 0;
+        if (now - lastRequest < CONFIG.minRequestInterval[requestType]) {
+            console.log(`Skipping ${requestType} request for ${symbol} - too soon since last request`);
+            return false;
+        }
+        
+        // Update last request time
+        uiState.requestTracker.lastRequests[requestType][symbol] = now;
+    } else {
+        // For general requests
+        const lastRequest = uiState.requestTracker.lastRequests[requestType] || 0;
+        if (now - lastRequest < CONFIG.minRequestInterval[requestType]) {
+            console.log(`Skipping ${requestType} request - too soon since last request`);
+            return false;
+        }
+        
+        // Update last request time
+        uiState.requestTracker.lastRequests[requestType] = now;
+    }
+    
+    // Increment request counter
+    uiState.requestTracker.countInLastMinute++;
+    
+    // Make the request
+    requestFunction();
+    return true;
 }
 
 // Register event handlers for connection module events
@@ -82,6 +163,9 @@ function registerEventHandlers() {
     
     // Holdings update events
     Connections.on('holdings-update', updateHoldings);
+    
+    // Batch data events
+    Connections.on('batch-data-update', handleBatchDataUpdate);
     
     // Order result events
     Connections.on('first-purchase-result', handleFirstPurchaseResult);
@@ -184,12 +268,13 @@ function configureCryptoCard(card, crypto) {
     uiState.profitLoss[crypto.symbol] = 0;
     uiState.investments[crypto.symbol] = CONFIG.presets[CONFIG.defaultPreset];
     uiState.isProcessing[crypto.symbol] = false;
-/*     uiState.thresholds[crypto.symbol] = {
+    uiState.thresholds[crypto.symbol] = {
         nextBuy: 0,
         nextSell: 0
-    }; */
+    };
     uiState.initialPrices[crypto.symbol] = 0;
     uiState.lastBuyPrices[crypto.symbol] = 0;
+    uiState.lastUpdated[crypto.symbol] = 0;
     
     // Set up event handlers for the preset buttons
     const presetButtons = card.querySelectorAll('.slider-presets .preset-btn');
@@ -234,9 +319,6 @@ function configureCryptoCard(card, crypto) {
                 
                 // Execute buy order
                 Connections.executeBuyOrder(crypto.symbol, investmentAmount);
-                
-                // Request transactions update
-                Connections.requestTransactions(crypto.symbol);
             }
         });
     }
@@ -268,11 +350,32 @@ function configureCryptoCard(card, crypto) {
             }
         });
     }
+}
+
+// Load initial data
+function loadInitialData() {
+    // First request system status (single request)
+    throttledRequest('status', null, () => {
+        Connections.requestSystemStatus();
+    });
     
-    // Request transactions for this cryptocurrency
+    // Request data for all cryptocurrencies with a single batch request
     setTimeout(() => {
-        Connections.requestTransactions(crypto.symbol);
-    }, 1000 + CONFIG.cryptos.indexOf(crypto) * 200); // Stagger requests
+        throttledRequest('batch', null, () => {
+            // Use batch request API if available, otherwise fall back to individual requests
+            if (typeof Connections.batchRequestData === 'function') {
+                const symbols = CONFIG.cryptos.map(crypto => crypto.symbol);
+                Connections.batchRequestData(symbols);
+            } else {
+                // Fallback: Request data for each cryptocurrency with staggered timing
+                CONFIG.cryptos.forEach((crypto, index) => {
+                    setTimeout(() => {
+                        Connections.requestTransactions(crypto.symbol);
+                    }, index * CONFIG.dataLoadingStagger);
+                });
+            }
+        });
+    }, 1000);
 }
 
 // Handle successful connection to backend
@@ -283,17 +386,12 @@ function handleConnectionEstablished() {
     updateBackendStatus(true);
     
     // Request system status
-    Connections.requestSystemStatus();
-    
-    // Request account info
-    Connections.requestAccountInfo();
-    
-    // Request transactions for all cryptocurrencies
-    CONFIG.cryptos.forEach(crypto => {
-        setTimeout(() => {
-            Connections.requestTransactions(crypto.symbol);
-        }, 500 + CONFIG.cryptos.indexOf(crypto) * 200); // Stagger requests
+    throttledRequest('status', null, () => {
+        Connections.requestSystemStatus();
     });
+    
+    // Load data using optimized batch method
+    setTimeout(loadInitialData, 500);
 }
 
 // Handle lost connection to backend
@@ -378,6 +476,7 @@ function updatePrice(data) {
     
     // Update state
     uiState.prices[symbol] = price;
+    uiState.lastUpdated[`price_${symbol}`] = Date.now();
     
     // Update UI
     const priceElement = document.getElementById(`${symbol}-price`);
@@ -392,21 +491,82 @@ function updatePrice(data) {
     updateProfitLoss(symbol);
 }
 
-// Update transaction history
-function updateTransactions(data) {
-    // Check for valid data
-    if (!data || !data.transactions) {
-        console.warn('Invalid transaction data:', data);
+// Handle batch data update from backend
+function handleBatchDataUpdate(response) {
+    if (!response || !response.success) {
+        console.error('Batch data update failed:', response?.error || 'Unknown error');
         return;
     }
     
-    const symbol = data.symbol.toLowerCase();
-    const transactions = data.transactions;
+    const batchData = response.data;
     
-    // Get the history list element
+    // Process each symbol's data
+    Object.entries(batchData).forEach(([symbol, data]) => {
+        const baseSymbol = symbol.replace('USDT', '').toLowerCase();
+        
+        // Process transactions if they exist
+        if (data.transactions) {
+            // Update transaction display
+            updateTransactionDisplay(baseSymbol, data.transactions);
+            
+            // Cache the transactions
+            if (!window.transactionCache) {
+                window.transactionCache = {};
+            }
+            window.transactionCache[baseSymbol] = data.transactions;
+        }
+        
+        // Process holdings if they exist
+        if (data.holdings) {
+            const amount = parseFloat(data.holdings.quantity) || 0;
+            const avgPrice = parseFloat(data.holdings.avg_price) || 0;
+            
+            // Update state
+            uiState.holdings[baseSymbol] = amount;
+            
+            // Update UI - holdings
+            const holdingsElement = document.getElementById(`${baseSymbol}-holdings`);
+            if (holdingsElement) {
+                holdingsElement.textContent = `${amount.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 })} ${baseSymbol.toUpperCase()}`;
+            }
+        }
+        
+        // Process reference prices if they exist
+        if (data.refPrices) {
+            uiState.thresholds[baseSymbol] = {
+                nextBuy: parseFloat(data.refPrices.next_buy_threshold) || 0,
+                nextSell: parseFloat(data.refPrices.next_sell_threshold) || 0
+            };
+            
+            uiState.initialPrices[baseSymbol] = parseFloat(data.refPrices.initial_purchase_price) || 0;
+            uiState.lastBuyPrices[baseSymbol] = parseFloat(data.refPrices.last_purchase_price) || 0;
+            
+            // Update threshold display
+            updateThresholdDisplay(baseSymbol);
+            
+            // Calculate and update profit/loss display
+            if (uiState.prices[baseSymbol] && uiState.holdings[baseSymbol] > 0) {
+                const currentPrice = uiState.prices[baseSymbol];
+                const initialPrice = uiState.initialPrices[baseSymbol];
+                
+                if (initialPrice > 0) {
+                    const profitLossPercent = ((currentPrice - initialPrice) / initialPrice) * 100;
+                    uiState.profitLoss[baseSymbol] = profitLossPercent;
+                    updateProfitLossDisplay(baseSymbol, profitLossPercent);
+                }
+            }
+        }
+        
+        // Reset processing flags
+        uiState.isProcessing[baseSymbol] = false;
+        resetButtonStates(baseSymbol);
+    });
+}
+
+// Update transaction display for a symbol
+function updateTransactionDisplay(symbol, transactions) {
     const historyList = document.getElementById(`${symbol}-history`);
     if (!historyList) {
-        console.warn(`History list element not found for ${symbol}`);
         return;
     }
     
@@ -414,7 +574,7 @@ function updateTransactions(data) {
     historyList.innerHTML = '';
     
     // If no transactions, show message
-    if (!transactions.length) {
+    if (!transactions || !transactions.length) {
         const noTransactionsItem = document.createElement('li');
         noTransactionsItem.className = 'no-transactions';
         noTransactionsItem.textContent = 'No transactions yet';
@@ -454,6 +614,21 @@ function updateTransactions(data) {
         
         historyList.appendChild(item);
     });
+}
+
+// Update transaction history
+function updateTransactions(data) {
+    // Check for valid data
+    if (!data || !data.symbol) {
+        console.warn('Invalid transaction data:', data);
+        return;
+    }
+    
+    const symbol = data.symbol.toLowerCase();
+    const transactions = data.transactions || [];
+    
+    // Update transaction display
+    updateTransactionDisplay(symbol, transactions);
     
     // Update reference prices if provided
     if (data.refPrices) {
@@ -473,6 +648,12 @@ function updateTransactions(data) {
     if (window.transactionCache && window.transactionCache[symbol]) {
         delete window.transactionCache[symbol];
     }
+    
+    // Cache the new transactions
+    if (!window.transactionCache) {
+        window.transactionCache = {};
+    }
+    window.transactionCache[symbol] = transactions;
     
     // Recalculate profit/loss with new transaction data
     if (uiState.prices[symbol] && uiState.holdings[symbol] !== undefined) {
@@ -514,6 +695,7 @@ function updateHoldings(data) {
     // Update state
     uiState.holdings[symbol] = amount;
     uiState.profitLoss[symbol] = profitLossPercent;
+    uiState.lastUpdated[`holdings_${symbol}`] = Date.now();
     
     // Update UI - holdings
     const holdingsElement = document.getElementById(`${symbol}-holdings`);
@@ -577,277 +759,353 @@ function updateThresholdDisplay(symbol) {
     }
 }
 
-// Update profit/loss and trigger trading decisions
+// Update profit/loss based on current data
 function updateProfitLoss(symbol) {
     // Skip if we don't have both price and holdings
     if (!uiState.prices[symbol] || uiState.holdings[symbol] === undefined) {
         return;
     }
     
-    // Get current price
-    const currentPrice = uiState.prices[symbol];
-    
-    // Get stored transaction data for this symbol
-    const transactions = getTransactionsForSymbol(symbol);
-    if (!transactions || transactions.length === 0) {
-        return; // No transactions yet, nothing to calculate
-    }
-    
-    // Get initial purchase price (the very first buy transaction)
-    const initialBuyTx = transactions.find(tx => tx.type.toLowerCase() === 'buy');
-    const initialPrice = initialBuyTx ? parseFloat(initialBuyTx.price) : null;
-    
-    // Get last purchase price (the most recent buy transaction)
-    const buyTransactions = transactions.filter(tx => tx.type.toLowerCase() === 'buy');
-    const lastBuyTx = buyTransactions.length > 0 ? 
-        buyTransactions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0] : null;
-    const lastPurchasePrice = lastBuyTx ? parseFloat(lastBuyTx.price) : null;
-    
-    // Skip if we don't have the necessary price data
-    if (!initialPrice || !lastPurchasePrice) {
+    // Skip if holdings are zero
+    if (uiState.holdings[symbol] <= 0) {
+        // Reset profit/loss display to zero
+        uiState.profitLoss[symbol] = 0;
+        updateProfitLossDisplay(symbol, 0);
         return;
     }
     
-    // Calculate profit/loss percentage from initial price
-    const profitLossPercent = ((currentPrice - initialPrice) / initialPrice) * 100;
+ // Get current price
+ const currentPrice = uiState.prices[symbol];
     
-    // Store profit/loss percentage in state
-    uiState.profitLoss[symbol] = profitLossPercent;
-    
-    // Update the display
-    updateProfitLossDisplay(symbol, profitLossPercent);
+ // If we have an initial price in state, use that instead of parsing transactions
+ if (uiState.initialPrices[symbol] > 0) {
+     const initialPrice = uiState.initialPrices[symbol];
+     
+     // Calculate profit/loss percentage from initial price
+     const profitLossPercent = ((currentPrice - initialPrice) / initialPrice) * 100;
+     
+     // Store profit/loss percentage in state
+     uiState.profitLoss[symbol] = profitLossPercent;
+     
+     // Update the display
+     updateProfitLossDisplay(symbol, profitLossPercent);
+     return;
+ }
+ 
+ // If we don't have an initial price in state, check transactions
+ // Get stored transaction data for this symbol
+ const transactions = getTransactionsForSymbol(symbol);
+ if (!transactions || transactions.length === 0) {
+     return; // No transactions yet, nothing to calculate
+ }
+ 
+ // Get initial purchase price (the very first buy transaction)
+ const initialBuyTx = transactions.find(tx => tx.type.toLowerCase() === 'buy');
+ const initialPrice = initialBuyTx ? parseFloat(initialBuyTx.price) : null;
+ 
+ // Skip if we don't have the necessary price data
+ if (!initialPrice) {
+     return;
+ }
+ 
+ // Calculate profit/loss percentage from initial price
+ const profitLossPercent = ((currentPrice - initialPrice) / initialPrice) * 100;
+ 
+ // Store profit/loss percentage in state
+ uiState.profitLoss[symbol] = profitLossPercent;
+ 
+ // Update the display
+ updateProfitLossDisplay(symbol, profitLossPercent);
 }
 
 // Get transactions for a specific symbol
 function getTransactionsForSymbol(symbol) {
-    // Look for transactions in data we have
-    const historyList = document.getElementById(`${symbol}-history`);
-    
-    // If we don't have transactions in the DOM, we have none to process
-    if (!historyList || historyList.querySelector('.no-transactions')) {
-        return [];
-    }
-    
-    // Parse transaction history from DOM if needed
-    const transactionItems = historyList.querySelectorAll('li:not(.no-transactions)');
-    
-    // Check if we've already parsed the transactions
-    if (window.transactionCache && window.transactionCache[symbol]) {
-        return window.transactionCache[symbol];
-    }
-    
-    // Initialize cache if needed
-    if (!window.transactionCache) {
-        window.transactionCache = {};
-    }
-    
-    // Parse transactions from DOM
-    const transactions = [];
-    transactionItems.forEach(item => {
-        const type = item.classList.contains('buy') ? 'BUY' : 'SELL';
-        
-        // Extract price using data attributes
-        const price = item.dataset.price || null;
-        const quantity = item.dataset.quantity || null;
-        const timestamp = item.dataset.timestamp || new Date().toISOString();
-        const automated = item.dataset.automated === 'true';
-        
-        if (price && quantity) {
-            transactions.push({
-                type,
-                price,
-                quantity,
-                timestamp,
-                automated
-            });
-        }
-    });
-    
-    // Cache the parsed transactions
-    window.transactionCache[symbol] = transactions;
-    
-    return transactions;
+ // Use cached transactions if available
+ if (window.transactionCache && window.transactionCache[symbol]) {
+     return window.transactionCache[symbol];
+ }
+ 
+ // Look for transactions in DOM if cache miss
+ const historyList = document.getElementById(`${symbol}-history`);
+ 
+ // If we don't have transactions in the DOM, we have none to process
+ if (!historyList || historyList.querySelector('.no-transactions')) {
+     return [];
+ }
+ 
+ // Parse transaction history from DOM
+ const transactionItems = historyList.querySelectorAll('li:not(.no-transactions)');
+ 
+ // Initialize cache if needed
+ if (!window.transactionCache) {
+     window.transactionCache = {};
+ }
+ 
+ // Parse transactions from DOM
+ const transactions = [];
+ transactionItems.forEach(item => {
+     const type = item.dataset.type || (item.classList.contains('buy') ? 'BUY' : 'SELL');
+     
+     // Extract data using data attributes
+     const price = item.dataset.price || null;
+     const quantity = item.dataset.quantity || null;
+     const timestamp = item.dataset.timestamp || new Date().toISOString();
+     const automated = item.dataset.automated === 'true';
+     
+     if (price && quantity) {
+         transactions.push({
+             type,
+             price,
+             quantity,
+             timestamp,
+             automated
+         });
+     }
+ });
+ 
+ // Cache the parsed transactions
+ window.transactionCache[symbol] = transactions;
+ 
+ return transactions;
 }
 
 // Update profit/loss display
 function updateProfitLossDisplay(symbol, percentage) {
-    const indicator = document.getElementById(`${symbol}-profit-indicator`);
-    const text = document.getElementById(`${symbol}-profit-text`);
-    
-    if (indicator && text) {
-        // Calculate position on the profit/loss bar (0-100%)
-        const range = CONFIG.profitThreshold - CONFIG.lossThreshold;
-        const position = ((percentage - CONFIG.lossThreshold) / range) * 100;
-        
-        // Constrain position to 0-100%
-        const clampedPosition = Math.max(0, Math.min(100, position));
-        
-        // Set indicator position
-        indicator.style.left = `${clampedPosition}%`;
-        
-        // Set text with appropriate color
-        text.textContent = `${percentage.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
-        
-        if (percentage > 0) {
-            text.className = 'profit';
-        } else if (percentage < 0) {
-            text.className = 'loss';
-        } else {
-            text.className = '';
-        }
-    }
+ const indicator = document.getElementById(`${symbol}-profit-indicator`);
+ const text = document.getElementById(`${symbol}-profit-text`);
+ 
+ if (indicator && text) {
+     // Calculate position on the profit/loss bar (0-100%)
+     const range = CONFIG.profitThreshold - CONFIG.lossThreshold;
+     const normalizedPercentage = Math.max(CONFIG.lossThreshold, Math.min(CONFIG.profitThreshold, percentage));
+     const position = ((normalizedPercentage - CONFIG.lossThreshold) / range) * 100;
+     
+     // Constrain position to 0-100%
+     const clampedPosition = Math.max(0, Math.min(100, position));
+     
+     // Set indicator position
+     indicator.style.left = `${clampedPosition}%`;
+     
+     // Set text with appropriate color
+     text.textContent = `${percentage.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+     
+     if (percentage > 0) {
+         text.className = 'profit';
+     } else if (percentage < 0) {
+         text.className = 'loss';
+     } else {
+         text.className = '';
+     }
+ }
 }
 
 // Handle first purchase result
 function handleFirstPurchaseResult(result) {
-    // No symbol in result, can't determine which cryptocurrency
-    if (!result) {
-        console.warn('Invalid first purchase result:', result);
-        return;
-    }
-    
-    // Extract symbol from result if available, otherwise reset all
-    let symbolToReset = null;
-    if (result.symbol) {
-        symbolToReset = result.symbol.replace('USDT', '').toLowerCase();
-    }
-    
-    if (symbolToReset) {
-        // Reset only the specific symbol
-        uiState.isProcessing[symbolToReset] = false;
-        resetButtonStates(symbolToReset);
-        
-        // Clear transaction cache for this symbol
-        if (window.transactionCache && window.transactionCache[symbolToReset]) {
-            delete window.transactionCache[symbolToReset];
-        }
-        
-        // Request updated transaction data
-        Connections.requestTransactions(symbolToReset);
-    } else {
-        // Reset all processing flags for simplicity
-        CONFIG.cryptos.forEach(crypto => {
-            uiState.isProcessing[crypto.symbol] = false;
-            resetButtonStates(crypto.symbol);
-        });
-    }
-    
-    // Show appropriate message
-    if (result.success) {
-        console.log('First purchase successful');
-    } else {
-        alert(`Purchase failed: ${result.error || 'Unknown error'}`);
-    }
+ // No symbol in result, can't determine which cryptocurrency
+ if (!result) {
+     console.warn('Invalid first purchase result:', result);
+     return;
+ }
+ 
+ // Extract symbol from result if available, otherwise reset all
+ let symbolToReset = null;
+ if (result.symbol) {
+     symbolToReset = result.symbol.replace('USDT', '').toLowerCase();
+ }
+ 
+ if (symbolToReset) {
+     // Reset only the specific symbol
+     uiState.isProcessing[symbolToReset] = false;
+     resetButtonStates(symbolToReset);
+     
+     // Clear transaction cache for this symbol
+     if (window.transactionCache && window.transactionCache[symbolToReset]) {
+         delete window.transactionCache[symbolToReset];
+     }
+     
+     // Request updated transaction data
+     throttledRequest('transactions', symbolToReset, () => {
+         Connections.requestTransactions(symbolToReset);
+     });
+ } else {
+     // Reset all processing flags for simplicity
+     CONFIG.cryptos.forEach(crypto => {
+         uiState.isProcessing[crypto.symbol] = false;
+         resetButtonStates(crypto.symbol);
+     });
+ }
+ 
+ // Show appropriate message
+ if (result.success) {
+     console.log('First purchase successful');
+ } else {
+     alert(`Purchase failed: ${result.error || 'Unknown error'}`);
+ }
 }
 
 // Handle sell all result
 function handleSellAllResult(result) {
-    // No symbol in result, can't determine which cryptocurrency
-    if (!result) {
-        console.warn('Invalid sell all result:', result);
-        return;
-    }
-    
-    // Extract symbol from result if available, otherwise reset all
-    let symbolToReset = null;
-    if (result.symbol) {
-        symbolToReset = result.symbol.replace('USDT', '').toLowerCase();
-    }
-    
-    if (symbolToReset) {
-        // Reset only the specific symbol
-        uiState.isProcessing[symbolToReset] = false;
-        resetButtonStates(symbolToReset);
-        
-        // Clear transaction cache for this symbol
-        if (window.transactionCache && window.transactionCache[symbolToReset]) {
-            delete window.transactionCache[symbolToReset];
-        }
-        
-        // Request updated transaction data
-        Connections.requestTransactions(symbolToReset);
-    } else {
-        // Reset all processing flags for simplicity
-        CONFIG.cryptos.forEach(crypto => {
-            uiState.isProcessing[crypto.symbol] = false;
-            resetButtonStates(crypto.symbol);
-        });
-    }
-    
-    // Show appropriate message
-    if (result.success) {
-        console.log('Sell all successful');
-    } else {
-        alert(`Sell failed: ${result.error || 'Unknown error'}`);
-    }
+ // No symbol in result, can't determine which cryptocurrency
+ if (!result) {
+     console.warn('Invalid sell all result:', result);
+     return;
+ }
+ 
+ // Extract symbol from result if available, otherwise reset all
+ let symbolToReset = null;
+ if (result.symbol) {
+     symbolToReset = result.symbol.replace('USDT', '').toLowerCase();
+ }
+ 
+ if (symbolToReset) {
+     // Reset only the specific symbol
+     uiState.isProcessing[symbolToReset] = false;
+     resetButtonStates(symbolToReset);
+     
+     // Clear transaction cache for this symbol
+     if (window.transactionCache && window.transactionCache[symbolToReset]) {
+         delete window.transactionCache[symbolToReset];
+     }
+     
+     // Request updated transaction data
+     throttledRequest('transactions', symbolToReset, () => {
+         Connections.requestTransactions(symbolToReset);
+     });
+ } else {
+     // Reset all processing flags for simplicity
+     CONFIG.cryptos.forEach(crypto => {
+         uiState.isProcessing[crypto.symbol] = false;
+         resetButtonStates(crypto.symbol);
+     });
+ }
+ 
+ // Show appropriate message
+ if (result.success) {
+     console.log('Sell all successful');
+ } else {
+     alert(`Sell failed: ${result.error || 'Unknown error'}`);
+ }
 }
 
 // Reset button states after operation completes
 function resetButtonStates(symbol) {
-    const buyButton = document.getElementById(`${symbol}-first-purchase`);
-    const sellButton = document.getElementById(`${symbol}-sell-all`);
-    
-    if (buyButton) {
-        buyButton.classList.remove('disabled');
-        buyButton.textContent = 'Buy Crypto';
-    }
-    
-    if (sellButton) {
-        sellButton.classList.remove('disabled');
-        sellButton.textContent = 'Sell All';
-    }
+ const buyButton = document.getElementById(`${symbol}-first-purchase`);
+ const sellButton = document.getElementById(`${symbol}-sell-all`);
+ 
+ if (buyButton) {
+     buyButton.classList.remove('disabled');
+     buyButton.textContent = 'Buy Crypto';
+ }
+ 
+ if (sellButton) {
+     sellButton.classList.remove('disabled');
+     sellButton.textContent = 'Sell All';
+ }
 }
 
 // Set up theme toggle
 function setupThemeToggle() {
-    const themeToggle = document.getElementById('theme-toggle');
-    
-    if (themeToggle) {
-        // Check for saved theme preference
-        const savedTheme = localStorage.getItem('theme');
-        if (savedTheme === 'dark') {
-            document.body.classList.add('dark-mode');
-            themeToggle.checked = true;
-            uiState.isDarkMode = true;
-        }
-        
-        // Add event listener for theme toggle
-        themeToggle.addEventListener('change', () => {
-            if (themeToggle.checked) {
-                document.body.classList.add('dark-mode');
-                localStorage.setItem('theme', 'dark');
-                uiState.isDarkMode = true;
-            } else {
-                document.body.classList.remove('dark-mode');
-                localStorage.setItem('theme', 'light');
-                uiState.isDarkMode = false;
-            }
-        });
-    }
+ const themeToggle = document.getElementById('theme-toggle');
+ 
+ if (themeToggle) {
+     // Check for saved theme preference
+     const savedTheme = localStorage.getItem('theme');
+     if (savedTheme === 'dark') {
+         document.body.classList.add('dark-mode');
+         themeToggle.checked = true;
+         uiState.isDarkMode = true;
+     }
+     
+     // Add event listener for theme toggle
+     themeToggle.addEventListener('change', () => {
+         if (themeToggle.checked) {
+             document.body.classList.add('dark-mode');
+             localStorage.setItem('theme', 'dark');
+             uiState.isDarkMode = true;
+         } else {
+             document.body.classList.remove('dark-mode');
+             localStorage.setItem('theme', 'light');
+             uiState.isDarkMode = false;
+         }
+     });
+ }
 }
 
-// Set up automatic refresh
+// Set up automatic refresh with optimized batch requests
 function setupAutoRefresh() {
-    // Clear any existing interval
-    if (refreshInterval) {
-        clearInterval(refreshInterval);
-    }
-    
-    // Start new refresh interval
-    refreshInterval = setInterval(() => {
-        // Request system status
-        Connections.requestSystemStatus();
-        
-        // Request transactions for all cryptocurrencies
-        CONFIG.cryptos.forEach(crypto => {
-            Connections.requestTransactions(crypto.symbol);
-        });
-        
-        console.log('Auto-refresh: Updated data from server');
-    }, CONFIG.refreshInterval);
+ // Clear any existing intervals
+ if (refreshInterval) {
+     clearInterval(refreshInterval);
+ }
+ 
+ if (priceRefreshInterval) {
+     clearInterval(priceRefreshInterval);
+ }
+ 
+ // Start new refresh interval for general data
+ refreshInterval = setInterval(() => {
+     // Request system status (throttled)
+     throttledRequest('status', null, () => {
+         Connections.requestSystemStatus();
+     });
+     
+     // Use batch request for all cryptocurrency data
+     throttledRequest('batch', null, () => {
+         // Use batch API if available, otherwise stagger individual requests
+         if (typeof Connections.batchRequestData === 'function') {
+             const symbols = CONFIG.cryptos.map(crypto => crypto.symbol);
+             Connections.batchRequestData(symbols);
+         } else {
+             // Fallback to individual requests if batch API isn't available
+             CONFIG.cryptos.forEach((crypto, index) => {
+                 setTimeout(() => {
+                     throttledRequest('transactions', crypto.symbol, () => {
+                         Connections.requestTransactions(crypto.symbol);
+                     });
+                 }, index * 500); // Stagger requests
+             });
+         }
+     });
+     
+     console.log('Auto-refresh: Updated data using batch request');
+ }, CONFIG.refreshInterval);
 }
+
+// Clean up resources when page is unloaded
+function cleanup() {
+ // Clear all intervals
+ if (refreshInterval) {
+     clearInterval(refreshInterval);
+     refreshInterval = null;
+ }
+ 
+ if (priceRefreshInterval) {
+     clearInterval(priceRefreshInterval);
+     priceRefreshInterval = null;
+ }
+ 
+ if (requestTrackerInterval) {
+     clearInterval(requestTrackerInterval);
+     requestTrackerInterval = null;
+ }
+ 
+ // Clear transaction cache to free memory
+ window.transactionCache = null;
+ 
+ // Clear UI state
+ Object.keys(uiState).forEach(key => {
+     if (typeof uiState[key] === 'object') {
+         uiState[key] = {};
+     }
+ });
+ 
+ console.log('Dashboard resources cleaned up');
+}
+
+// Register cleanup on page unload
+window.addEventListener('beforeunload', cleanup);
 
 // Export public API
 export {
-    initialize
+ initialize
 };

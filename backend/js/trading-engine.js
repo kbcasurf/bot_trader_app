@@ -1,506 +1,664 @@
-// backend/js/trading-engine.js - Trading algorithm implementation
+// conns.js - Connection Management Module with optimizations
+// Responsible for backend communication, WebSocket connections and data flow
 
-const dotenv = require('dotenv');
+// Import socket.io client
+import { io } from 'socket.io-client';
 
-// Load environment variables
-dotenv.config({ path: '/app/.env' });
+// Self-initialization when script is loaded
+let isInitialized = false;
 
-// Trading thresholds
-const TRADING_CONFIG = {
-    PROFIT_THRESHOLD: parseFloat(process.env.PROFIT_THRESHOLD), // Percentage profit target
-    LOSS_THRESHOLD: parseFloat(process.env.LOSS_THRESHOLD),     // Percentage loss threshold for additional purchases
-    ADDITIONAL_PURCHASE_AMOUNT: parseFloat(process.env.ADDITIONAL_PURCHASE_AMOUNT)// Amount in USDT for additional purchases
+// Auto-initialize after DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    // Short delay to ensure all HTML elements are rendered
+    setTimeout(() => {
+        // Only initialize once
+        if (!isInitialized) {
+            initialize();
+            isInitialized = true;
+            console.log('Connection module auto-initialized');
+        }
+    }, 500);
+});
+
+// Request throttling configuration to prevent overwhelming the server
+const THROTTLE_CONFIG = {
+    // Minimum time between repeated requests (milliseconds)
+    MIN_INTERVAL: {
+        transactions: 5000,   // 5 seconds between requests for the same symbol
+        status: 15000,        // 15 seconds between system status checks
+        account: 30000        // 30 seconds between account info requests
+    },
+    // Track when requests were last made for each type/symbol
+    lastRequests: {
+        transactions: {},     // Key: symbol, Value: timestamp
+        status: 0,            // Timestamp of last status request
+        account: 0            // Timestamp of last account info request
+    },
+    // Set this to control max requests per minute
+    MAX_REQUESTS_PER_MINUTE: 20,
+    // Track requests made in current minute window
+    requestsInLastMinute: 0,
+    // Start time of current minute window
+    currentMinuteStart: Date.now()
 };
 
-// Module dependencies - will be injected at runtime
-let pool = null;
-let binanceAPI = null;
-let telegramBot = null;
+// Reset request counter every minute
+setInterval(() => {
+    THROTTLE_CONFIG.requestsInLastMinute = 0;
+    THROTTLE_CONFIG.currentMinuteStart = Date.now();
+}, 60000);
 
-// Initialize the trading engine with required dependencies
-function initialize(dbPool, binance, telegram) {
-    pool = dbPool;
-    binanceAPI = binance;
-    telegramBot = telegram;
-    console.log('Trading engine initialized with thresholds:', TRADING_CONFIG);
+// Create and configure socket connection
+const socket = io({
+    transports: ['websocket', 'polling'],
+    reconnectionAttempts: 15,
+    reconnectionDelay: 2000,
+    reconnectionDelayMax: 10000,
+    timeout: 60000,
+    autoConnect: true,
+    forceNew: true
+});
+
+// Event callbacks registry - this allows dashboard.js to register callbacks
+const eventCallbacks = {
+    // Connection events
+    'connect': [],
+    'disconnect': [],
+    'connect_error': [],
+    
+    // Status events
+    'database-status': [],
+    'binance-status': [],
+    'telegram-status': [],
+    'trading-status': [],
+    'websocket-status': [],
+    
+    // Data events
+    'price-update': [],
+    'transaction-update': [],
+    'holdings-update': [],
+    'account-info': [],
+    'batch-data-update': [],
+    
+    // Order result events
+    'buy-result': [],
+    'sell-result': [],
+    'first-purchase-result': [],
+    'sell-all-result': []
+};
+
+// System status tracking
+const systemStatus = {
+    backend: false,
+    database: false,
+    binance: false,
+    telegram: false,
+    websocket: false,
+    lastBackendResponse: Date.now(),
+    reconnectAttempts: 0,
+    lastPriceUpdates: {
+        btc: 0,
+        sol: 0,
+        xrp: 0,
+        doge: 0,
+        near: 0,
+        pendle: 0
+    }
+};
+
+// Interval references for monitoring
+let connectionMonitorInterval = null;
+let priceMonitorInterval = null;
+let reconnectTimeout = null;
+
+// Initialize monitoring of connections and price updates
+function initializeMonitoring() {
+    // Clear any existing intervals first
+    if (connectionMonitorInterval) clearInterval(connectionMonitorInterval);
+    if (priceMonitorInterval) clearInterval(priceMonitorInterval);
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    
+    // Monitor backend connection health every 10 seconds
+    connectionMonitorInterval = setInterval(() => {
+        const now = Date.now();
+        const timeSinceLastResponse = now - systemStatus.lastBackendResponse;
+        
+        // If no response for 15 seconds, backend might be disconnected
+        if (timeSinceLastResponse > 15000) {
+            console.warn('No backend response for 15 seconds');
+            
+            // If socket claims to be connected, test with a ping
+            if (socket.connected) {
+                console.log('Testing connection with ping...');
+                socket.emit('ping', { timestamp: Date.now() }, (response) => {
+                    if (response && response.pong) {
+                        console.log('Ping successful, connection is alive');
+                        systemStatus.lastBackendResponse = Date.now();
+                        updateConnectionStatus(true);
+                    } else {
+                        console.error('Ping failed, trying to reconnect');
+                        socket.disconnect();
+                        scheduleReconnect();
+                    }
+                });
+                
+                // Give it 5 seconds to respond
+                setTimeout(() => {
+                    const newTimeSinceResponse = Date.now() - systemStatus.lastBackendResponse;
+                    if (newTimeSinceResponse > 20000) {
+                        console.error('Connection test failed - marking backend as disconnected');
+                        updateConnectionStatus(false);
+                        socket.disconnect();
+                        scheduleReconnect();
+                    }
+                }, 5000);
+            } else {
+                // Socket knows it's disconnected, try to reconnect
+                scheduleReconnect();
+            }
+        }
+    }, 15000); // Check less frequently (15s instead of 10s)
+    
+    // Monitor price updates every 10 seconds
+    priceMonitorInterval = setInterval(() => {
+        const now = Date.now();
+        let anyRecentPriceUpdates = false;
+        
+        // Check if any cryptocurrency has received a price update in the last 20 seconds
+        Object.values(systemStatus.lastPriceUpdates).forEach(timestamp => {
+            if (timestamp > 0 && now - timestamp < 20000) {
+                anyRecentPriceUpdates = true;
+            }
+        });
+        
+        // Update the websocket status based on recent price updates
+        if (systemStatus.websocket !== anyRecentPriceUpdates) {
+            systemStatus.websocket = anyRecentPriceUpdates;
+            
+            // Log the status change
+            console.log(`WebSocket price flow status changed: ${anyRecentPriceUpdates ? 'ACTIVE' : 'INACTIVE'}`);
+            
+            // Notify any registered callbacks
+            triggerCallbacks('websocket-status', { connected: anyRecentPriceUpdates });
+        }
+    }, 10000);
 }
 
-// Process a price update for a symbol
-async function processPriceUpdate(io, symbol, price) {
-    try {
-        // Skip processing if price is invalid
-        if (!symbol || !price || isNaN(parseFloat(price))) {
+// Schedule a reconnection attempt with exponential backoff
+function scheduleReconnect() {
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+    }
+    
+    // Calculate backoff delay
+    const baseDelay = 2000; // 2 seconds base
+    const maxDelay = 60000; // Maximum 60 seconds
+    systemStatus.reconnectAttempts += 1;
+    
+    // Calculate delay with exponential backoff and some randomization
+    let delay = Math.min(baseDelay * Math.pow(1.5, Math.min(systemStatus.reconnectAttempts, 10)), maxDelay);
+    delay = delay * (0.8 + Math.random() * 0.4); // Add 20% randomization
+    
+    console.log(`Scheduling reconnection attempt ${systemStatus.reconnectAttempts} in ${Math.round(delay / 1000)} seconds`);
+    
+    reconnectTimeout = setTimeout(() => {
+        console.log('Attempting to reconnect...');
+        
+        // If reconnect succeeds, this will trigger the 'connect' event
+        // which will reset reconnectAttempts
+        if (socket.disconnected) {
+            try {
+                socket.connect();
+            } catch (error) {
+                console.error('Error during reconnect attempt:', error);
+                scheduleReconnect(); // Try again
+            }
+        }
+    }, delay);
+}
+
+// Update connection status
+function updateConnectionStatus(isConnected) {
+    // Update system status
+    systemStatus.backend = isConnected;
+    systemStatus.lastBackendResponse = Date.now();
+    
+    // If backend disconnects, all other services should be marked as disconnected
+    if (!isConnected) {
+        systemStatus.database = false;
+        systemStatus.binance = false;
+        systemStatus.telegram = false;
+        systemStatus.websocket = false;
+        
+        // Notify callbacks of all services being disconnected
+        triggerCallbacks('database-status', false);
+        triggerCallbacks('binance-status', false);
+        triggerCallbacks('telegram-status', false);
+        triggerCallbacks('websocket-status', { connected: false });
+    }
+    
+    // Notify any registered connect/disconnect callbacks
+    if (isConnected) {
+        triggerCallbacks('connect');
+    } else {
+        triggerCallbacks('disconnect', 'Backend connection lost');
+    }
+}
+
+// Helper function to trigger event callbacks
+function triggerCallbacks(event, data) {
+    if (eventCallbacks[event]) {
+        eventCallbacks[event].forEach(callback => {
+            try {
+                callback(data);
+            } catch (error) {
+                console.error(`Error in ${event} callback:`, error);
+            }
+        });
+    }
+}
+
+// Register a callback for an event
+function on(event, callback) {
+    if (eventCallbacks[event]) {
+        eventCallbacks[event].push(callback);
+    } else {
+        console.warn(`Unknown event: ${event}`);
+    }
+}
+
+// Remove a callback for an event
+function off(event, callback) {
+    if (eventCallbacks[event]) {
+        const index = eventCallbacks[event].indexOf(callback);
+        if (index !== -1) {
+            eventCallbacks[event].splice(index, 1);
+        }
+    }
+}
+
+// Throttled request function to prevent overwhelming the server
+function throttledRequest(requestType, symbol, requestFunction) {
+    const now = Date.now();
+    
+    // If we've made too many requests in the current minute window, delay this one
+    if (THROTTLE_CONFIG.requestsInLastMinute >= THROTTLE_CONFIG.MAX_REQUESTS_PER_MINUTE) {
+        console.warn(`Request rate limit reached (${THROTTLE_CONFIG.requestsInLastMinute}/${THROTTLE_CONFIG.MAX_REQUESTS_PER_MINUTE}). Skipping ${requestType} request.`);
+        return false;
+    }
+    
+    // Check if we've made this specific request recently
+    if (symbol) {
+        // For symbol-specific requests
+        if (!THROTTLE_CONFIG.lastRequests[requestType]) {
+            THROTTLE_CONFIG.lastRequests[requestType] = {};
+        }
+        
+        const lastRequest = THROTTLE_CONFIG.lastRequests[requestType][symbol] || 0;
+        if (now - lastRequest < THROTTLE_CONFIG.MIN_INTERVAL[requestType]) {
+            console.log(`Skipping ${requestType} request for ${symbol} - too soon since last request`);
+            return false;
+        }
+        
+        // Update last request time
+        THROTTLE_CONFIG.lastRequests[requestType][symbol] = now;
+    } else {
+        // For general requests
+        const lastRequest = THROTTLE_CONFIG.lastRequests[requestType] || 0;
+        if (now - lastRequest < THROTTLE_CONFIG.MIN_INTERVAL[requestType]) {
+            console.log(`Skipping ${requestType} request - too soon since last request`);
+            return false;
+        }
+        
+        // Update last request time
+        THROTTLE_CONFIG.lastRequests[requestType] = now;
+    }
+    
+    // Increment request counter
+    THROTTLE_CONFIG.requestsInLastMinute++;
+    
+    // Make the request
+    requestFunction();
+    return true;
+}
+
+// Request system status from the backend (throttled)
+function requestSystemStatus() {
+    return throttledRequest('status', null, () => {
+        socket.emit('get-system-status');
+    });
+}
+
+// Request transactions for a specific symbol (throttled)
+function requestTransactions(symbol) {
+    // Ensure symbol is properly formatted for Binance API (uppercase)
+    const formattedSymbol = formatSymbol(symbol);
+    
+    return throttledRequest('transactions', formattedSymbol, () => {
+        socket.emit('get-transactions', { symbol: formattedSymbol });
+    });
+}
+
+// Request account info (throttled)
+function requestAccountInfo() {
+    return throttledRequest('account', null, () => {
+        socket.emit('get-account-info');
+    });
+}
+
+// Test Binance stream (throttled)
+function testBinanceStream() {
+    return throttledRequest('binance-test', null, () => {
+        socket.emit('test-binance-stream');
+    });
+}
+
+// Batch request data for multiple symbols at once (throttled)
+function batchRequestData(symbols) {
+    if (!symbols || !symbols.length) return false;
+    
+    const formattedSymbols = symbols.map(formatSymbol);
+    
+    return throttledRequest('batch-data', null, () => {
+        socket.emit('batch-get-data', { symbols: formattedSymbols });
+    });
+}
+
+// Execute buy order
+function executeBuyOrder(symbol, amount) {
+    // Ensure symbol is properly formatted for Binance API (uppercase)
+    const formattedSymbol = formatSymbol(symbol);
+    socket.emit('first-purchase', {
+        symbol: formattedSymbol,
+        investment: amount
+    });
+}
+
+// Execute sell order
+function executeSellOrder(symbol) {
+    // Ensure symbol is properly formatted for Binance API (uppercase)
+    const formattedSymbol = formatSymbol(symbol);
+    socket.emit('sell-all', {
+        symbol: formattedSymbol
+    });
+}
+
+// Helper function to ensure proper symbol format for Binance API
+function formatSymbol(symbol) {
+    // Extract base symbol without USDT
+    let baseSymbol = symbol;
+    if (symbol.toUpperCase().endsWith('USDT')) {
+        baseSymbol = symbol.slice(0, -4);
+    }
+    
+    // Return in proper format: uppercase base symbol + uppercase USDT
+    return baseSymbol.toUpperCase() + 'USDT';
+}
+
+// Function to get current system status
+function getSystemStatus() {
+    return { ...systemStatus };
+}
+
+// Initialize socket event listeners
+function initializeSocketListeners() {
+    // Socket connection events
+    socket.on('connect', () => {
+        console.log('Socket connected successfully with ID:', socket.id);
+        
+        // Reset reconnect counter
+        systemStatus.reconnectAttempts = 0;
+        
+        // Mark response received
+        systemStatus.lastBackendResponse = Date.now();
+        
+        // Request system status
+        requestSystemStatus();
+        
+        // Update connection status
+        updateConnectionStatus(true);
+    });
+    
+    socket.on('disconnect', (reason) => {
+        console.log('Socket disconnected. Reason:', reason);
+        
+        // Update system status
+        updateConnectionStatus(false);
+        
+        // Schedule reconnection
+        scheduleReconnect();
+    });
+    
+    socket.on('connect_error', (error) => {
+        console.error('Socket.IO connection error:', error.message);
+        
+        // Update system status
+        updateConnectionStatus(false);
+        
+        // Try to reconnect with polling if WebSocket fails
+        if (socket.io.opts.transports[0] === 'websocket') {
+            console.log('WebSocket connection failed, falling back to polling');
+            socket.io.opts.transports = ['polling', 'websocket'];
+            
+            // Schedule reconnection
+            scheduleReconnect();
+        }
+    });
+    
+    // Backend service status events
+    socket.on('database-status', (isConnected) => {
+        systemStatus.database = isConnected;
+        systemStatus.lastBackendResponse = Date.now();
+        triggerCallbacks('database-status', isConnected);
+    });
+    
+    socket.on('binance-status', (isConnected) => {
+        systemStatus.binance = isConnected;
+        systemStatus.lastBackendResponse = Date.now();
+        triggerCallbacks('binance-status', isConnected);
+    });
+    
+    socket.on('telegram-status', (isConnected) => {
+        systemStatus.telegram = isConnected;
+        systemStatus.lastBackendResponse = Date.now();
+        triggerCallbacks('telegram-status', isConnected);
+    });
+    
+    socket.on('trading-status', (status) => {
+        systemStatus.lastBackendResponse = Date.now();
+        triggerCallbacks('trading-status', status);
+    });
+    
+    socket.on('websocket-status', (status) => {
+        systemStatus.websocket = status.connected || false;
+        systemStatus.lastBackendResponse = Date.now();
+        triggerCallbacks('websocket-status', status);
+    });
+    
+    // Price updates
+    socket.on('price-update', (data) => {
+        if (!data) {
+            console.warn('Received empty price update data');
             return;
         }
-
-        // Format the symbol for consistency
-        const formattedSymbol = formatSymbol(symbol);
-        const currentPrice = parseFloat(price);
-
-        // Get reference prices from database
-        const references = await getReferencePrices(formattedSymbol);
         
-        // Skip if we have no reference data
-        if (!references) {
-            console.warn(`No reference data for ${formattedSymbol}, skipping price update`);
-            return;
-        }
-
-        console.log(`Processing price update for ${formattedSymbol}: Current price=${currentPrice}, Next buy=${references.next_buy_threshold}, Next sell=${references.next_sell_threshold}`);
-
-        // Get current holdings
-        const holdings = await getHoldings(formattedSymbol);
+        // Handle different possible symbol formats
+        let symbol = '';
+        let price = 0;
         
-        // Skip if we have no holdings and no initial purchase price (nothing to trade)
-        if (holdings.quantity <= 0 && references.initial_purchase_price <= 0) {
+        if (data.symbol) {
+            symbol = data.symbol;
+        } else if (data.s) {
+            symbol = data.s;
+        } else {
+            console.warn('Price update missing symbol:', data);
             return;
         }
         
-        // Check if we need to take action based on the current price
-        if (holdings.quantity > 0) {
-            // Check if price is at or above sell threshold and we have holdings to sell
-            if (currentPrice >= references.next_sell_threshold && references.next_sell_threshold > 0) {
-                console.log(`SELL CONDITION MET for ${formattedSymbol}: Current price ${currentPrice} >= Sell threshold ${references.next_sell_threshold}`);
-                // Execute sell
-                await executeSellForProfit(io, formattedSymbol, currentPrice);
+        if (data.price) {
+            price = data.price;
+        } else if (data.p) {
+            price = data.p;
+        } else if (data.a) {
+            price = data.a; // Use ask price from bookTicker
+        } else if (data.b) {
+            price = data.b; // Use bid price from bookTicker
+        } else if (data.c) {
+            price = data.c; // Use close price from ticker
+        } else {
+            console.warn('Price update missing price value:', data);
+            return;
+        }
+        
+        // Normalize symbol format (remove USDT if it exists)
+        const baseSymbol = symbol.replace('USDT', '').toLowerCase();
+        
+        // Track this price update time
+        if (systemStatus.lastPriceUpdates.hasOwnProperty(baseSymbol)) {
+            systemStatus.lastPriceUpdates[baseSymbol] = Date.now();
+            
+            // Make sure websocket status is true when receiving price updates
+            if (!systemStatus.websocket) {
+                systemStatus.websocket = true;
+                triggerCallbacks('websocket-status', { connected: true });
             }
         }
         
-        // Check if price is at or below buy threshold (we may want to buy more)
-        if (currentPrice <= references.next_buy_threshold * 1.005 && references.next_buy_threshold > 0) {
-            console.log(`BUY CONDITION MET for ${formattedSymbol}: Current price ${currentPrice} <= Buy threshold ${references.next_buy_threshold}`);
-            // Execute buy with a small buffer (0.5% margin)
-            await executeBuyOnDip(io, formattedSymbol, currentPrice);
+        // Ensure backend is marked as connected when we get price updates
+        if (!systemStatus.backend) {
+            updateConnectionStatus(true);
         }
         
-        // Update reference prices with current price for UI display
-        await updateReferencePrices(formattedSymbol, currentPrice);
-    } catch (error) {
-        console.error(`Error processing price update for ${symbol}:`, error);
-    }
-}
-
-// Get current reference prices for a symbol
-async function getReferencePrices(symbol) {
-    let conn;
-    try {
-        conn = await pool.getConnection();
-        const rows = await conn.query(
-            'SELECT * FROM reference_prices WHERE symbol = ?',
-            [symbol]
-        );
+        // Mark response received
+        systemStatus.lastBackendResponse = Date.now();
         
-        if (rows.length === 0) {
-            // Initialize reference prices if not found
-            const defaultRecord = {
-                symbol,
-                initial_purchase_price: 0,
-                last_purchase_price: 0,
-                last_sell_price: 0,
-                next_buy_threshold: 0,
-                next_sell_threshold: 0
-            };
-            
-            await conn.query(
-                'INSERT INTO reference_prices (symbol, initial_purchase_price, last_purchase_price, last_sell_price, next_buy_threshold, next_sell_threshold) VALUES (?, ?, ?, ?, ?, ?)',
-                [symbol, 0, 0, 0, 0, 0]
-            );
-            
-            return defaultRecord;
-        }
-        
-        return rows[0];
-    } catch (error) {
-        console.error('Error getting reference prices:', error);
-        return null;
-    } finally {
-        if (conn) conn.release();
-    }
-}
-
-// Update reference prices with new calculations
-async function updateReferencePrices(symbol, currentPrice = null) {
-    let conn;
-    try {
-        conn = await pool.getConnection();
-        
-        // Get the first buy transaction (for initial purchase price)
-        const firstBuyResult = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? AND type = "BUY" ORDER BY timestamp ASC LIMIT 1',
-            [symbol]
-        );
-        
-        // Get the most recent buy transaction (for last purchase price)
-        const lastBuyResult = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? AND type = "BUY" ORDER BY timestamp DESC LIMIT 1',
-            [symbol]
-        );
-        
-        // Get the most recent sell transaction (for last sell price)
-        const lastSellResult = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? AND type = "SELL" ORDER BY timestamp DESC LIMIT 1',
-            [symbol]
-        );
-        
-        // Get configuration for this symbol
-        const configResult = await conn.query(
-            'SELECT * FROM configuration WHERE symbol = ?',
-            [symbol]
-        );
-        
-        const config = configResult.length > 0 ? configResult[0] : {
-            buy_threshold_percent: TRADING_CONFIG.LOSS_THRESHOLD,
-            sell_threshold_percent: TRADING_CONFIG.PROFIT_THRESHOLD,
-            additional_purchase_amount: TRADING_CONFIG.ADDITIONAL_PURCHASE_AMOUNT
-        };
-        
-        // Extract the prices
-        const initialPurchasePrice = firstBuyResult.length > 0 ? parseFloat(firstBuyResult[0].price) : 0;
-        const lastPurchasePrice = lastBuyResult.length > 0 ? parseFloat(lastBuyResult[0].price) : 0;
-        const lastSellPrice = lastSellResult.length > 0 ? parseFloat(lastSellResult[0].price) : 0;
-        
-        // Calculate the thresholds
-        let nextBuyThreshold = 0;
-        let nextSellThreshold = 0;
-        
-        if (lastPurchasePrice > 0 && initialPurchasePrice > 0) {
-            // If we have an initial purchase, set sell threshold at 5% above that
-            nextSellThreshold = initialPurchasePrice * (1 + (config.sell_threshold_percent / 100));
-            
-            // Set buy threshold at 5% below the last purchase price
-            nextBuyThreshold = lastPurchasePrice * (1 - (config.buy_threshold_percent / 100));
-        } else if (lastSellPrice > 0) {
-            // If we've sold everything but have a last sell price, set buy threshold at 5% below that
-            nextBuyThreshold = lastSellPrice * (1 - (config.buy_threshold_percent / 100));
-            nextSellThreshold = 0; // No sell threshold until we buy again
-        }
-        
-        // Update the reference prices in the database
-        await conn.query(
-            `UPDATE reference_prices 
-             SET initial_purchase_price = ?, 
-                 last_purchase_price = ?, 
-                 last_sell_price = ?, 
-                 next_buy_threshold = ?, 
-                 next_sell_threshold = ?
-             WHERE symbol = ?`,
-            [initialPurchasePrice, lastPurchasePrice, lastSellPrice, nextBuyThreshold, nextSellThreshold, symbol]
-        );
-        
-        // Return the updated values
-        return {
-            initial_purchase_price: initialPurchasePrice,
-            last_purchase_price: lastPurchasePrice,
-            last_sell_price: lastSellPrice,
-            next_buy_threshold: nextBuyThreshold,
-            next_sell_threshold: nextSellThreshold,
-            current_price: currentPrice
-        };
-    } catch (error) {
-        console.error('Error updating reference prices:', error);
-        return null;
-    } finally {
-        if (conn) conn.release();
-    }
-}
-
-// Get current holdings for a symbol
-async function getHoldings(symbol) {
-    let conn;
-    try {
-        conn = await pool.getConnection();
-        const rows = await conn.query(
-            'SELECT * FROM holdings WHERE symbol = ?',
-            [symbol]
-        );
-        return rows[0] || { symbol, quantity: 0, avg_price: 0 };
-    } catch (error) {
-        console.error('Error getting holdings:', error);
-        return { symbol, quantity: 0, avg_price: 0 };
-    } finally {
-        if (conn) conn.release();
-    }
-}
-
-// Execute a buy order when price drops below threshold
-async function executeBuyOnDip(io, symbol, currentPrice) {
-    let conn;
-    try {
-        console.log(`Executing automated buy for ${symbol} at ${currentPrice} (dip detected)`);
-        
-        // Get configuration for this symbol
-        conn = await pool.getConnection();
-        const configResult = await conn.query(
-            'SELECT * FROM configuration WHERE symbol = ?',
-            [symbol]
-        );
-        
-        const config = configResult.length > 0 ? configResult[0] : {
-            additional_purchase_amount: TRADING_CONFIG.ADDITIONAL_PURCHASE_AMOUNT
-        };
-        
-        // Use configured amount for additional purchase
-        const amount = parseFloat(config.additional_purchase_amount);
-        
-        // Execute the buy order
-        const result = await binanceAPI.executeBuyOrder(symbol, amount, 'usdt');
-        
-        if (!result.success) {
-            console.error(`Automated buy failed for ${symbol}:`, result.error);
-            return false;
-        }
-        
-        console.log(`Executed automated buy for ${symbol} at ${currentPrice}. New buy threshold: ${refPrices.next_buy_threshold}, New sell threshold: ${refPrices.next_sell_threshold}`);
-        
-        // Record the transaction in database
-        await conn.query(
-            'INSERT INTO transactions (symbol, type, price, quantity, investment, automated) VALUES (?, ?, ?, ?, ?, ?)',
-            [symbol, 'BUY', currentPrice, result.amount, amount, true]
-        );
-        
-        // Update holdings
-        await updateHoldings(symbol);
-        
-        // Update reference prices
-        await updateReferencePrices(symbol, currentPrice);
-        
-        // Send Telegram notification
-        if (telegramBot) {
-            await telegramBot.sendTradeNotification({
-                symbol: symbol,
-                type: 'BUY',
-                price: currentPrice,
-                quantity: result.amount,
-                investment: amount,
-                timestamp: Date.now(),
-                automated: true
-            });
-        }
-        
-        // Broadcast the transaction to all clients
-        const transactions = await getTransactions(symbol);
-        io.emit('transaction-update', {
-            symbol: symbol.replace('USDT', ''),
-            transactions: transactions,
-            success: true,
-            refPrices: await getReferencePrices(symbol)
+        // Trigger price update callbacks
+        triggerCallbacks('price-update', {
+            symbol: baseSymbol,
+            price: parseFloat(price)
         });
-        
-        // Broadcast holdings update
-        const holdings = await getHoldings(symbol);
-        const refPrices = await getReferencePrices(symbol);
-        
-        io.emit('holdings-update', {
-            symbol: symbol.replace('USDT', ''),
-            amount: holdings.quantity,
-            avgPrice: holdings.avg_price,
-            initialPrice: refPrices.initial_purchase_price,
-            lastBuyPrice: refPrices.last_purchase_price,
-            nextBuyThreshold: refPrices.next_buy_threshold,
-            nextSellThreshold: refPrices.next_sell_threshold,
-            profitLossPercent: calculateProfitLoss(holdings.avg_price, currentPrice)
-        });
-        
-        return true;
-    } catch (error) {
-        console.error(`Error executing automated buy for ${symbol}:`, error);
-        return false;
-    } finally {
-        if (conn) conn.release();
-    }
-}
-
-// Execute a sell order when price rises above threshold
-async function executeSellForProfit(io, symbol, currentPrice) {
-    let conn;
-    try {
-        console.log(`Executing automated sell for ${symbol} at ${currentPrice} (profit target reached)`);
-        
-        // Get current holdings
-        const holdings = await getHoldings(symbol);
-        
-        if (holdings.quantity <= 0) {
-            console.log(`No holdings to sell for ${symbol}`);
-            return false;
-        }
-        
-        // Execute the sell order
-        const result = await binanceAPI.executeSellOrder(symbol, holdings.quantity, 'amount');
-        
-        if (!result.success) {
-            console.error(`Automated sell failed for ${symbol}:`, result.error);
-            return false;
-        }
-        
-        console.log(`Automated sell successful for ${symbol}:`, result);
-        
-        // Calculate the total value of the sale
-        const saleValue = holdings.quantity * currentPrice;
-        
-        // Record the transaction in database
-        conn = await pool.getConnection();
-        
-        await conn.query(
-            'INSERT INTO transactions (symbol, type, price, quantity, investment, automated) VALUES (?, ?, ?, ?, ?, ?)',
-            [symbol, 'SELL', currentPrice, holdings.quantity, saleValue, true]
-        );
-        
-        // Update holdings (set to zero)
-        await conn.query(
-            'UPDATE holdings SET quantity = 0, avg_price = 0 WHERE symbol = ?',
-            [symbol]
-        );
-        
-        // Update reference prices
-        await updateReferencePrices(symbol, currentPrice);
-        
-        // Send Telegram notification
-        if (telegramBot) {
-            await telegramBot.sendTradeNotification({
-                symbol: symbol,
-                type: 'SELL',
-                price: currentPrice,
-                quantity: holdings.quantity,
-                investment: saleValue,
-                timestamp: Date.now(),
-                automated: true
-            });
-        }
-        
-        // Broadcast the transaction to all clients
-        const transactions = await getTransactions(symbol);
-        io.emit('transaction-update', {
-            symbol: symbol.replace('USDT', ''),
-            transactions: transactions,
-            success: true,
-            refPrices: await getReferencePrices(symbol)
-        });
-        
-        // Broadcast holdings update
-        io.emit('holdings-update', {
-            symbol: symbol.replace('USDT', ''),
-            amount: 0,
-            avgPrice: 0,
-            initialPrice: 0,
-            lastBuyPrice: (await getReferencePrices(symbol)).last_purchase_price,
-            lastSellPrice: currentPrice,
-            nextBuyThreshold: currentPrice * (1 - (TRADING_CONFIG.LOSS_THRESHOLD / 100)),
-            nextSellThreshold: 0,
-            profitLossPercent: 0
-        });
-        
-        return true;
-    } catch (error) {
-        console.error(`Error executing automated sell for ${symbol}:`, error);
-        return false;
-    } finally {
-        if (conn) conn.release();
-    }
-}
-
-// Update holdings for a symbol based on transactions
-async function updateHoldings(symbol) {
-    let conn;
-    try {
-        conn = await pool.getConnection();
-        
-        // Get all buy transactions
-        const buyTransactions = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? AND type = "BUY"',
-            [symbol]
-        );
-        
-        // Get all sell transactions
-        const sellTransactions = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? AND type = "SELL"',
-            [symbol]
-        );
-        
-        // Calculate total bought
-        let totalBought = 0;
-        let totalSpent = 0;
-        
-        buyTransactions.forEach(tx => {
-            totalBought += parseFloat(tx.quantity);
-            totalSpent += parseFloat(tx.investment);
-        });
-        
-        // Calculate total sold
-        let totalSold = 0;
-        
-        sellTransactions.forEach(tx => {
-            totalSold += parseFloat(tx.quantity);
-        });
-        
-        // Calculate remaining quantity
-        const remainingQuantity = Math.max(0, totalBought - totalSold);
-        
-        // Calculate average price (if any holdings remain)
-        let avgPrice = 0;
-        if (remainingQuantity > 0) {
-            avgPrice = totalSpent / totalBought;
-        }
-        
-        // Update holdings
-        await conn.query(
-            'INSERT INTO holdings (symbol, quantity, avg_price) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = ?, avg_price = ?',
-            [symbol, remainingQuantity, avgPrice, remainingQuantity, avgPrice]
-        );
-        
-        return { quantity: remainingQuantity, avgPrice };
-    } catch (error) {
-        console.error('Error updating holdings:', error);
-        return null;
-    } finally {
-        if (conn) conn.release();
-    }
-}
-
-// Get recent transactions for a symbol
-async function getTransactions(symbol, limit = 10) {
-    let conn;
-    try {
-        conn = await pool.getConnection();
-        const rows = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?',
-            [symbol, limit]
-        );
-        return rows;
-    } catch (error) {
-        console.error('Error getting transactions:', error);
-        return [];
-    } finally {
-        if (conn) conn.release();
-    }
-}
-
-// Helper function to ensure proper symbol format
-function formatSymbol(symbol) {
-    // If symbol already includes USDT, return it unchanged
-    if (symbol.toUpperCase().endsWith('USDT')) {
-        return symbol.toUpperCase();
-    }
+    });
     
-    // Otherwise, add USDT suffix
-    return symbol.toUpperCase() + 'USDT';
+    // Batch data update
+    socket.on('batch-data-update', (response) => {
+        systemStatus.lastBackendResponse = Date.now();
+        triggerCallbacks('batch-data-update', response);
+    });
+    
+    // Account info
+    socket.on('account-info', (accountInfo) => {
+        systemStatus.lastBackendResponse = Date.now();
+        triggerCallbacks('account-info', accountInfo);
+    });
+    
+    // Transaction updates
+    socket.on('transaction-update', (data) => {
+        systemStatus.lastBackendResponse = Date.now();
+        triggerCallbacks('transaction-update', data);
+    });
+    
+ // Holdings updates
+ socket.on('holdings-update', (data) => {
+    systemStatus.lastBackendResponse = Date.now();
+    triggerCallbacks('holdings-update', data);
+});
+
+// Order results
+socket.on('buy-result', (result) => {
+    systemStatus.lastBackendResponse = Date.now();
+    triggerCallbacks('buy-result', result);
+    
+    // Request updated account info if successful
+    if (result.success) {
+        requestAccountInfo();
+    }
+});
+
+socket.on('sell-result', (result) => {
+    systemStatus.lastBackendResponse = Date.now();
+    triggerCallbacks('sell-result', result);
+    
+    // Request updated account info if successful
+    if (result.success) {
+        requestAccountInfo();
+    }
+});
+
+socket.on('first-purchase-result', (result) => {
+    systemStatus.lastBackendResponse = Date.now();
+    triggerCallbacks('first-purchase-result', result);
+});
+
+socket.on('sell-all-result', (result) => {
+    systemStatus.lastBackendResponse = Date.now();
+    triggerCallbacks('sell-all-result', result);
+});
+
+// Ping/pong for connection health check
+socket.on('pong', (data) => {
+    systemStatus.lastBackendResponse = Date.now();
+    console.log('Received pong response:', data);
+});
+
+// Heartbeat events to keep connection alive
+socket.on('heartbeat', () => {
+    systemStatus.lastBackendResponse = Date.now();
+});
+
+// Any other events from server
+socket.onAny((eventName) => {
+    systemStatus.lastBackendResponse = Date.now();
+});
 }
 
-// Calculate profit/loss percentage
-function calculateProfitLoss(avgPrice, currentPrice) {
-    if (avgPrice <= 0 || currentPrice <= 0) return 0;
-    return ((currentPrice - avgPrice) / avgPrice) * 100;
+// Initialize the connection module
+function initialize() {
+initializeSocketListeners();
+initializeMonitoring();
+console.log('Connection module initialized with optimized data handling');
 }
 
-// Export the module
-module.exports = {
-    initialize,
-    processPriceUpdate,
-    getReferencePrices,
-    updateReferencePrices,
-    getHoldings,
-    calculateProfitLoss,
-    getTransactions,
-    executeBuyOnDip,
-    executeSellForProfit,
-    updateHoldings
+// Clean up resources when page is unloaded
+function cleanup() {
+// Clear all intervals
+if (connectionMonitorInterval) {
+    clearInterval(connectionMonitorInterval);
+    connectionMonitorInterval = null;
+}
+
+if (priceMonitorInterval) {
+    clearInterval(priceMonitorInterval);
+    priceMonitorInterval = null;
+}
+
+if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+}
+
+// Disconnect socket if connected
+if (socket.connected) {
+    socket.disconnect();
+}
+
+console.log('Connection module resources cleaned up');
+}
+
+// Register cleanup on page unload
+window.addEventListener('beforeunload', cleanup);
+
+// Export public API
+export {
+initialize,
+on,
+off,
+socket,
+requestSystemStatus,
+requestTransactions,
+requestAccountInfo,
+executeBuyOrder,
+executeSellOrder,
+testBinanceStream,
+getSystemStatus,
+batchRequestData
 };
