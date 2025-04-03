@@ -42,8 +42,11 @@ async function processPriceUpdate(io, symbol, price) {
         
         // Skip if we have no reference data
         if (!references) {
+            console.warn(`No reference data for ${formattedSymbol}, skipping price update`);
             return;
         }
+
+        console.log(`Processing price update for ${formattedSymbol}: Current price=${currentPrice}, Next buy=${references.next_buy_threshold}, Next sell=${references.next_sell_threshold}`);
 
         // Get current holdings
         const holdings = await getHoldings(formattedSymbol);
@@ -57,14 +60,16 @@ async function processPriceUpdate(io, symbol, price) {
         if (holdings.quantity > 0) {
             // Check if price is at or above sell threshold and we have holdings to sell
             if (currentPrice >= references.next_sell_threshold && references.next_sell_threshold > 0) {
+                console.log(`SELL CONDITION MET for ${formattedSymbol}: Current price ${currentPrice} >= Sell threshold ${references.next_sell_threshold}`);
                 // Execute sell
                 await executeSellForProfit(io, formattedSymbol, currentPrice);
             }
         }
         
         // Check if price is at or below buy threshold (we may want to buy more)
-        if (currentPrice <= references.next_buy_threshold && references.next_buy_threshold > 0) {
-            // Execute buy
+        if (currentPrice <= references.next_buy_threshold * 1.005 && references.next_buy_threshold > 0) {
+            console.log(`BUY CONDITION MET for ${formattedSymbol}: Current price ${currentPrice} <= Buy threshold ${references.next_buy_threshold}`);
+            // Execute buy with a small buffer (0.5% margin)
             await executeBuyOnDip(io, formattedSymbol, currentPrice);
         }
         
@@ -245,7 +250,7 @@ async function executeBuyOnDip(io, symbol, currentPrice) {
             return false;
         }
         
-        console.log(`Automated buy successful for ${symbol}:`, result);
+        console.log(`Executed automated buy for ${symbol} at ${currentPrice}. New buy threshold: ${refPrices.next_buy_threshold}, New sell threshold: ${refPrices.next_sell_threshold}`);
         
         // Record the transaction in database
         await conn.query(

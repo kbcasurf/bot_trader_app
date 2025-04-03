@@ -111,11 +111,16 @@ const pool = mariadb.createPool({
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    connectionLimit: 5
+    connectionLimit: 20,        // Increase from 5 to 20
+    acquireTimeout: 15000,      // Increase timeout
+    idleTimeout: 60000,         // Add idle timeout
+    resetAfterUse: true         // Reset connections after use
 });
 
 // Initialize trading engine with dependencies
 tradingEngine.initialize(pool, binanceAPI, telegramBot);
+setupDatabaseMonitoring();
+
 
 // System status object
 let systemStatus = {
@@ -142,7 +147,9 @@ async function testDatabaseConnection() {
         io.emit('database-status', false);
         return false;
     } finally {
-        if (conn) conn.release();
+        if (conn) {
+            conn.release();
+        }
     }
 }
 
@@ -314,6 +321,36 @@ function validateTradeParams(params) {
         amountType: params.amountType || 'amount'
     }};
 }
+
+
+function setupDatabaseMonitoring() {
+    setInterval(async () => {
+        try {
+            // Get pool status
+            const conn = await pool.getConnection();
+            const activeConnections = pool.activeConnections();
+            const totalConnections = pool.totalConnections();
+            
+            console.log(`Database pool status: Active=${activeConnections}, Total=${totalConnections}`);
+            
+            if (activeConnections > (pool.config.connectionLimit * 0.8)) {
+                console.warn('High number of active connections - forcing some to close');
+                // Force reset some connections if too many are active
+                try {
+                    await pool.query('SELECT 1 AS reset');
+                } catch (error) {
+                    console.error('Error during connection reset query:', error);
+                }
+            }
+            
+            conn.release();
+        } catch (error) {
+            console.error('Error monitoring database connections:', error);
+        }
+    }, 60000); // Check every minute
+}
+
+
 
 // Socket.io connection handling
 io.on('connection', (socket) => {

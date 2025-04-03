@@ -156,22 +156,26 @@ function configureCryptoCard(card, crypto) {
     // Add threshold price display after holdings
     const holdingsElement2 = card.querySelector('.holdings');
     if (holdingsElement2) {
-        // Create thresholds element
-        const thresholdsElement = document.createElement('div');
-        thresholdsElement.className = 'trade-thresholds';
-        thresholdsElement.innerHTML = `
-            <div class="threshold buy">
-                <span class="label">Buy:</span>
-                <span class="value" id="${crypto.symbol}-next-buy-price">$0.00</span>
-            </div>
-            <div class="threshold sell">
-                <span class="label">Sell:</span>
-                <span class="value" id="${crypto.symbol}-sell-price">$0.00</span>
-            </div>
-        `;
-        
-        // Insert after holdings
-        holdingsElement2.parentNode.insertBefore(thresholdsElement, holdingsElement2.nextSibling);
+        // Check if thresholds element already exists
+        const existingThresholds = card.querySelector('.trade-thresholds');
+        if (!existingThresholds) {
+            // Only create thresholds element if it doesn't exist
+            const thresholdsElement = document.createElement('div');
+            thresholdsElement.className = 'trade-thresholds';
+            thresholdsElement.innerHTML = `
+                <div class="threshold buy">
+                    <span class="label">Buy:</span>
+                    <span class="value" id="${crypto.symbol}-next-buy-price">$0.00</span>
+                </div>
+                <div class="threshold sell">
+                    <span class="label">Sell:</span>
+                    <span class="value" id="${crypto.symbol}-sell-price">$0.00</span>
+                </div>
+            `;
+            
+            // Insert after holdings
+            holdingsElement2.parentNode.insertBefore(thresholdsElement, holdingsElement2.nextSibling);
+        }
     }
     
     // Update state tracking
