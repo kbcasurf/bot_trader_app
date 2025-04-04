@@ -1,10 +1,10 @@
-const axios = require('axios');
-const crypto = require('crypto');
-const dotenv = require('dotenv');
-const WebSocket = require('ws');
+import { get } from 'axios';
+import { createHmac } from 'crypto';
+import { config } from 'dotenv';
+import WebSocket, { OPEN, CONNECTING } from 'ws';
 
 // Load environment variables
-dotenv.config({ path: '/app/.env' });
+config({ path: '/app/.env' });
 
 // Binance API credentials
 const API_KEY = process.env.BINANCE_API_KEY;
@@ -96,7 +96,7 @@ function getWebSocketStatus() {
     if (wsInstance) {
         const key = wsState.activeSymbols.join('-');
         status.connections[key] = {
-            isOpen: wsInstance.readyState === WebSocket.OPEN,
+            isOpen: wsInstance.readyState === OPEN,
             connectionAge: status.connectionAge,
             symbols: wsState.activeSymbols || [],
             readyState: wsInstance.readyState
@@ -111,7 +111,7 @@ function getWebSocketStatus() {
 // Test Binance API connection
 async function testConnection() {
     try {
-        const response = await axios.get(`${BASE_URL}/api/v3/ping`);
+        const response = await get(`${BASE_URL}/api/v3/ping`);
         return response.status === 200;
     } catch (error) {
         console.error('Binance API connection test failed:', error.message);
@@ -119,12 +119,11 @@ async function testConnection() {
     }
 }
 
-
-
+ 
 // Get current ticker price for a symbol
 async function getTickerPrice(symbol) {
     try {
-        const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`, {
+        const response = await get(`${BASE_URL}/api/v3/ticker/price`, {
             params: { symbol }
         });
         
@@ -135,11 +134,13 @@ async function getTickerPrice(symbol) {
     }
 }
 
+
+
 // Get ticker price for multiple symbols
 async function getMultipleTickers(symbols = []) {
     try {
         // If no symbols provided, get all tickers
-        const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`);
+        const response = await get(`${BASE_URL}/api/v3/ticker/price`);
         
         if (symbols.length === 0) {
             return response.data;
@@ -189,7 +190,7 @@ async function calculateQuantityFromUsdt(symbol, usdtAmount) {
 // Get exchange info for a symbol
 async function getExchangeInfo(symbol) {
     try {
-        const response = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`, {
+        const response = await get(`${BASE_URL}/api/v3/exchangeInfo`, {
             params: { symbol }
         });
         
@@ -253,6 +254,8 @@ function formatQuantity(quantity, symbolInfo) {
     }
 }
 
+
+/* 
 // Create a market buy order
 async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
     try {
@@ -362,6 +365,7 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
         throw error;
     }
 }
+ */
 
 // Start price polling
 function startPolling(symbols, io) {
@@ -453,7 +457,7 @@ function cleanupWebSocket(ws) {
     }
     
     // Close WebSocket if it's still open
-    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    if (ws.readyState === OPEN || ws.readyState === CONNECTING) {
         try {
             ws.terminate();
         } catch (err) {
@@ -512,7 +516,7 @@ function setupHealthCheck(ws, symbols, io) {
     
     // Setup health check interval
     wsState.healthCheckInterval = setInterval(() => {
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
+        if (!ws || ws.readyState !== OPEN) {
             console.log('Health check: WebSocket not open, clearing interval');
             clearInterval(wsState.healthCheckInterval);
             wsState.healthCheckInterval = null;
@@ -538,7 +542,7 @@ function setupHealthCheck(ws, symbols, io) {
                     console.warn('No response received to health check, connection may be dead');
                     
                     // Connection appears to be dead, terminate and trigger reconnect
-                    if (ws.readyState === WebSocket.OPEN) {
+                    if (ws.readyState === OPEN) {
                         ws.terminate();
                     }
                 }
@@ -547,7 +551,7 @@ function setupHealthCheck(ws, symbols, io) {
             console.error('Error sending health check:', error.message);
             
             // Error sending health check, terminate connection
-            if (ws.readyState === WebSocket.OPEN) {
+            if (ws.readyState === OPEN) {
                 ws.terminate();
             }
         }
@@ -784,8 +788,7 @@ function connectToWebSocket(symbols, io) {
 
 // Generate signature for signed endpoints
 function generateSignature(queryString) {
-    return crypto
-        .createHmac('sha256', API_SECRET)
+    return createHmac('sha256', API_SECRET)
         .update(queryString)
         .digest('hex');
 }
@@ -797,7 +800,7 @@ async function getAccountInfo() {
         const queryString = `timestamp=${timestamp}`;
         const signature = generateSignature(queryString);
         
-        const response = await axios.get(
+        const response = await get(
             `${BASE_URL}/api/v3/account?${queryString}&signature=${signature}`,
             {
                 headers: {
@@ -814,7 +817,7 @@ async function getAccountInfo() {
 }
 
 
-
+/* 
 // Execute a buy order based on USDT value
 async function executeBuyOrder(symbol, amount, amountType = 'amount') {
     try {
@@ -934,6 +937,7 @@ async function executeSellOrder(symbol, amount, amountType = 'amount') {
         };
     }
 }
+ */
 
 /* // Legacy function for backward compatibility
 function subscribeToTickerStream(symbols, io) {
@@ -976,7 +980,7 @@ function unsubscribeFromTickerStream(symbols, io) {
 
 
 
-module.exports = {
+export default {
     initializeWebSockets,
     closeAllConnections,
     getWebSocketStatus,
@@ -989,8 +993,8 @@ module.exports = {
     createMarketSellOrder,
 //    subscribeToTickerStream,
 //    unsubscribeFromTickerStream,
-    executeBuyOrder,
-    executeSellOrder,
+//    executeBuyOrder,
+//    executeSellOrder,
 
 //    renewWebSocketConnection
 };

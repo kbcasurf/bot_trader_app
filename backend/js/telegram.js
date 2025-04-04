@@ -1,8 +1,8 @@
-const { Telegraf } = require('telegraf');
-const dotenv = require('dotenv');
+import { Telegraf } from 'telegraf';
+import { config } from 'dotenv';
 
 // Load environment variables
-dotenv.config({ path: '/app/.env' });
+config({ path: '/app/.env' });
 
 // Telegram Bot credentials
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -32,7 +32,7 @@ async function testConnection() {
   }
 }
 
-// Send message to configured chat ID
+ // Send message to configured chat ID
 async function sendMessage(message) {
     try {
         const result = await bot.telegram.sendMessage(CHAT_ID, message, { parse_mode: 'HTML' });
@@ -43,6 +43,8 @@ async function sendMessage(message) {
         throw error;
     }
 }
+
+
 
 // Send notification about trade execution with enhanced formatting
 async function sendTradeNotification(tradeInfo) {
@@ -127,7 +129,7 @@ async function sendSystemAlert(alertInfo) {
     return await sendMessage(alertMessage);
 }
 
-module.exports = {
+export default {
     testConnection,
     sendMessage,
     sendTradeNotification,
