@@ -159,10 +159,10 @@ function registerEventHandlers() {
     Connections.on('price-update', updatePrice);
     
     // Transaction update events
-    Connections.on('transaction-update', updateTransactions);
+//    Connections.on('transaction-update', updateTransactions);
     
     // Holdings update events
-    Connections.on('holdings-update', updateHoldings);
+//   Connections.on('holdings-update', updateHoldings);
     
     // Batch data events
     Connections.on('batch-data-update', handleBatchDataUpdate);
@@ -616,37 +616,34 @@ function updateTransactionDisplay(symbol, transactions) {
     });
 }
 
+
+/**
 // Update transaction history
-function updateHoldings(data) {
+function updateTransactions(data) {
     // Check for valid data
     if (!data || !data.symbol) {
-        console.warn('Invalid holdings data:', data);
+        console.warn('Invalid transaction data:', data);
         return;
     }
     
     const symbol = data.symbol.toLowerCase();
-    const amount = parseFloat(data.amount) || 0;
-    const profitLossPercent = parseFloat(data.profitLossPercent) || 0;
+    const transactions = data.transactions || [];
     
-    // Add debug log to see what's coming in
-    console.log(`Holdings update for ${symbol}:`, data);
-    console.log(`Thresholds in data:`, {
-        nextBuyThreshold: data.nextBuyThreshold,
-        nextSellThreshold: data.nextSellThreshold
-    });
+    // Update transaction display
+    updateTransactionDisplay(symbol, transactions);
     
-        // Update threshold prices if provided
-    if (data.nextBuyThreshold !== undefined) {
+    // Update reference prices if provided
+    if (data.refPrices) {
         uiState.thresholds[symbol] = {
-            nextBuy: parseFloat(data.nextBuyThreshold) || 0,
-            nextSell: parseFloat(data.nextSellThreshold) || 0
+            nextBuy: parseFloat(data.refPrices.next_buy_threshold) || 0,
+            nextSell: parseFloat(data.refPrices.next_sell_threshold) || 0
         };
         
-        console.log(`Updated thresholds for ${symbol}:`, uiState.thresholds[symbol]);
-    }
+        uiState.initialPrices[symbol] = parseFloat(data.refPrices.initial_purchase_price) || 0;
+        uiState.lastBuyPrices[symbol] = parseFloat(data.refPrices.last_purchase_price) || 0;
         
-    // Update threshold display
-    updateThresholdDisplay(symbol);
+        // Update threshold display
+        updateThresholdDisplay(symbol);
     }
     
     // Clear any cached transaction data for this symbol
@@ -667,7 +664,7 @@ function updateHoldings(data) {
             updateProfitLoss(symbol);
         }, 100);
     }
-
+}
 
 // Update holdings
 function updateHoldings(data) {
@@ -915,6 +912,10 @@ function updateProfitLossDisplay(symbol, percentage) {
      }
  }
 }
+*/
+
+
+
 
 // Handle first purchase result
 function handleFirstPurchaseResult(result) {
