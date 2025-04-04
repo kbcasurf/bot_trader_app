@@ -1062,8 +1062,14 @@ io.on('connection', (socket) => {
     
 
 
-    // 1. First Purchase Handler Fix
     socket.on('first-purchase', async (data) => {
+        const requestId = `buy_${data.symbol}_${Date.now()}`;
+        if (activeRequests.has(requestId)) {
+            console.log(`Ignoring duplicate purchase request for ${data.symbol}`);
+            return;
+        }
+        activeRequests.add(requestId);
+
         try {
             // Check if WebSocket is connected
             if (!websocketConnected) {
@@ -1131,10 +1137,10 @@ io.on('connection', (socket) => {
                         [data.symbol, 'BUY', currentPrice, result.amount, investment]
                     );
                     
-                    // Update holdings - PASS THE POOL HERE
+                    // Update holdings 
                     await tradingEngine.updateHoldings(data.symbol, pool);
                     
-                    // Update reference prices - PASS THE POOL HERE
+                    // Update reference prices 
                     await tradingEngine.updateReferencePrices(data.symbol, currentPrice, pool);
                 } finally {
                     conn.release();
@@ -1191,7 +1197,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 2. Sell All Handler Fix
     socket.on('sell-all', async (data) => {
         try {
             // Check if WebSocket is connected

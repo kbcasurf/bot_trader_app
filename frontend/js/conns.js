@@ -7,18 +7,6 @@ import { io } from 'socket.io-client';
 // Self-initialization when script is loaded
 let isInitialized = false;
 
-// Auto-initialize after DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    // Short delay to ensure all HTML elements are rendered
-    setTimeout(() => {
-        // Only initialize once
-        if (!isInitialized) {
-            initialize();
-            isInitialized = true;
-            console.log('Connection module auto-initialized');
-        }
-    }, 500);
-});
 
 // Create and configure socket connection with more fault tolerance
 let SOCKET_OPTIONS = {
