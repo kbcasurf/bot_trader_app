@@ -1,5 +1,8 @@
 // vite.config.js
-module.exports = {
+import { defineConfig } from 'vite';
+import { createRequire } from 'module'; // For Node.js native CommonJS support
+
+export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 80,
@@ -24,9 +27,14 @@ module.exports = {
   build: {
     outDir: 'dist',
     minify: 'esbuild',
-    sourcemap: false
-    // Removed the conflicting rollupOptions configuration
+    sourcemap: false,
+    commonjsOptions: {
+      transformMixedEsModules: true,
+      include: [/node_modules/, /\.js$/]
+    }
   },
-  // Explicitly specify public directory for static assets
+  optimizeDeps: {
+    include: ['socket.io-client']
+  },
   publicDir: 'images'
-}
+});
