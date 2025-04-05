@@ -25,7 +25,8 @@ const DASHBOARD_CONFIG = {
 const dashboardState = {
     initialized: false,
     autoRefreshInterval: null,
-    darkMode: false
+    darkMode: false,
+    usdtBalance: 0
 };
 
 /**
@@ -95,6 +96,9 @@ function setupUI() {
         setupTestActions();
     }
     
+    // Create and add USDT balance display
+    setupUsdtBalanceDisplay();
+
     // Register for status changes to update UI
     Monitor.registerStatusListener(handleStatusChange);
 }
@@ -193,6 +197,105 @@ function setupAutoRefresh() {
     
     console.log(`Auto-refresh set up with interval: ${DASHBOARD_CONFIG.AUTO_REFRESH_INTERVAL}ms`);
 }
+
+
+/**
+ * Create and set up USDT balance display
+ */
+function setupUsdtBalanceDisplay() {
+    // Create balance display container
+    const balanceContainer = document.createElement('div');
+    balanceContainer.id = 'usdt-balance-container';
+    balanceContainer.className = 'usdt-balance-container';
+    balanceContainer.innerHTML = `
+      <span class="balance-label">USDT Balance: </span>
+      <span class="balance-value" id="usdt-balance-value">0.00</span>
+    `;
+  // Find the websocket monitor to insert after it
+  const wsMonitor = document.getElementById('websocket-monitor');
+  if (wsMonitor && wsMonitor.parentNode) {
+    wsMonitor.parentNode.insertBefore(balanceContainer, wsMonitor.nextSibling);
+  } else {
+    // Fallback: add to status section
+    const statusSection = document.querySelector('.status-section');
+    if (statusSection) {
+      statusSection.parentNode.insertBefore(balanceContainer, statusSection.nextSibling);
+    }
+  }
+
+    // Register for account info updates
+    Connections.on('account-info', handleAccountInfoUpdate);
+  
+    // Request initial account info
+    setTimeout(() => {
+      requestAccountInfo();
+    }, 2000); // Short delay after connections are established
+  }
+
+
+  /**
+ * Handle account info updates from the server
+ */
+function handleAccountInfoUpdate(data) {
+    if (!data || data.error) {
+      console.error('Error updating account balance:', data?.error || 'Unknown error');
+      return;
+    }
+    
+    // Extract USDT balance from account info
+    const usdtBalance = data.balances?.find(b => b.asset === 'USDT');
+    dashboardState.usdtBalance = usdtBalance ? parseFloat(usdtBalance.free) : 0;
+    
+    // Update display
+    updateBalanceDisplay();
+  }
+  
+  /**
+   * Update the USDT balance display
+   */
+  function updateBalanceDisplay() {
+    const balanceEl = document.getElementById('usdt-balance-value');
+    if (balanceEl) {
+      // Format balance with 2 decimal places
+      const formattedBalance = dashboardState.usdtBalance.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+      
+      balanceEl.textContent = formattedBalance;
+    }
+  }
+  
+  /**
+   * Request account info from the server
+   */
+  function requestAccountInfo() {
+    if (Connections.getConnectionState().isConnected) {
+      Connections.emit('get-account-info');
+    }
+  }
+  
+  /**
+   * Set up automatic data refresh
+   */
+  function setupAutoRefresh() {
+    // Clear any existing interval
+    if (dashboardState.autoRefreshInterval) {
+      clearInterval(dashboardState.autoRefreshInterval);
+    }
+    
+    // Set up new interval
+    dashboardState.autoRefreshInterval = setInterval(() => {
+      console.log('Auto-refreshing data...');
+      loadAllData();
+      
+      // Also refresh account info
+      requestAccountInfo();
+    }, DASHBOARD_CONFIG.AUTO_REFRESH_INTERVAL);
+    
+    console.log(`Auto-refresh set up with interval: ${DASHBOARD_CONFIG.AUTO_REFRESH_INTERVAL}ms`);
+  }
+
 
 /**
  * Set up theme toggle functionality

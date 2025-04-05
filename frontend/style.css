@@ -510,3 +510,25 @@ input:checked + .slider:before {
     cursor: not-allowed;
     pointer-events: none;
   }
+
+  /* Add to frontend/style.css */
+.usdt-balance-container {
+    background-color: var(--card-bg);
+    border-radius: 10px;
+    padding: 10px 15px;
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow);
+  }
+  
+  .balance-label {
+    font-weight: bold;
+    margin-right: 10px;
+  }
+  
+  .balance-value {
+    font-family: monospace;
+    font-size: 1.2em;
+  }
