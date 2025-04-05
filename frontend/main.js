@@ -2,11 +2,11 @@
 // Application Entry Point
 // This file is the bootstrapper that initializes all modules in the correct order
 
-// Import all modules
-import * as Connections from './js/conns.js';
-import * as Dashboard from './js/dashboard.js';
-import * as Cards from './js/cards.js';
-import * as Monitor from './js/monitor.js';
+// Import all modules using CommonJS require syntax
+const Connections = require('./js/conns.js');
+const Dashboard = require('./js/dashboard.js');
+const Cards = require('./js/cards.js');
+const Monitor = require('./js/monitor.js');
 
 // Track initialization status
 const initStatus = {
@@ -212,11 +212,19 @@ whenDomReady(() => {
     setTimeout(initializeApp, 100);
 });
 
-// Export modules for compatibility with any code that might be importing them
-export {
+// Expose modules to the global scope for browser access
+window.CryptoTradingBot = {
     Connections,
     Dashboard,
     Cards,
     Monitor,
     initStatus
+};
+
+// For CommonJS, we don't actually need to export anything here since this is the entry point
+// but we'll provide exports for completeness
+module.exports = {
+    initializeApp,
+    initStatus,
+    initErrors
 };

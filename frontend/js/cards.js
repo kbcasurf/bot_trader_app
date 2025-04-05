@@ -3,7 +3,7 @@
 // Handles rendering and state management for cryptocurrency cards
 
 // Import socket connection if needed
-import * as Connections from './conns.js';
+const Connections = require('./conns.js');
 
 // Configuration for cards
 const CARD_CONFIG = {
@@ -787,8 +787,8 @@ function setInvestmentAmount(symbol, amount) {
     }
 }
 
-// Export public API
-export {
+// Export public API using CommonJS syntax
+module.exports = {
     initialize,
     createCard,
     createAllCards,

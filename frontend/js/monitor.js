@@ -2,8 +2,8 @@
 // Connection Monitor Module
 // Handles connection status monitoring and display updates
 
-// Import socket connection
-import * as Connections from './conns.js';
+// Import socket connection using CommonJS
+const Connections = require('./conns.js');
 
 // Configuration for monitoring
 const MONITOR_CONFIG = {
@@ -546,8 +546,8 @@ function refreshStatus() {
     requestSystemStatus();
 }
 
-// Export public API
-export {
+// Export public API using CommonJS syntax
+module.exports = {
     initialize,
     updateBackendStatus,
     updateDatabaseStatus,

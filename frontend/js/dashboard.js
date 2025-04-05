@@ -2,10 +2,10 @@
 // Dashboard Management Module
 // Responsible for coordinating UI modules and managing overall application state
 
-// Import our custom modules
-import * as Connections from './conns.js';
-import * as Cards from './cards.js';
-import * as Monitor from './monitor.js';
+// Import our custom modules using CommonJS require syntax
+const Connections = require('./conns.js');
+const Cards = require('./cards.js');
+const Monitor = require('./monitor.js');
 
 // Dashboard configuration
 const DASHBOARD_CONFIG = {
@@ -356,8 +356,8 @@ function cleanup() {
 // Register cleanup on page unload
 window.addEventListener('beforeunload', cleanup);
 
-// Export public API
-export {
+// Export public API using CommonJS syntax
+module.exports = {
     initialize,
     loadAllData
 };

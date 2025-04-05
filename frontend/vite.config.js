@@ -1,5 +1,5 @@
 // vite.config.js
-export default {
+module.exports = {
   server: {
     host: '0.0.0.0',
     port: 80,
@@ -40,10 +40,17 @@ export default {
     outDir: 'dist',
     minify: 'esbuild',
     sourcemap: false,
+    commonjsOptions: {
+      // Improved CommonJS compatibility options
+      transformMixedEsModules: true,
+      include: [/node_modules/, /\.js$/]
+    },
     rollupOptions: {
       output: {
+        // Support for legacy browsers if needed
+        format: 'iife',
+        // Split vendor code into a separate chunk
         manualChunks: {
-          // Split vendor code into a separate chunk
           vendor: ['socket.io-client'],
           // Create a separate chunk for the application code
           app: ['./js/conns.js', './js/dashboard.js']
@@ -56,5 +63,23 @@ export default {
     assetsInclude: ['**/*.svg', '**/*.png', '**/*.jpg', '**/*.jpeg', '**/*.gif'],
   },
   // Explicitly specify public directory for static assets
-  publicDir: 'images'
+  publicDir: 'images',
+  // Better handling of CommonJS modules
+  optimizeDeps: {
+    include: ['socket.io-client'],
+    // Ensure proper handling of CJS/ESM interop
+    esbuildOptions: {
+      // Needed for CommonJS compatibility
+      format: 'cjs',
+      // Support for legacy browsers
+      target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14']
+    }
+  },
+  // Resolve CommonJS and ESM modules
+  resolve: {
+    // Provide both CommonJS and ESM field resolutions
+    mainFields: ['browser', 'module', 'jsnext:main', 'main'],
+    // Help Vite understand CommonJS modules
+    extensions: ['.mjs', '.js', '.ts', '.jsx', '.tsx', '.json']
+  }
 }

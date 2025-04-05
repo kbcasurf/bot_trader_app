@@ -2,7 +2,8 @@
 // Connection Module
 // Handles Socket.io connections and API communication
 
-import { io } from 'socket.io-client';
+// Use require instead of import
+const io = require('socket.io-client');
 
 // Connection configuration
 const CONNECTION_CONFIG = {
@@ -417,8 +418,8 @@ function cleanup() {
 // Register cleanup on page unload
 window.addEventListener('beforeunload', cleanup);
 
-// Export public API
-export {
+// Export public API using CommonJS syntax
+module.exports = {
     initialize,
     on,
     emit,
@@ -431,5 +432,5 @@ export {
     disconnect,
     cleanup,
     // For access in other modules
-    connectionState as socket
+    socket: connectionState
 };
