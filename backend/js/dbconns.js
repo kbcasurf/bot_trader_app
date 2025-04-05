@@ -16,16 +16,16 @@ const DB_CONFIG = {
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    connectionLimit: 20,
-    acquireTimeout: 60000,       // Increased from 30000
-    connectTimeout: 60000,       // Increased from 20000
-    socketTimeout: 120000,       // Increased from 60000
-    idleTimeout: 120000,         // Increased from 60000
-    waitForConnections: true,    // Added to queue connections
-    queueLimit: 0,               // Unlimited queue
-    multipleStatements: false
+    connectionLimit: 10,              // Reduced from 20
+    acquireTimeout: 90000,            // Increased from 60000
+    connectTimeout: 90000,            // Increased from 60000
+    socketTimeout: 180000,            // Increased from 120000
+    idleTimeout: 180000,              // Increased from 120000
+    waitForConnections: true,
+    queueLimit: 0,
+    multipleStatements: false,
+    debug: false
 };
-
 
 // Create connection pool with optimal settings
 let pool = null;
@@ -548,35 +548,41 @@ async function getHealthStats() {
 
 async function refreshConnectionPool() {
     try {
-        // Attempt to reconnect if pool is not connected
-        if (pool) {
-            // Check if pool is healthy with a test query
-            const conn = await pool.getConnection();
-            await conn.query('SELECT 1');
-            await conn.release();
-            console.log('Connection pool health check passed');
-        } else {
-            // Recreate pool if it's null
+        console.log('Performing connection pool health check');
+        // Check pool state
+        if (!pool) {
+            console.log('Pool does not exist, creating new pool');
             pool = mariadb.createPool(DB_CONFIG);
-            console.log('Connection pool recreated');
+            return;
+        }
+        
+        // Test connection
+        let conn;
+        try {
+            conn = await pool.getConnection();
+            await conn.query('SELECT 1 as health_check');
+            console.log('Connection pool health check passed');
+            await conn.release();
+        } catch (err) {
+            console.error('Connection test failed, recreating pool:', err);
+            // End existing pool if possible
+            try {
+                if (pool) await pool.end();
+            } catch (poolErr) {
+                console.error('Error ending pool:', poolErr);
+            }
+            
+            // Create new pool
+            pool = mariadb.createPool(DB_CONFIG);
+            console.log('Created new connection pool');
         }
     } catch (error) {
         console.error('Error in connection pool health check:', error);
-        // Recreate the pool on error
-        try {
-            if (pool) {
-                await pool.end();
-            }
-            pool = mariadb.createPool(DB_CONFIG);
-            console.log('Connection pool recreated after error');
-        } catch (poolError) {
-            console.error('Failed to recreate connection pool:', poolError);
-        }
     }
 }
 
-// Call refreshConnectionPool periodically
-setInterval(refreshConnectionPool, 60000); // Every minute
+// Call this function every minute
+setInterval(refreshConnectionPool, 60000); // Check and fix pool every minute
 
 
 // Export all functions

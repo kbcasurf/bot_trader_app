@@ -49,7 +49,7 @@ function initialize() {
     }
     
     try {
-        // Create Socket.io connection
+        // Add a verification before accessing socket methods
         connectionState.socket = io(CONNECTION_CONFIG.BACKEND_URL, {
             reconnection: CONNECTION_CONFIG.RECONNECTION,
             reconnectionAttempts: CONNECTION_CONFIG.RECONNECTION_ATTEMPTS,
@@ -59,22 +59,27 @@ function initialize() {
             transports: ['websocket', 'polling']
         });
         
+        // Safe emit function that checks socket existence first
+        const originalEmit = connectionState.socket.emit;
+        connectionState.socket.emit = function(event, ...args) {
+            if (!this.connected) {
+                console.warn(`Socket not connected, queueing: ${event}`);
+                connectionState.messageQueue.push({
+                    event, 
+                    data: args[0],
+                    callback: args.length > 1 ? args[1] : null
+                });
+                return;
+            }
+            return originalEmit.apply(this, [event, ...args]);
+        };
+        
         // Register for socket events
         connectionState.socket.on('connect', handleConnect);
         connectionState.socket.on('disconnect', handleDisconnect);
-        connectionState.socket.on('connect_error', handleConnectionError);
-        connectionState.socket.on('error', handleError);
         
         // Set connecting state
         connectionState.isConnecting = true;
-        
-        // Register for heartbeat responses
-        connectionState.socket.on('pong', handleHeartbeatResponse);
-        
-        // Debug event logging
-        if (CONNECTION_CONFIG.DEBUG) {
-            enableDebugLogging();
-        }
         
         console.log('Socket.io connections initialized successfully');
         return true;
