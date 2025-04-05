@@ -786,7 +786,7 @@ function resetCircuitBreaker() {
 }
 
 // Export all functions
-export default {
+module.exports = {
     initialize,
     processFirstPurchase,
     processSellAll,

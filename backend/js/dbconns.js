@@ -10,7 +10,7 @@ const dotenv = require('dotenv');
 dotenv.config({ path: '/app/.env' });
 
 // Create connection pool with optimal settings
-const pool = createPool({
+const pool = mariadb.createPool({
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
     user: process.env.DB_USER,

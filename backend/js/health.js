@@ -580,7 +580,7 @@ function getDetailedHealthStatus() {
 }
 
 // Export all functions
-export default {
+module.exports = {
     initialize,
     startHealthChecks,
     stopHealthChecks,
