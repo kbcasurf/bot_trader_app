@@ -2,6 +2,7 @@
   "name": "crypto-bot-backend",
   "version": "1.0.0",
   "description": "Backend for Crypto Trading Bot",
+  "type": "module",
   "main": "main.js",
   "scripts": {
     "start": "node main.js",

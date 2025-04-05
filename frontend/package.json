@@ -2,6 +2,7 @@
   "name": "crypto-bot-frontend",
   "version": "1.0.0",
   "description": "Frontend for Crypto Trading Bot",
+  "type": "module",
   "main": "main.js",
   "scripts": {
     "start": "vite --host 0.0.0.0 --port 80",
