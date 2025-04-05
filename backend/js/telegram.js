@@ -6,7 +6,7 @@ const { Telegraf } = require('telegraf');
 const dotenv = require('dotenv');
 
 // Load environment variables
-dotenv.config({ path: '/app/.env' });
+dotenv.config();
 
 // Telegram Bot credentials
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -15,20 +15,24 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 // Initialize Telegram Bot
 let bot = null;
 try {
-  bot = new Telegraf(BOT_TOKEN);
-  
-  // Start bot
-  bot.launch()
-    .then(() => {
-      console.log('Telegram bot launched successfully');
-    })
-    .catch(err => {
-      console.error('Failed to launch Telegram bot:', err);
-    });
-  
-  // Handle graceful stop
-  process.once('SIGINT', () => bot?.stop('SIGINT'));
-  process.once('SIGTERM', () => bot?.stop('SIGTERM'));
+  if (BOT_TOKEN) {
+    bot = new Telegraf(BOT_TOKEN);
+    
+    // Start bot
+    bot.launch()
+      .then(() => {
+        console.log('Telegram bot launched successfully');
+      })
+      .catch(err => {
+        console.error('Failed to launch Telegram bot:', err);
+      });
+    
+    // Handle graceful stop
+    process.once('SIGINT', () => bot?.stop('SIGINT'));
+    process.once('SIGTERM', () => bot?.stop('SIGTERM'));
+  } else {
+    console.warn('Telegram bot token not provided, notifications will be disabled');
+  }
 } catch (error) {
   console.error('Error initializing Telegram bot:', error);
 }
