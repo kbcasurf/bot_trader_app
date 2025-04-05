@@ -2,11 +2,11 @@
 // Application Entry Point
 // This file is the bootstrapper that initializes all modules in the correct order
 
-// Import all modules using CommonJS require syntax
-const Connections = require('./js/conns.js');
-const Dashboard = require('./js/dashboard.js');
-const Cards = require('./js/cards.js');
-const Monitor = require('./js/monitor.js');
+// Import all modules using ES module imports
+import * as Connections from './js/conns.js';
+import * as Dashboard from './js/dashboard.js';
+import * as Cards from './js/cards.js';
+import * as Monitor from './js/monitor.js';
 
 // Track initialization status
 const initStatus = {
@@ -34,7 +34,7 @@ function initializeApp() {
     console.log('Initializing Crypto Trading Bot application...');
     
     // Start with a clean console in development mode
-    if (process.env.NODE_ENV === 'development') {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         console.clear();
     }
     
@@ -135,6 +135,18 @@ function handlePartialInitialization() {
             console.error('Failed to render fallback cards:', error);
         }
     }
+
+    // Tell the app we're done initializing, but with errors
+    if (typeof window.appInitializationFailed === 'function') {
+        const errorMessage = Object.values(initErrors)
+            .filter(err => err !== null)
+            .map(err => err.message)
+            .join('; ');
+        
+        window.appInitializationFailed(
+            errorMessage || 'Failed to initialize application components'
+        );
+    }
 }
 
 /**
@@ -168,9 +180,9 @@ function registerGlobalErrorHandler() {
     window.addEventListener('error', (event) => {
         console.error('Uncaught error:', event.error);
         
-        // You could also send these errors to your backend for logging
-        if (initStatus.connections && Connections.socket && Connections.socket.connected) {
-            Connections.socket.emit('client-error', {
+        // Send these errors to the backend for logging
+        if (initStatus.connections && Connections.isConnected && Connections.isConnected()) {
+            Connections.emit('client-error', {
                 message: event.error?.message || 'Unknown error',
                 stack: event.error?.stack,
                 location: window.location.href,
@@ -182,9 +194,9 @@ function registerGlobalErrorHandler() {
     window.addEventListener('unhandledrejection', (event) => {
         console.error('Unhandled promise rejection:', event.reason);
         
-        // You could also send these errors to your backend for logging
-        if (initStatus.connections && Connections.socket && Connections.socket.connected) {
-            Connections.socket.emit('client-error', {
+        // Send these errors to the backend for logging
+        if (initStatus.connections && Connections.isConnected && Connections.isConnected()) {
+            Connections.emit('client-error', {
                 message: event.reason?.message || 'Unhandled promise rejection',
                 stack: event.reason?.stack,
                 location: window.location.href,
@@ -221,9 +233,8 @@ window.CryptoTradingBot = {
     initStatus
 };
 
-// For CommonJS, we don't actually need to export anything here since this is the entry point
-// but we'll provide exports for completeness
-module.exports = {
+// Export functions for potential reuse in other modules
+export {
     initializeApp,
     initStatus,
     initErrors
