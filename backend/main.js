@@ -4,28 +4,28 @@
 
 // Import required modules
 const express = require('express');
-const { createServer } = require('http');
+const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
 
-// Import custom modules
-const { getTransactions, getHoldings, getReferencePrice, getBatchData, testConnection } = require('./js/dbconns.js');
-const { getWebSocketStatus, getTickerPrice, getAccountInfo, initializeWebSockets, testConnection: _testConnection, closeAllConnections } = require('./js/binance.js');
-const { testConnection: __testConnection } = require('./js/telegram.js');
-const { getTradingStatus, processFirstPurchase, processSellAll, initialize } = require('./js/tradings.js');
-const { getHealthStatus, initialize: _initialize } = require('./js/health.js');
+// Import our custom modules
+const dbconns = require('./js/dbconns.js');
+const binanceAPI = require('./js/binance.js');
+const telegramAPI = require('./js/telegram.js');
+const tradingsAPI = require('./js/tradings.js');
+const healthAPI = require('./js/health.js');
 
 // Load environment variables
-dotenv.config({ path: '/app/.env' });
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 // Create Express app
 const app = express();
 const PORT = process.env.PORT;
 
 // Set up server with proper error handling
-const server = createServer(app);
+const server = http.createServer(app);
 
 // Configure middleware
 app.use(cors({
@@ -33,8 +33,8 @@ app.use(cors({
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(json());
-app.use(urlencoded({ extended: true }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Initialize Socket.io with appropriate settings
 const io = socketIo(server, {
@@ -64,7 +64,7 @@ const moduleStatus = {
 // Health check endpoint
 app.get('/health', async (req, res) => {
     try {
-        const healthStatus = getHealthStatus();
+        const healthStatus = healthAPI.getHealthStatus();
         
         if (healthStatus.overall) {
             res.status(200).json({
@@ -126,10 +126,10 @@ io.on('connection', (socket) => {
         socket.emit('database-status', moduleStatus.database);
         socket.emit('binance-status', moduleStatus.binance);
         socket.emit('telegram-status', moduleStatus.telegram);
-        socket.emit('trading-status', { active: getTradingStatus().isActive });
+        socket.emit('trading-status', { active: tradingsAPI.getTradingStatus().isActive });
         
         // Also get WebSocket status
-        const wsStatus = getWebSocketStatus();
+        const wsStatus = binanceAPI.getWebSocketStatus();
         socket.emit('websocket-status', { 
             connected: wsStatus.totalConnections > 0 
         });
@@ -148,12 +148,12 @@ io.on('connection', (socket) => {
             
             // Get transaction data from database
             const symbol = data.symbol.toUpperCase();
-            const transactions = await getTransactions(symbol);
-            const holdings = await getHoldings(symbol);
-            const refPrices = await getReferencePrice(symbol);
+            const transactions = await dbconns.getTransactions(symbol);
+            const holdings = await dbconns.getHoldings(symbol);
+            const refPrices = await dbconns.getReferencePrice(symbol);
             
             // Get current price
-            const priceData = await getTickerPrice(symbol);
+            const priceData = await binanceAPI.getTickerPrice(symbol);
             const currentPrice = parseFloat(priceData.price);
             
             // Calculate profit/loss percentage
@@ -209,7 +209,7 @@ io.on('connection', (socket) => {
             });
             
             // Get batch data from database
-            const batchData = await getBatchData(symbols);
+            const batchData = await dbconns.getBatchData(symbols);
             
             // Send batch data to client
             socket.emit('batch-data-update', {
@@ -228,7 +228,7 @@ io.on('connection', (socket) => {
     // Account info request
     socket.on('get-account-info', async () => {
         try {
-            const accountInfo = await getAccountInfo();
+            const accountInfo = await binanceAPI.getAccountInfo();
             socket.emit('account-info', accountInfo);
         } catch (error) {
             console.error('Error getting account info:', error);
@@ -248,7 +248,7 @@ io.on('connection', (socket) => {
             }
             
             // Process first purchase through trading engine
-            const result = await processFirstPurchase(data.symbol, data.investment);
+            const result = await tradingsAPI.processFirstPurchase(data.symbol, data.investment);
             
             // Send result to client
             socket.emit('first-purchase-result', result);
@@ -273,7 +273,7 @@ io.on('connection', (socket) => {
             }
             
             // Process sell all through trading engine
-            const result = await processSellAll(data.symbol);
+            const result = await tradingsAPI.processSellAll(data.symbol);
             
             // Send result to client
             socket.emit('sell-all-result', result);
@@ -290,7 +290,7 @@ io.on('connection', (socket) => {
     socket.on('test-binance-stream', async () => {
         try {
             // Reinitialize WebSocket connections
-            initializeWebSockets(io);
+            binanceAPI.initializeWebSockets(io);
             
             socket.emit('binance-test-result', {
                 success: true,
@@ -323,33 +323,33 @@ async function initializeModules() {
         console.log('Initializing modules...');
         
         // 1. Initialize database connection
-        const dbConnected = await testConnection();
+        const dbConnected = await dbconns.testConnection();
         moduleStatus.database = dbConnected;
         console.log(`Database connection: ${dbConnected ? 'SUCCESS' : 'FAILED'}`);
         
         // 2. Test Binance API connection
-        const binanceConnected = await _testConnection();
+        const binanceConnected = await binanceAPI.testConnection();
         moduleStatus.binance = binanceConnected;
         console.log(`Binance API connection: ${binanceConnected ? 'SUCCESS' : 'FAILED'}`);
         
         // 3. Test Telegram bot connection
-        const telegramConnected = await __testConnection();
+        const telegramConnected = await telegramAPI.testConnection();
         moduleStatus.telegram = telegramConnected;
         console.log(`Telegram bot connection: ${telegramConnected ? 'SUCCESS' : 'FAILED'}`);
         
         // 4. Initialize Binance WebSocket connections if API is connected
         if (binanceConnected) {
-            await initializeWebSockets(io);
+            await binanceAPI.initializeWebSockets(io);
             console.log('Binance WebSocket connections initialized');
         }
         
         // 5. Initialize trading engine
-        const tradingInitialized = await initialize(io);
+        const tradingInitialized = await tradingsAPI.initialize(io);
         moduleStatus.trading = tradingInitialized;
         console.log(`Trading engine initialization: ${tradingInitialized ? 'SUCCESS' : 'FAILED'}`);
         
         // 6. Initialize health monitoring system
-        const healthInitialized = await _initialize(io);
+        const healthInitialized = await healthAPI.initialize(io);
         moduleStatus.health = healthInitialized;
         console.log(`Health monitoring initialization: ${healthInitialized ? 'SUCCESS' : 'FAILED'}`);
         
@@ -359,7 +359,7 @@ async function initializeModules() {
         io.emit('database-status', moduleStatus.database);
         io.emit('binance-status', moduleStatus.binance);
         io.emit('telegram-status', moduleStatus.telegram);
-        io.emit('trading-status', { active: getTradingStatus().isActive });
+        io.emit('trading-status', { active: tradingsAPI.getTradingStatus().isActive });
         
         return true;
     } catch (error) {
@@ -395,7 +395,7 @@ process.on('SIGINT', async () => {
     
     // Close all WebSocket connections
     try {
-        await closeAllConnections();
+        await binanceAPI.closeAllConnections();
         console.log('All WebSocket connections closed');
     } catch (error) {
         console.error('Error closing WebSocket connections:', error);
