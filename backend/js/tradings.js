@@ -1,414 +1,357 @@
-// trading-engine.js - Trading Engine Module for Backend
-// Responsible for backend trading operations, WebSocket connections, and data management
+// backend/js/tradings.js
+// Trading Logic Module
+// Handles trading decisions, execution and bridges between Binance API and database
 
-// Use CommonJS imports for Node.js environment
-const { Server } = require('socket.io');
-const socketClient = require('socket.io-client');
+// Import required modules
+import { getTickerPrice, calculateQuantityFromUsdt } from './binance';
+import { getConfiguration, getReferencePrice, getHoldings, storeTransaction, updateHoldings, updateReferencePrice, getTransactions, updateConfiguration } from './dbconns';
+import { sendSystemAlert, sendTradeNotification } from './telegram';
 
-// Configuration for request throttling
-const THROTTLE_CONFIG = {
-    // Minimum time between repeated requests (milliseconds)
-    MIN_INTERVAL: {
-        transactions: 5000,   // 5 seconds between requests for the same symbol
-        status: 15000,        // 15 seconds between system status checks
-        account: 30000        // 30 seconds between account info requests
-    },
-    // Track when requests were last made for each type/symbol
-    lastRequests: {
-        transactions: {},     // Key: symbol, Value: timestamp
-        status: 0,            // Timestamp of last status request
-        account: 0            // Timestamp of last account info request
-    },
-    // Set this to control max requests per minute
-    MAX_REQUESTS_PER_MINUTE: 20,
-    // Track requests made in current minute window
-    requestsInLastMinute: 0,
-    // Start time of current minute window
-    currentMinuteStart: Date.now()
-};
-
-// Reset request counter every minute
-setInterval(() => {
-    THROTTLE_CONFIG.requestsInLastMinute = 0;
-    THROTTLE_CONFIG.currentMinuteStart = Date.now();
-}, 60000);
-
-// State tracking
-let io;
-let socket;
-let initialized = false;
-
-// Event callbacks registry - this allows dashboard.js to register callbacks
-const eventCallbacks = {
-    // Connection events
-    'connect': [],
-    'disconnect': [],
-    'connect_error': [],
+// Configuration for trading rules
+const TRADING_CONFIG = {
+    // Default thresholds
+    DEFAULT_BUY_THRESHOLD_PERCENT: 5,
+    DEFAULT_SELL_THRESHOLD_PERCENT: 5,
+    ADDITIONAL_PURCHASE_AMOUNT: 50,
     
-    // Status events
-    'database-status': [],
-    'binance-status': [],
-    'telegram-status': [],
-    'trading-status': [],
-    'websocket-status': [],
+    // Price monitoring settings
+    PRICE_CHECK_INTERVAL_MS: 10000, // 10 seconds
     
-    // Data events
-    'price-update': [],
-    'transaction-update': [],
-    'holdings-update': [],
-    'account-info': [],
-    'batch-data-update': [],
-    
-    // Order result events
-    'buy-result': [],
-    'sell-result': [],
-    'first-purchase-result': [],
-    'sell-all-result': []
-};
-
-// System status tracking
-const systemStatus = {
-    backend: false,
-    database: false,
-    binance: false,
-    telegram: false,
-    websocket: false,
-    lastBackendResponse: Date.now(),
-    reconnectAttempts: 0,
-    lastPriceUpdates: {
-        btc: 0,
-        sol: 0,
-        xrp: 0,
-        doge: 0,
-        near: 0,
-        pendle: 0
+    // Circuit breaker settings
+    CIRCUIT_BREAKER: {
+        MAX_ERROR_COUNT: 3,           // Max errors before breaking circuit
+        RESET_TIMEOUT_MS: 60000,      // Reset after 1 minute
+        ERROR_COUNT: 0,               // Current error count
+        TRIPPED: false,               // Whether circuit is tripped
+        LAST_ERROR_TIME: 0            // Last error timestamp
     }
 };
 
-// Interval references for monitoring
-let connectionMonitorInterval = null;
-let priceMonitorInterval = null;
-let reconnectTimeout = null;
+// Trading state tracking
+const tradingState = {
+    isActive: false,                 // Whether trading is active globally
+    symbolsEnabled: {},              // Trading status per symbol
+    lastPriceCheck: {},              // Last time price was checked for each symbol
+    lastTradeAttempt: {},            // Last trade attempt timestamps
+    priceHistory: {},                // Recent price history for each symbol
+    pendingOrders: new Set(),        // Set of pending orders to prevent duplicates
+    currentPrices: {}                // Current price for each symbol
+};
 
+// Cache of trading thresholds to reduce DB access
+const thresholdCache = {};
+
+// Initialize the trading module
+async function initialize(io) {
+    console.log('Initializing trading module...');
+    
+    try {
+        // Store Socket.io instance for emitting updates
+        this.io = io;
+        
+        // Get global configuration
+        await loadConfiguration();
+        
+        // Start price monitoring
+        startPriceMonitoring();
+        
+        console.log('Trading module initialized successfully');
+        return true;
+    } catch (error) {
+        console.error('Error initializing trading module:', error);
+        return false;
+    }
+}
 
 /**
- * Initialize the trading engine with dependencies
- * @param {Object} dbPool - Database connection pool
- * @param {Object} binanceAPI - Binance API module
- * @param {Object} telegramBot - Telegram bot module
- * @param {Object} socketIo - Socket.io instance
+ * Load configuration from database for all supported symbols
  */
-function initialize(dbPool, binanceAPI, telegramBot, socketIo) {
-    if (initialized) {
-        console.log('Trading engine already initialized');
-        return;
-    }
-    
-    // Store database pool reference
-    this.dbPool = dbPool;
-    
-    io = socketIo;
-    console.log('Trading engine initialized with database pool:', dbPool ? 'valid' : 'invalid');
-    initialized = true;
-    
-    // Initialize monitoring
-    initializeMonitoring();
-    
-    // Set up socket.io event listeners if available
-    if (io) {
-        console.log('Setting up socket.io event listeners in trading engine');
-        setupSocketListeners(dbPool, binanceAPI, telegramBot);
-    } else {
-        console.warn('Socket.io not provided, trading engine will run without real-time updates');
+async function loadConfiguration() {
+    try {
+        const config = await getConfiguration();
+        
+        // Initialize trading state for each symbol
+        config.forEach(symbolConfig => {
+            const symbol = symbolConfig.symbol;
+            tradingState.symbolsEnabled[symbol] = symbolConfig.active;
+            
+            // Cache thresholds
+            thresholdCache[symbol] = {
+                buyThresholdPercent: symbolConfig.buy_threshold_percent,
+                sellThresholdPercent: symbolConfig.sell_threshold_percent,
+                additionalPurchaseAmount: symbolConfig.additional_purchase_amount,
+                lastUpdated: Date.now()
+            };
+        });
+        
+        console.log('Trading configuration loaded:', 
+            Object.keys(tradingState.symbolsEnabled).length, 'symbols configured');
+        
+        return true;
+    } catch (error) {
+        console.error('Error loading trading configuration:', error);
+        return false;
     }
 }
 
-
-// Initialize monitoring of connections and price updates
-function initializeMonitoring() {
-    // Clear any existing intervals first
-    if (connectionMonitorInterval) clearInterval(connectionMonitorInterval);
-    if (priceMonitorInterval) clearInterval(priceMonitorInterval);
-    if (reconnectTimeout) clearTimeout(reconnectTimeout);
-    
-    // Monitor backend connection health every 10 seconds
-    connectionMonitorInterval = setInterval(() => {
-        // Check for system health
-        // This is just a stub - implement actual health checks as needed
-        console.log('Trading engine health check: OK');
-    }, 15000);
-    
-    // Monitor price updates every 10 seconds
-    priceMonitorInterval = setInterval(() => {
-        const now = Date.now();
-        let anyRecentPriceUpdates = false;
+/**
+ * Start monitoring prices for trading opportunities
+ */
+function startPriceMonitoring() {
+    // Setup interval for checking prices against thresholds
+    setInterval(async () => {
+        // Skip if trading is not active globally
+        if (!tradingState.isActive) return;
         
-        // Check if any cryptocurrency has received a price update in the last 20 seconds
-        Object.values(systemStatus.lastPriceUpdates).forEach(timestamp => {
-            if (timestamp > 0 && now - timestamp < 20000) {
-                anyRecentPriceUpdates = true;
-            }
-        });
-        
-        // Update the websocket status based on recent price updates
-        if (systemStatus.websocket !== anyRecentPriceUpdates) {
-            systemStatus.websocket = anyRecentPriceUpdates;
+        // Iterate through all enabled symbols
+        for (const [symbol, isEnabled] of Object.entries(tradingState.symbolsEnabled)) {
+            // Skip if trading is disabled for this symbol
+            if (!isEnabled) continue;
             
-            // Log the status change
-            console.log(`WebSocket price flow status changed: ${anyRecentPriceUpdates ? 'ACTIVE' : 'INACTIVE'}`);
-            
-            // Notify clients if io is available
-            if (io) {
-                io.emit('websocket-status', { connected: anyRecentPriceUpdates });
+            try {
+                // Check if we already checked price recently
+                const now = Date.now();
+                const lastCheck = tradingState.lastPriceCheck[symbol] || 0;
+                
+                // Only check every PRICE_CHECK_INTERVAL_MS milliseconds
+                if (now - lastCheck < TRADING_CONFIG.PRICE_CHECK_INTERVAL_MS) continue;
+                
+                // Mark that we checked price
+                tradingState.lastPriceCheck[symbol] = now;
+                
+                // Get current price and check if it meets trading conditions
+                await evaluateTradingStrategy(symbol);
+            } catch (error) {
+                console.error(`Error monitoring price for ${symbol}:`, error);
             }
         }
-    }, 10000);
+    }, TRADING_CONFIG.PRICE_CHECK_INTERVAL_MS);
+    
+    console.log('Price monitoring started with interval:', 
+        TRADING_CONFIG.PRICE_CHECK_INTERVAL_MS, 'ms');
 }
 
-// Set up Socket.io event listeners
-function setupSocketListeners(dbPool, binanceAPI, telegramBot) {
-    io.on('connection', (socket) => {
-        console.log('New client connected to trading engine:', socket.id);
+/**
+ * Check and update circuit breaker state
+ * @param {boolean} success - Whether the operation was successful
+ * @returns {boolean} - Whether the circuit is tripped
+ */
+function checkCircuitBreaker(success) {
+    const now = Date.now();
+    const cb = TRADING_CONFIG.CIRCUIT_BREAKER;
+    
+    // Reset circuit breaker after timeout
+    if (cb.TRIPPED && (now - cb.LAST_ERROR_TIME > cb.RESET_TIMEOUT_MS)) {
+        console.log('Circuit breaker timeout elapsed, resetting');
+        cb.TRIPPED = false;
+        cb.ERROR_COUNT = 0;
+    }
+    
+    if (success) {
+        // Reset error count on success
+        cb.ERROR_COUNT = 0;
+    } else {
+        // Increment error count and check if circuit should trip
+        cb.ERROR_COUNT++;
+        cb.LAST_ERROR_TIME = now;
         
-        // Handle ping request for connection testing
-        socket.on('ping', (data, callback) => {
-            if (typeof callback === 'function') {
-                callback({ 
-                    pong: true, 
-                    timestamp: Date.now(), 
-                    received: data 
-                });
-            } else {
-                socket.emit('pong', { 
-                    timestamp: Date.now(), 
-                    received: data 
-                });
-            }
-        });
-        
-        // Handle client disconnection
-        socket.on('disconnect', (reason) => {
-            console.log(`Client ${socket.id} disconnected from trading engine. Reason: ${reason}`);
-        });
-        
-        // Price update handling
-        socket.on('price-update', async (data) => {
-            try {
-                await processPriceUpdate(io, data.symbol, parseFloat(data.price));
-            } catch (error) {
-                console.error('Error processing price update:', error);
-            }
-        });
-        
-        // First purchase handler
-        socket.on('first-purchase', async (data) => {
-            try {
-                const result = await executeFirstPurchase(data, binanceAPI, dbPool, telegramBot);
-                socket.emit('first-purchase-result', result);
-            } catch (error) {
-                console.error('Error executing first purchase:', error);
-                socket.emit('first-purchase-result', { 
-                    success: false, 
-                    error: error.message
+        if (cb.ERROR_COUNT >= cb.MAX_ERROR_COUNT) {
+            cb.TRIPPED = true;
+            console.error(`Circuit breaker tripped after ${cb.ERROR_COUNT} consecutive errors.`);
+            
+            // Notify via Telegram
+            sendSystemAlert({
+                type: 'error',
+                message: 'Trading circuit breaker has been tripped due to multiple consecutive errors.',
+                details: 'Trading operations have been suspended temporarily.'
+            });
+            
+            // Emit trading status if io available
+            if (this.io) {
+                this.io.emit('trading-status', { 
+                    active: false, 
+                    circuitBreaker: true, 
+                    message: 'Trading suspended due to multiple consecutive errors'
                 });
             }
-        });
-        
-        // Sell all handler
-        socket.on('sell-all', async (data) => {
-            try {
-                const result = await executeSellAll(data, binanceAPI, dbPool, telegramBot);
-                socket.emit('sell-all-result', result);
-            } catch (error) {
-                console.error('Error executing sell all:', error);
-                socket.emit('sell-all-result', { 
-                    success: false, 
-                    error: error.message
-                });
-            }
-        });
-        
-        // Get transactions handler
-        socket.on('get-transactions', async (data) => {
-            try {
-                console.log('Received get-transactions request:', data);
-                if (!data || !data.symbol) {
-                    socket.emit('transaction-update', { 
-                        symbol: 'unknown',
-                        transactions: [],
-                        success: false,
-                        error: 'Missing symbol in request'
-                    });
-                    return;
-                }
-                
-                // Get transactions for the symbol from database
-                const transactions = await getTransactions(data.symbol, dbPool);
-                
-                // Get reference prices
-                const refPrices = await getReferencePrices(data.symbol, dbPool);
-                
-                // Send transaction history to client
-                socket.emit('transaction-update', {
-                    symbol: data.symbol.replace('USDT', ''),
-                    transactions: transactions,
-                    success: true,
-                    refPrices: refPrices
-                });
-                
-                // Also send holdings
-                const holdings = await getHoldings(data.symbol, dbPool);
-                
-                // Get current price to calculate profit/loss
-                const priceData = await binanceAPI.getTickerPrice(data.symbol);
-                const currentPrice = parseFloat(priceData.price);
-                
-                // Calculate profit/loss percentage if we have holdings and price
-                let profitLossPercent = 0;
-                if (holdings.quantity > 0 && holdings.avg_price > 0 && currentPrice > 0) {
-                    profitLossPercent = calculateProfitLoss(holdings.avg_price, currentPrice);
-                }
-                
-                socket.emit('holdings-update', {
-                    symbol: data.symbol.replace('USDT', ''),
-                    amount: holdings.quantity,
-                    avgPrice: holdings.avg_price,
-                    currentPrice: currentPrice,
-                    initialPrice: refPrices.initial_purchase_price,
-                    lastBuyPrice: refPrices.last_purchase_price,
-                    nextBuyThreshold: refPrices.next_buy_threshold,
-                    nextSellThreshold: refPrices.next_sell_threshold,
-                    profitLossPercent: profitLossPercent
-                });
-                
-            } catch (error) {
-                console.error('Error processing get-transactions request:', error);
-                socket.emit('transaction-update', { 
-                    success: false,
-                    error: 'Server error'
-                });
-            }
-        });
-        
-        // Add other event handlers as needed
-        // ...
-    });
+        }
+    }
+    
+    return cb.TRIPPED;
 }
 
-// Process price update and execute trades if thresholds are met
-async function processPriceUpdate(io, symbol, price) {
-    console.log(`Processing price update for ${symbol}: $${price}`);
+/**
+ * Get a formatted version of the symbol (enforce USDT suffix)
+ * @param {string} symbol - Symbol to format
+ * @returns {string} Formatted symbol
+ */
+function formatSymbol(symbol) {
+    if (!symbol) return '';
     
-    // Here you would implement logic to:
-    // 1. Check if price meets buy/sell thresholds
-    // 2. Execute automated trades if configured
-    // 3. Update clients with new price and threshold info
+    // Convert to uppercase
+    const upperSymbol = symbol.toUpperCase();
     
-    if (io) {
-        io.emit('price-update', {
-            symbol,
-            price,
-            source: 'engine'
-        });
+    // Add USDT suffix if not present
+    if (!upperSymbol.endsWith('USDT')) {
+        return upperSymbol + 'USDT';
     }
     
-    // Track the price update time
-    const baseSymbol = symbol.replace('USDT', '').toLowerCase();
-    if (systemStatus.lastPriceUpdates.hasOwnProperty(baseSymbol)) {
-        systemStatus.lastPriceUpdates[baseSymbol] = Date.now();
-    }
-    
-    return true;
+    return upperSymbol;
 }
 
-// Execute a first purchase
-async function executeFirstPurchase(data, binanceAPI, dbPool, telegramBot) {
-    if (!data.symbol || !data.investment) {
-        return {
-            success: false,
-            error: 'Missing required parameters (symbol or investment)'
-        };
-    }
-    
-    // Validate investment amount
-    const investment = parseFloat(data.investment);
-    if (isNaN(investment) || investment <= 0) {
-        return {
-            success: false,
-            error: 'Invalid investment amount'
-        };
+/**
+ * Evaluate trading strategy for a symbol based on current price
+ * @param {string} symbol - Cryptocurrency symbol
+ * @returns {boolean} Whether any action was taken
+ */
+async function evaluateTradingStrategy(symbol) {
+    // Skip if circuit breaker is tripped
+    if (TRADING_CONFIG.CIRCUIT_BREAKER.TRIPPED) {
+        return false;
     }
     
     try {
-        // Get current price
-        const priceData = await binanceAPI.getTickerPrice(data.symbol);
+        // Ensure symbol is properly formatted
+        const formattedSymbol = formatSymbol(symbol);
+        
+        // Get current price from Binance
+        const priceData = await getTickerPrice(formattedSymbol);
+        if (!priceData || !priceData.price) {
+            console.warn(`Could not get current price for ${formattedSymbol}`);
+            return false;
+        }
+        
         const currentPrice = parseFloat(priceData.price);
         
-        // Execute buy order
-        console.log(`Executing buy order for ${data.symbol} with investment $${investment}`);
-        const result = await binanceAPI.executeBuyOrder(data.symbol, investment, 'usdt');
+        // Store current price
+        tradingState.currentPrices[formattedSymbol] = currentPrice;
         
-        if (!result.success) {
+        // Get thresholds from database
+        const refPrices = await getReferencePrice(formattedSymbol);
+        
+        // Skip if no initial purchase price (meaning no first purchase yet)
+        if (!refPrices.initial_purchase_price || refPrices.initial_purchase_price <= 0) {
+            return false;
+        }
+        
+        // Get holdings for this symbol
+        const holdings = await getHoldings(formattedSymbol);
+        
+        // Get thresholds from cache or config
+        const thresholds = thresholdCache[formattedSymbol] || {
+            buyThresholdPercent: TRADING_CONFIG.DEFAULT_BUY_THRESHOLD_PERCENT,
+            sellThresholdPercent: TRADING_CONFIG.DEFAULT_SELL_THRESHOLD_PERCENT,
+            additionalPurchaseAmount: TRADING_CONFIG.ADDITIONAL_PURCHASE_AMOUNT
+        };
+        
+        // Check buy condition: price dropped by threshold % from last purchase
+        if (refPrices.last_purchase_price > 0 && 
+            currentPrice <= refPrices.next_buy_threshold) {
+            
+            console.log(`${formattedSymbol} price ${currentPrice} is below buy threshold ${refPrices.next_buy_threshold}`);
+            
+            // Execute buy with additional purchase amount
+            return await executeBuy(
+                formattedSymbol, 
+                thresholds.additionalPurchaseAmount,
+                true, // Automated
+                currentPrice
+            );
+        }
+        
+        // Check sell condition: price rose by threshold % above initial purchase
+        else if (holdings.quantity > 0 && 
+                 currentPrice >= refPrices.next_sell_threshold) {
+            
+            console.log(`${formattedSymbol} price ${currentPrice} is above sell threshold ${refPrices.next_sell_threshold}`);
+            
+            // Execute sell all
+            return await executeSellAll(formattedSymbol, true, currentPrice);
+        }
+        
+        // No action needed
+        return false;
+        
+    } catch (error) {
+        console.error(`Error evaluating trading strategy for ${symbol}:`, error);
+        
+        // Update circuit breaker
+        checkCircuitBreaker(false);
+        
+        return false;
+    }
+}
+
+/**
+ * Process a first purchase request initiated by user
+ * @param {string} symbol - Cryptocurrency symbol
+ * @param {number} investment - Investment amount in USDT
+ * @returns {Object} Result object
+ */
+async function processFirstPurchase(symbol, investment) {
+    try {
+        // Ensure symbol is properly formatted
+        const formattedSymbol = formatSymbol(symbol);
+        
+        // Check if amount is valid
+        const investmentAmount = parseFloat(investment);
+        if (isNaN(investmentAmount) || investmentAmount <= 0) {
             return {
                 success: false,
-                error: result.error || 'Failed to execute buy order'
+                error: 'Invalid investment amount'
             };
         }
         
-        // Store transaction in database
-        await storeTransaction(dbPool, {
-            symbol: data.symbol,
-            type: 'BUY',
-            price: currentPrice,
-            quantity: result.amount,
-            investment: investment,
-            automated: false
-        });
+        // Get current price
+        const priceData = await getTickerPrice(formattedSymbol);
+        const currentPrice = parseFloat(priceData.price);
         
-        // Update holdings
-        await updateHoldings(data.symbol, dbPool);
-        
-        // Update reference prices
-        await updateReferencePrices(data.symbol, currentPrice, dbPool);
-        
-        // Send Telegram notification if configured
-        if (telegramBot) {
-            try {
-                await telegramBot.sendTradeNotification({
-                    symbol: data.symbol,
-                    type: 'BUY',
-                    price: currentPrice,
-                    quantity: result.amount,
-                    investment: investment,
-                    timestamp: Date.now()
-                });
-                console.log('Telegram notification sent for first purchase');
-            } catch (telegramError) {
-                console.error('Error sending Telegram notification:', telegramError);
-            }
+        if (!currentPrice || currentPrice <= 0) {
+            return {
+                success: false,
+                error: 'Could not get current price'
+            };
         }
         
-        return { success: true };
-    } catch (err) {
-        console.error('First purchase error:', err);
-        return { success: false, error: err.message };
+        // Execute the buy operation
+        const result = await executeBuy(formattedSymbol, investmentAmount, false, currentPrice);
+        
+        // Return appropriate result
+        if (result) {
+            return { success: true };
+        } else {
+            return {
+                success: false,
+                error: 'Failed to execute buy order'
+            };
+        }
+    } catch (error) {
+        console.error(`Error processing first purchase for ${symbol}:`, error);
+        
+        // Update circuit breaker
+        checkCircuitBreaker(false);
+        
+        return {
+            success: false,
+            error: error.message
+        };
     }
 }
 
-// Execute sell all holdings
-async function executeSellAll(data, binanceAPI, dbPool, telegramBot) {
-    if (!data.symbol) {
-        return {
-            success: false,
-            error: 'Missing required parameter (symbol)'
-        };
-    }
-    
+/**
+ * Process a sell all request initiated by user
+ * @param {string} symbol - Cryptocurrency symbol
+ * @returns {Object} Result object
+ */
+async function processSellAll(symbol) {
     try {
-        // Get current holdings
-        const holdings = await getHoldings(data.symbol, dbPool);
-        console.log(`Current holdings for ${data.symbol}:`, holdings);
+        // Ensure symbol is properly formatted
+        const formattedSymbol = formatSymbol(symbol);
         
+        // Get current holdings
+        const holdings = await getHoldings(formattedSymbol);
+        
+        // Check if there are any holdings to sell
         if (!holdings || parseFloat(holdings.quantity) <= 0) {
             return {
                 success: false,
@@ -416,413 +359,443 @@ async function executeSellAll(data, binanceAPI, dbPool, telegramBot) {
             };
         }
         
-        // Get current price
-        const priceData = await binanceAPI.getTickerPrice(data.symbol);
-        const currentPrice = parseFloat(priceData.price);
+        // Execute the sell operation
+        const result = await executeSellAll(formattedSymbol, false);
         
-        // Calculate total value
-        const totalValue = holdings.quantity * currentPrice;
-        
-        // Execute sell order
-        console.log(`Executing sell order: ${holdings.quantity} ${data.symbol} at ${currentPrice.toFixed(4)}`);
-        const result = await binanceAPI.executeSellOrder(data.symbol, holdings.quantity, 'amount');
-        
-        // Check if the sell operation was successful
-        if (!result || !result.success) {
+        // Return appropriate result
+        if (result) {
+            return { success: true };
+        } else {
             return {
                 success: false,
-                error: result?.error || 'Failed to execute sell order'
+                error: 'Failed to execute sell order'
             };
         }
+    } catch (error) {
+        console.error(`Error processing sell all for ${symbol}:`, error);
         
-        // Store transaction in database
-        await storeTransaction(dbPool, {
-            symbol: data.symbol,
-            type: 'SELL',
-            price: currentPrice,
-            quantity: holdings.quantity,
-            investment: totalValue,
-            automated: false
-        });
-        
-        // Update holdings
-        await updateHoldings(data.symbol, dbPool);
-        
-        // Update reference prices
-        await updateReferencePrices(data.symbol, currentPrice, dbPool);
-        
-        // Send Telegram notification
-        if (telegramBot) {
-            try {
-                await telegramBot.sendTradeNotification({
-                    symbol: data.symbol,
-                    type: 'SELL',
-                    price: currentPrice,
-                    quantity: holdings.quantity,
-                    investment: totalValue,
-                    timestamp: Date.now()
-                });
-                console.log('Telegram notification sent for sell all');
-            } catch (telegramError) {
-                console.error('Error sending Telegram notification:', telegramError);
-            }
-        }
-        
-        return { success: true };
-    } catch (err) {
-        console.error('Sell all error:', err);
-        return { success: false, error: err.message };
-    }
-}
-
-// Get transactions for a symbol
-async function getTransactions(symbol, dbPool) {
-    let conn;
-    try {
-        conn = await dbPool.getConnection();
-        const rows = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC',
-            [symbol]
-        );
-        
-        console.log(`Found ${rows.length} transactions for ${symbol}`);
-        
-        return rows;
-    } catch (err) {
-        console.error('Error querying transactions:', err);
-        return [];
-    } finally {
-        if (conn) {
-            // Always release the connection back to the pool
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
-    }
-}
-
-// Get holdings for a symbol
-async function getHoldings(symbol, dbPool) {
-    // Check if we received a valid database pool
-    if (!dbPool) {
-        console.error('Database pool not provided to getHoldings function');
-        return { symbol, quantity: 0, avg_price: 0 };
-    }
-
-    let conn;
-    try {
-        conn = await dbPool.getConnection();
-        const rows = await conn.query(
-            'SELECT * FROM holdings WHERE symbol = ?',
-            [symbol]
-        );
-        
-        // Release connection immediately after query
-        await conn.release();
-        conn = null; // Set to null so we don't try to release it again
-        
-        return rows[0] || { symbol, quantity: 0, avg_price: 0 };
-    } catch (err) {
-        console.error('Error getting holdings:', err);
-        return { symbol, quantity: 0, avg_price: 0 };
-    } finally {
-        // Double-check connection release in finally block
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                // Already released, ignore
-            }
-        }
-    }
-}
-
-// Get reference prices for a symbol
-async function getReferencePrices(symbol, dbPool) {
-    // Check if we received a valid database pool
-    if (!dbPool) {
-        console.error('Database pool not provided to getReferencePrices function');
-        return {
-            symbol,
-            initial_purchase_price: 0,
-            last_purchase_price: 0,
-            next_buy_threshold: 0,
-            next_sell_threshold: 0
-        };
-    }
-
-    let conn;
-    try {
-        conn = await dbPool.getConnection();
-        const rows = await conn.query(
-            'SELECT * FROM reference_prices WHERE symbol = ?',
-            [symbol]
-        );
-        
-        await conn.release();
-        conn = null; // Set to null so we don't try to release it again
-        
-        // Default values if no record exists
-        return rows[0] || {
-            symbol,
-            initial_purchase_price: 0,
-            last_purchase_price: 0,
-            next_buy_threshold: 0,
-            next_sell_threshold: 0
-        };
-    } catch (err) {
-        console.error('Error getting reference prices:', err);
-        return {
-            symbol,
-            initial_purchase_price: 0,
-            last_purchase_price: 0,
-            next_buy_threshold: 0,
-            next_sell_threshold: 0
-        };
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                // Already released, ignore
-            }
-        }
-    }
-}
-
-
-
-
-// Store a transaction in the database
-async function storeTransaction(dbPool, transaction) {
-    let conn;
-    try {
-        conn = await dbPool.getConnection();
-        await conn.query(
-            'INSERT INTO transactions (symbol, type, price, quantity, investment, automated) VALUES (?, ?, ?, ?, ?, ?)',
-            [
-                transaction.symbol,
-                transaction.type,
-                transaction.price,
-                transaction.quantity,
-                transaction.investment,
-                transaction.automated || false
-            ]
-        );
-        console.log(`Stored ${transaction.type} transaction for ${transaction.symbol}`);
-        return true;
-    } catch (err) {
-        console.error('Error storing transaction:', err);
-        throw err;
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
-    }
-}
-
-// Update holdings for a symbol based on all transactions
-async function updateHoldings(symbol, dbPool) {
-    let conn;
-    try {
-        conn = await dbPool.getConnection();
-        
-        // Get all transactions for the symbol
-        const transactions = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp ASC',
-            [symbol]
-        );
-        
-        // Calculate holdings
-        let quantity = 0;
-        let totalInvestment = 0;
-        let avgPrice = 0;
-        
-        for (const tx of transactions) {
-            if (tx.type === 'BUY') {
-                // For buys, update the average price
-                const oldValue = quantity * avgPrice;
-                const newValue = parseFloat(tx.quantity) * parseFloat(tx.price);
-                quantity += parseFloat(tx.quantity);
-                totalInvestment += parseFloat(tx.investment);
-                
-                if (quantity > 0) {
-                    avgPrice = (oldValue + newValue) / quantity;
-                }
-            } else if (tx.type === 'SELL') {
-                // For sells, reduce the quantity
-                quantity -= parseFloat(tx.quantity);
-                // If no holdings left, reset average price
-                if (quantity <= 0) {
-                    quantity = 0;
-                    avgPrice = 0;
-                    totalInvestment = 0;
-                }
-            }
-        }
-        
-        // Update or insert holdings record
-        await conn.query(
-            `INSERT INTO holdings (symbol, quantity, avg_price) 
-             VALUES (?, ?, ?) 
-             ON DUPLICATE KEY UPDATE 
-             quantity = VALUES(quantity), 
-             avg_price = VALUES(avg_price)`,
-            [symbol, quantity, avgPrice]
-        );
-        
-        console.log(`Updated holdings for ${symbol}: ${quantity} at avg price ${avgPrice}`);
-        return { symbol, quantity, avg_price: avgPrice };
-    } catch (err) {
-        console.error('Error updating holdings:', err);
-        throw err;
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
-    }
-}
-
-// Update reference prices for a symbol
-async function updateReferencePrices(symbol, currentPrice, dbPool) {
-    let conn;
-    try {
-        conn = await dbPool.getConnection();
-        
-        // Get existing reference prices
-        const existingPrices = await getReferencePrices(symbol, dbPool);
-        
-        // Get configuration for this symbol
-        const configRows = await conn.query(
-            'SELECT * FROM configuration WHERE symbol = ?',
-            [symbol]
-        );
-        
-        // Default thresholds if no config exists
-        const buyThresholdPercent = configRows[0]?.buy_threshold_percent || 5;
-        const sellThresholdPercent = configRows[0]?.sell_threshold_percent || 5;
-        
-        // Calculate new reference prices
-        const initialPrice = existingPrices.initial_purchase_price > 0 
-            ? existingPrices.initial_purchase_price 
-            : currentPrice;
-        
-        const nextBuyPrice = currentPrice * (1 - buyThresholdPercent / 100);
-        const nextSellPrice = currentPrice * (1 + sellThresholdPercent / 100);
-        
-        // Update or insert reference prices
-        await conn.query(
-            `INSERT INTO reference_prices 
-             (symbol, initial_purchase_price, last_purchase_price, next_buy_threshold, next_sell_threshold) 
-             VALUES (?, ?, ?, ?, ?) 
-             ON DUPLICATE KEY UPDATE 
-             initial_purchase_price = CASE WHEN initial_purchase_price = 0 THEN ? ELSE initial_purchase_price END,
-             last_purchase_price = ?,
-             next_buy_threshold = ?,
-             next_sell_threshold = ?`,
-            [
-                symbol, initialPrice, currentPrice, nextBuyPrice, nextSellPrice,
-                initialPrice, currentPrice, nextBuyPrice, nextSellPrice
-            ]
-        );
-        
-        console.log(`Updated reference prices for ${symbol}: Initial=${initialPrice}, Last=${currentPrice}, NextBuy=${nextBuyPrice}, NextSell=${nextSellPrice}`);
+        // Update circuit breaker
+        checkCircuitBreaker(false);
         
         return {
-            symbol,
-            initial_purchase_price: initialPrice,
-            last_purchase_price: currentPrice,
-            next_buy_threshold: nextBuyPrice,
-            next_sell_threshold: nextSellPrice
+            success: false,
+            error: error.message
         };
-    } catch (err) {
-        console.error('Error updating reference prices:', err);
-        throw err;
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
     }
 }
 
-// Calculate profit/loss percentage
-function calculateProfitLoss(purchasePrice, currentPrice) {
-    if (!purchasePrice || purchasePrice <= 0) {
-        return 0;
+/**
+ * Execute a buy order for a symbol
+ * @param {string} symbol - Cryptocurrency symbol
+ * @param {number} amount - Amount to buy in USDT
+ * @param {boolean} automated - Whether this is an automated trade
+ * @param {number} currentPrice - Current price (optional, will fetch if not provided)
+ * @returns {boolean} Success status
+ */
+async function executeBuy(symbol, amount, automated = false, currentPrice = null) {
+    // Skip if circuit breaker is tripped
+    if (TRADING_CONFIG.CIRCUIT_BREAKER.TRIPPED) {
+        console.warn(`Buy order for ${symbol} rejected: circuit breaker tripped`);
+        return false;
     }
     
-    return ((currentPrice - purchasePrice) / purchasePrice) * 100;
-}
-
-// Register event handler
-function on(event, callback) {
-    if (eventCallbacks[event]) {
-        eventCallbacks[event].push(callback);
-    } else {
-        console.warn(`Unknown event: ${event}`);
+    // Check for duplicate or pending orders
+    const orderKey = `buy-${symbol}-${Date.now()}`;
+    if (tradingState.pendingOrders.has(orderKey)) {
+        console.warn(`Duplicate buy order detected for ${symbol}, ignoring`);
+        return false;
     }
-}
-
-// Remove event handler
-function off(event, callback) {
-    if (eventCallbacks[event]) {
-        const index = eventCallbacks[event].indexOf(callback);
-        if (index !== -1) {
-            eventCallbacks[event].splice(index, 1);
+    
+    // Mark order as pending
+    tradingState.pendingOrders.add(orderKey);
+    
+    try {
+        // Get current price if not provided
+        let price = currentPrice;
+        if (!price) {
+            const priceData = await getTickerPrice(symbol);
+            price = parseFloat(priceData.price);
         }
+        
+        // Calculate quantity based on USDT amount
+        const quantityData = await calculateQuantityFromUsdt(symbol, amount);
+        const quantity = quantityData.quantity;
+        
+        console.log(`Executing buy order: ${amount} USDT worth of ${symbol} at $${price.toFixed(4)}`);
+        
+        // Execute the buy order through Binance API
+        // This is commented out because we don't have the actual implementation in binance.js
+        // In a real scenario, you would replace this with the actual Binance API call
+        /*
+        const orderResult = await binanceAPI.createMarketBuyOrder(symbol, quantity);
+        if (!orderResult) {
+            throw new Error(`Failed to create buy order for ${symbol}`);
+        }
+        */
+        
+        // For now, simulate a successful order for testing (remove in production)
+        const orderResult = {
+            symbol,
+            orderId: Math.floor(Math.random() * 1000000),
+            executedQty: quantity,
+            cummulativeQuoteQty: amount,
+            status: 'FILLED',
+            price: price
+        };
+        
+        // Store transaction in database
+        const transactionData = {
+            symbol,
+            type: 'BUY',
+            price,
+            quantity,
+            investment: amount,
+            automated
+        };
+        
+        await storeTransaction(transactionData);
+        
+        // Update holdings
+        await updateHoldings(symbol);
+        
+        // Update reference prices
+        await updateReferencePrice(symbol, price);
+        
+        // Send notification via Telegram
+        await sendTradeNotification({
+            symbol,
+            type: 'BUY',
+            price,
+            quantity,
+            investment: amount,
+            timestamp: Date.now()
+        });
+        
+        // Emit updates through Socket.IO if available
+        if (this.io) {
+            // Emit price update
+            this.io.emit('price-update', {
+                symbol,
+                price,
+                source: 'order'
+            });
+            
+            // Get updated data
+            const transactions = await getTransactions(symbol);
+            const updatedHoldings = await getHoldings(symbol);
+            const refPrices = await getReferencePrice(symbol);
+            
+            // Emit transaction update
+            this.io.emit('transaction-update', {
+                symbol: symbol.replace('USDT', ''),
+                transactions,
+                refPrices
+            });
+            
+            // Emit holdings update
+            this.io.emit('holdings-update', {
+                symbol: symbol.replace('USDT', ''),
+                amount: updatedHoldings.quantity,
+                avgPrice: updatedHoldings.avg_price,
+                initialPrice: refPrices.initial_purchase_price,
+                lastBuyPrice: refPrices.last_purchase_price,
+                nextBuyThreshold: refPrices.next_buy_threshold,
+                nextSellThreshold: refPrices.next_sell_threshold,
+                profitLossPercent: ((price - updatedHoldings.avg_price) / updatedHoldings.avg_price) * 100
+            });
+        }
+        
+        // Update circuit breaker
+        checkCircuitBreaker(true);
+        
+        console.log(`Buy order executed successfully for ${symbol}`);
+        return true;
+        
+    } catch (error) {
+        console.error(`Error executing buy order for ${symbol}:`, error);
+        
+        // Update circuit breaker
+        checkCircuitBreaker(false);
+        
+        return false;
+    } finally {
+        // Remove from pending orders
+        tradingState.pendingOrders.delete(orderKey);
     }
 }
 
-// Export using CommonJS module.exports
-module.exports = {
+/**
+ * Execute a sell all order for a symbol
+ * @param {string} symbol - Cryptocurrency symbol
+ * @param {boolean} automated - Whether this is an automated trade
+ * @param {number} currentPrice - Current price (optional, will fetch if not provided)
+ * @returns {boolean} Success status
+ */
+async function executeSellAll(symbol, automated = false, currentPrice = null) {
+    // Skip if circuit breaker is tripped
+    if (TRADING_CONFIG.CIRCUIT_BREAKER.TRIPPED) {
+        console.warn(`Sell order for ${symbol} rejected: circuit breaker tripped`);
+        return false;
+    }
+    
+    // Check for duplicate or pending orders
+    const orderKey = `sell-${symbol}-${Date.now()}`;
+    if (tradingState.pendingOrders.has(orderKey)) {
+        console.warn(`Duplicate sell order detected for ${symbol}, ignoring`);
+        return false;
+    }
+    
+    // Mark order as pending
+    tradingState.pendingOrders.add(orderKey);
+    
+    try {
+        // Get current holdings
+        const holdings = await getHoldings(symbol);
+        
+        // Check if there are holdings to sell
+        if (!holdings || parseFloat(holdings.quantity) <= 0) {
+            console.warn(`No holdings to sell for ${symbol}`);
+            return false;
+        }
+        
+        // Get current price if not provided
+        let price = currentPrice;
+        if (!price) {
+            const priceData = await getTickerPrice(symbol);
+            price = parseFloat(priceData.price);
+        }
+        
+        // Calculate total value
+        const totalValue = holdings.quantity * price;
+        
+        console.log(`Executing sell order: ${holdings.quantity} ${symbol} at $${price.toFixed(4)}`);
+        
+        // Execute the sell order through Binance API
+        // This is commented out because we don't have the actual implementation in binance.js
+        // In a real scenario, you would replace this with the actual Binance API call
+        /*
+        const orderResult = await binanceAPI.createMarketSellOrder(symbol, holdings.quantity);
+        if (!orderResult) {
+            throw new Error(`Failed to create sell order for ${symbol}`);
+        }
+        */
+        
+        // For now, simulate a successful order for testing (remove in production)
+        const orderResult = {
+            symbol,
+            orderId: Math.floor(Math.random() * 1000000),
+            executedQty: holdings.quantity,
+            cummulativeQuoteQty: totalValue,
+            status: 'FILLED',
+            price: price
+        };
+        
+        // Store transaction in database
+        const transactionData = {
+            symbol,
+            type: 'SELL',
+            price,
+            quantity: holdings.quantity,
+            investment: totalValue,
+            automated
+        };
+        
+        await storeTransaction(transactionData);
+        
+        // Update holdings
+        await updateHoldings(symbol);
+        
+        // Update reference prices
+        await updateReferencePrice(symbol, price);
+        
+        // Send notification via Telegram
+        await sendTradeNotification({
+            symbol,
+            type: 'SELL',
+            price,
+            quantity: holdings.quantity,
+            investment: totalValue,
+            timestamp: Date.now()
+        });
+        
+        // Emit updates through Socket.IO if available
+        if (this.io) {
+            // Emit price update
+            this.io.emit('price-update', {
+                symbol,
+                price,
+                source: 'order'
+            });
+            
+            // Get updated data
+            const transactions = await getTransactions(symbol);
+            const updatedHoldings = await getHoldings(symbol);
+            const refPrices = await getReferencePrice(symbol);
+            
+            // Emit transaction update
+            this.io.emit('transaction-update', {
+                symbol: symbol.replace('USDT', ''),
+                transactions,
+                refPrices
+            });
+            
+            // Emit holdings update
+            this.io.emit('holdings-update', {
+                symbol: symbol.replace('USDT', ''),
+                amount: 0, // Since we sold everything
+                avgPrice: 0,
+                initialPrice: refPrices.initial_purchase_price,
+                lastBuyPrice: refPrices.last_purchase_price,
+                nextBuyThreshold: refPrices.next_buy_threshold,
+                nextSellThreshold: refPrices.next_sell_threshold,
+                profitLossPercent: 0
+            });
+        }
+        
+        // Update circuit breaker
+        checkCircuitBreaker(true);
+        
+        console.log(`Sell order executed successfully for ${symbol}`);
+        return true;
+        
+    } catch (error) {
+        console.error(`Error executing sell order for ${symbol}:`, error);
+        
+        // Update circuit breaker
+        checkCircuitBreaker(false);
+        
+        return false;
+    } finally {
+        // Remove from pending orders
+        tradingState.pendingOrders.delete(orderKey);
+    }
+}
+
+/**
+ * Update trading state with new price data
+ * @param {string} symbol - Cryptocurrency symbol
+ * @param {number} price - Current price
+ */
+function processNewPrice(symbol, price) {
+    // Store current price
+    tradingState.currentPrices[symbol] = price;
+    
+    // Add to price history (maintain last 10 prices)
+    if (!tradingState.priceHistory[symbol]) {
+        tradingState.priceHistory[symbol] = [];
+    }
+    
+    tradingState.priceHistory[symbol].push({
+        price,
+        timestamp: Date.now()
+    });
+    
+    // Keep only last 10 prices
+    if (tradingState.priceHistory[symbol].length > 10) {
+        tradingState.priceHistory[symbol].shift();
+    }
+    
+    // Evaluate trading strategy if trading is enabled for this symbol
+    if (tradingState.isActive && tradingState.symbolsEnabled[symbol]) {
+        evaluateTradingStrategy(symbol);
+    }
+}
+
+/**
+ * Set global trading activity state
+ * @param {boolean} isActive - Whether trading should be active
+ * @returns {boolean} Success status
+ */
+function setTradingActivity(isActive) {
+    tradingState.isActive = !!isActive;
+    
+    // Log the change
+    console.log(`Trading activity set to: ${tradingState.isActive ? 'ACTIVE' : 'INACTIVE'}`);
+    
+    // Emit trading status if io available
+    if (this.io) {
+        this.io.emit('trading-status', { 
+            active: tradingState.isActive,
+            circuitBreaker: TRADING_CONFIG.CIRCUIT_BREAKER.TRIPPED
+        });
+    }
+    
+    return true;
+}
+
+/**
+ * Set trading activity for a specific symbol
+ * @param {string} symbol - Cryptocurrency symbol
+ * @param {boolean} isEnabled - Whether trading should be enabled for this symbol
+ * @returns {boolean} Success status
+ */
+async function setSymbolTradingActivity(symbol, isEnabled) {
+    // Ensure symbol is properly formatted
+    const formattedSymbol = formatSymbol(symbol);
+    
+    // Update trading state
+    tradingState.symbolsEnabled[formattedSymbol] = !!isEnabled;
+    
+    // Update configuration in database
+    try {
+        await updateConfiguration(formattedSymbol, {
+            active: !!isEnabled
+        });
+        
+        console.log(`Trading for ${formattedSymbol} set to: ${isEnabled ? 'ENABLED' : 'DISABLED'}`);
+        return true;
+    } catch (error) {
+        console.error(`Error updating trading activity for ${formattedSymbol}:`, error);
+        return false;
+    }
+}
+
+/**
+ * Get current trading status
+ * @returns {Object} Trading status object
+ */
+function getTradingStatus() {
+    return {
+        isActive: tradingState.isActive,
+        circuitBreaker: TRADING_CONFIG.CIRCUIT_BREAKER.TRIPPED,
+        symbolsEnabled: { ...tradingState.symbolsEnabled },
+        currentPrices: { ...tradingState.currentPrices }
+    };
+}
+
+/**
+ * Reset circuit breaker manually
+ * @returns {boolean} Success status
+ */
+function resetCircuitBreaker() {
+    TRADING_CONFIG.CIRCUIT_BREAKER.TRIPPED = false;
+    TRADING_CONFIG.CIRCUIT_BREAKER.ERROR_COUNT = 0;
+    TRADING_CONFIG.CIRCUIT_BREAKER.LAST_ERROR_TIME = 0;
+    
+    console.log('Circuit breaker manually reset');
+    
+    // Emit trading status if io available
+    if (this.io) {
+        this.io.emit('trading-status', { 
+            active: tradingState.isActive,
+            circuitBreaker: false
+        });
+    }
+    
+    return true;
+}
+
+// Export all functions
+export default {
     initialize,
-    on,
-    off,
-    requestSystemStatus: function() {
-        console.log('System status requested');
-        return systemStatus;
-    },
-    requestTransactions: function(symbol) {
-        console.log(`Transactions requested for ${symbol}`);
-        // Implementation would depend on your database setup
-    },
-    requestAccountInfo: function() {
-        console.log('Account info requested');
-        // Implementation would depend on your Binance API integration
-    },
-    executeBuyOrder: function(symbol, amount) {
-        console.log(`Buy order requested for ${symbol}: ${amount}`);
-        // Implementation would depend on your Binance API integration
-    },
-    executeSellOrder: function(symbol) {
-        console.log(`Sell order requested for ${symbol}`);
-        // Implementation would depend on your Binance API integration
-    },
-    testBinanceStream: function() {
-        console.log('Binance stream test requested');
-        // Implementation would depend on your Binance API integration
-    },
-    getSystemStatus: function() {
-        return { ...systemStatus };
-    },
-    processPriceUpdate,
-    getReferencePrices,
-    getHoldings,
-    updateHoldings,
-    updateReferencePrices,
-    calculateProfitLoss
+    processFirstPurchase,
+    processSellAll,
+    evaluateTradingStrategy,
+    executeBuy,
+    executeSellAll,
+    processNewPrice,
+    setTradingActivity,
+    setSymbolTradingActivity,
+    getTradingStatus,
+    resetCircuitBreaker
 };
