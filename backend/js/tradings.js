@@ -4,7 +4,7 @@
 
 // Import required modules
 import { getTickerPrice, calculateQuantityFromUsdt } from './binance.js';
-import { getConfiguration, getReferencePrice, getHoldings, storeTransaction, updateHoldings, updateReferencePrice, getTransactions, updateConfiguration } from './dbconns';
+import { getConfiguration, getReferencePrice, getHoldings, storeTransaction, updateHoldings, updateReferencePrice, getTransactions, updateConfiguration } from './dbconns.js';
 import { sendSystemAlert, sendTradeNotification } from './telegram.js';
 
 // Configuration for trading rules
