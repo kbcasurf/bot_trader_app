@@ -14,15 +14,15 @@ const path = require('path');
 const dbconns = require('./js/dbconns.js');
 const binanceAPI = require('./js/binance.js');
 const telegramAPI = require('./js/telegram.js');
-const tradingsAPI = require('./js/tradings.js');
-const healthAPI = require('./js/health.js');
+const tradingEngine = require('./js/trading.js');
+const healthMonitor = require('./js/health.js');
 
 // Load environment variables
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 // Create Express app
 const app = express();
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3000;
 
 // Set up server with proper error handling
 const server = http.createServer(app);
@@ -64,7 +64,21 @@ const moduleStatus = {
 // Health check endpoint
 app.get('/health', async (req, res) => {
     try {
-        const healthStatus = healthAPI.getHealthStatus();
+        // Use the health module to get status if available
+        let healthStatus = { overall: false };
+        
+        if (moduleStatus.health && typeof healthMonitor.getHealthStatus === 'function') {
+            healthStatus = healthMonitor.getHealthStatus();
+        } else {
+            // Basic status check if health module isn't available
+            healthStatus = {
+                overall: moduleStatus.database && moduleStatus.binance,
+                database: moduleStatus.database,
+                binance: moduleStatus.binance,
+                telegram: moduleStatus.telegram,
+                trading: moduleStatus.trading
+            };
+        }
         
         if (healthStatus.overall) {
             res.status(200).json({
@@ -126,13 +140,24 @@ io.on('connection', (socket) => {
         socket.emit('database-status', moduleStatus.database);
         socket.emit('binance-status', moduleStatus.binance);
         socket.emit('telegram-status', moduleStatus.telegram);
-        socket.emit('trading-status', { active: tradingsAPI.getTradingStatus().isActive });
         
-        // Also get WebSocket status
-        const wsStatus = binanceAPI.getWebSocketStatus();
-        socket.emit('websocket-status', { 
-            connected: wsStatus.totalConnections > 0 
-        });
+        // Get trading status from the trading module if available
+        let tradingStatus = { active: false };
+        if (moduleStatus.trading && typeof tradingEngine.getTradingStatus === 'function') {
+            tradingStatus = tradingEngine.getTradingStatus();
+        }
+        socket.emit('trading-status', tradingStatus);
+        
+        // Get WebSocket status from Binance API if available
+        let wsStatus = { connected: false };
+        if (moduleStatus.binance && typeof binanceAPI.getWebSocketStatus === 'function') {
+            const fullStatus = binanceAPI.getWebSocketStatus();
+            wsStatus = { 
+                connected: fullStatus.totalConnections > 0,
+                pollingActive: fullStatus.pollingActive || false 
+            };
+        }
+        socket.emit('websocket-status', wsStatus);
     });
     
     // Transaction data requests
@@ -146,15 +171,33 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Skip if database isn't connected
+            if (!moduleStatus.database) {
+                socket.emit('transaction-update', { 
+                    success: false, 
+                    error: 'Database not connected' 
+                });
+                return;
+            }
+            
             // Get transaction data from database
             const symbol = data.symbol.toUpperCase();
-            const transactions = await dbconns.getTransactions(symbol);
-            const holdings = await dbconns.getHoldings(symbol);
-            const refPrices = await dbconns.getReferencePrice(symbol);
+            const fullSymbol = symbol.endsWith('USDT') ? symbol : symbol + 'USDT';
             
-            // Get current price
-            const priceData = await binanceAPI.getTickerPrice(symbol);
-            const currentPrice = parseFloat(priceData.price);
+            const transactions = await dbconns.getTransactions(fullSymbol);
+            const holdings = await dbconns.getHoldings(fullSymbol);
+            const refPrices = await dbconns.getReferencePrice(fullSymbol);
+            
+            // Get current price if Binance is connected
+            let currentPrice = 0;
+            if (moduleStatus.binance) {
+                try {
+                    const priceData = await binanceAPI.getTickerPrice(fullSymbol);
+                    currentPrice = parseFloat(priceData.price);
+                } catch (priceError) {
+                    console.error(`Error getting price for ${fullSymbol}:`, priceError);
+                }
+            }
             
             // Calculate profit/loss percentage
             let profitLossPercent = 0;
@@ -164,7 +207,7 @@ io.on('connection', (socket) => {
             
             // Send transaction data to client
             socket.emit('transaction-update', {
-                symbol: symbol.replace('USDT', ''),
+                symbol: symbol,
                 transactions: transactions,
                 refPrices: refPrices,
                 success: true
@@ -172,7 +215,7 @@ io.on('connection', (socket) => {
             
             // Send holdings data to client
             socket.emit('holdings-update', {
-                symbol: symbol.replace('USDT', ''),
+                symbol: symbol,
                 amount: holdings.quantity,
                 avgPrice: holdings.avg_price,
                 currentPrice: currentPrice,
@@ -202,6 +245,15 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Skip if database isn't connected
+            if (!moduleStatus.database) {
+                socket.emit('batch-data-update', { 
+                    success: false, 
+                    error: 'Database not connected' 
+                });
+                return;
+            }
+            
             // Format symbols properly
             const symbols = data.symbols.map(s => {
                 const upperSymbol = s.toUpperCase();
@@ -210,6 +262,23 @@ io.on('connection', (socket) => {
             
             // Get batch data from database
             const batchData = await dbconns.getBatchData(symbols);
+            
+            // If Binance is connected, add current prices
+            if (moduleStatus.binance) {
+                try {
+                    const prices = await binanceAPI.getMultipleTickers(symbols);
+                    
+                    // Add prices to batch data
+                    Object.keys(batchData).forEach(symbol => {
+                        const priceInfo = prices.find(p => p.symbol === symbol);
+                        if (priceInfo && batchData[symbol]) {
+                            batchData[symbol].currentPrice = parseFloat(priceInfo.price);
+                        }
+                    });
+                } catch (priceError) {
+                    console.error('Error getting prices for batch data:', priceError);
+                }
+            }
             
             // Send batch data to client
             socket.emit('batch-data-update', {
@@ -228,6 +297,12 @@ io.on('connection', (socket) => {
     // Account info request
     socket.on('get-account-info', async () => {
         try {
+            // Skip if Binance isn't connected
+            if (!moduleStatus.binance) {
+                socket.emit('account-info', { error: 'Binance API not connected' });
+                return;
+            }
+            
             const accountInfo = await binanceAPI.getAccountInfo();
             socket.emit('account-info', accountInfo);
         } catch (error) {
@@ -247,8 +322,17 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Skip if trading module isn't initialized
+            if (!moduleStatus.trading) {
+                socket.emit('first-purchase-result', {
+                    success: false,
+                    error: 'Trading engine not available'
+                });
+                return;
+            }
+            
             // Process first purchase through trading engine
-            const result = await tradingsAPI.processFirstPurchase(data.symbol, data.investment);
+            const result = await tradingEngine.processFirstPurchase(data.symbol, data.investment);
             
             // Send result to client
             socket.emit('first-purchase-result', result);
@@ -272,8 +356,17 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Skip if trading module isn't initialized
+            if (!moduleStatus.trading) {
+                socket.emit('sell-all-result', {
+                    success: false,
+                    error: 'Trading engine not available'
+                });
+                return;
+            }
+            
             // Process sell all through trading engine
-            const result = await tradingsAPI.processSellAll(data.symbol);
+            const result = await tradingEngine.processSellAll(data.symbol);
             
             // Send result to client
             socket.emit('sell-all-result', result);
@@ -289,6 +382,15 @@ io.on('connection', (socket) => {
     // Test Binance WebSocket connection
     socket.on('test-binance-stream', async () => {
         try {
+            // Skip if Binance isn't connected
+            if (!moduleStatus.binance) {
+                socket.emit('binance-test-result', {
+                    success: false,
+                    error: 'Binance API not connected'
+                });
+                return;
+            }
+            
             // Reinitialize WebSocket connections
             binanceAPI.initializeWebSockets(io);
             
@@ -302,6 +404,24 @@ io.on('connection', (socket) => {
                 success: false,
                 error: error.message
             });
+        }
+    });
+    
+    // Handle client errors (sent from frontend)
+    socket.on('client-error', (errorData) => {
+        console.error('Received client error:', errorData);
+        
+        // Log to Telegram if connected and error reporting is enabled
+        if (moduleStatus.telegram && process.env.TELEGRAM_ERROR_REPORTING === 'true') {
+            try {
+                telegramAPI.sendSystemAlert({
+                    type: 'error',
+                    message: 'Client-side error reported',
+                    details: errorData.message
+                });
+            } catch (telegramError) {
+                console.error('Error sending error to Telegram:', telegramError);
+            }
         }
     });
     
@@ -323,35 +443,86 @@ async function initializeModules() {
         console.log('Initializing modules...');
         
         // 1. Initialize database connection
-        const dbConnected = await dbconns.testConnection();
-        moduleStatus.database = dbConnected;
-        console.log(`Database connection: ${dbConnected ? 'SUCCESS' : 'FAILED'}`);
+        let dbConnected = false;
+        try {
+            dbConnected = await dbconns.testConnection();
+            moduleStatus.database = dbConnected;
+            console.log(`Database connection: ${dbConnected ? 'SUCCESS' : 'FAILED'}`);
+        } catch (dbError) {
+            console.error('Database initialization error:', dbError);
+        }
         
         // 2. Test Binance API connection
-        const binanceConnected = await binanceAPI.testConnection();
-        moduleStatus.binance = binanceConnected;
-        console.log(`Binance API connection: ${binanceConnected ? 'SUCCESS' : 'FAILED'}`);
+        let binanceConnected = false;
+        try {
+            if (process.env.BINANCE_API_KEY && process.env.BINANCE_API_SECRET) {
+                binanceConnected = await binanceAPI.testConnection();
+                moduleStatus.binance = binanceConnected;
+                console.log(`Binance API connection: ${binanceConnected ? 'SUCCESS' : 'FAILED'}`);
+            } else {
+                console.warn('Binance API credentials not provided in environment variables');
+            }
+        } catch (binanceError) {
+            console.error('Binance API initialization error:', binanceError);
+        }
         
         // 3. Test Telegram bot connection
-        const telegramConnected = await telegramAPI.testConnection();
-        moduleStatus.telegram = telegramConnected;
-        console.log(`Telegram bot connection: ${telegramConnected ? 'SUCCESS' : 'FAILED'}`);
+        let telegramConnected = false;
+        try {
+            if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+                telegramConnected = await telegramAPI.testConnection();
+                moduleStatus.telegram = telegramConnected;
+                console.log(`Telegram bot connection: ${telegramConnected ? 'SUCCESS' : 'FAILED'}`);
+            } else {
+                console.warn('Telegram credentials not provided in environment variables');
+            }
+        } catch (telegramError) {
+            console.error('Telegram initialization error:', telegramError);
+        }
         
         // 4. Initialize Binance WebSocket connections if API is connected
         if (binanceConnected) {
-            await binanceAPI.initializeWebSockets(io);
-            console.log('Binance WebSocket connections initialized');
+            try {
+                await binanceAPI.initializeWebSockets(io);
+                console.log('Binance WebSocket connections initialized');
+            } catch (wsError) {
+                console.error('Binance WebSocket initialization error:', wsError);
+            }
         }
         
-        // 5. Initialize trading engine
-        const tradingInitialized = await tradingsAPI.initialize(io);
-        moduleStatus.trading = tradingInitialized;
-        console.log(`Trading engine initialization: ${tradingInitialized ? 'SUCCESS' : 'FAILED'}`);
+        // 5. Initialize trading engine if dependencies are available
+        let tradingInitialized = false;
+        try {
+            if (moduleStatus.database && moduleStatus.binance) {
+                // Check if trading module exists and has initialize method
+                if (typeof tradingEngine.initialize === 'function') {
+                    tradingInitialized = await tradingEngine.initialize(io);
+                    moduleStatus.trading = tradingInitialized;
+                    console.log(`Trading engine initialization: ${tradingInitialized ? 'SUCCESS' : 'FAILED'}`);
+                } else {
+                    console.warn('Trading engine module not properly defined');
+                }
+            } else {
+                console.warn('Skipping trading engine initialization due to missing dependencies');
+            }
+        } catch (tradingError) {
+            console.error('Trading engine initialization error:', tradingError);
+        }
         
         // 6. Initialize health monitoring system
-        const healthInitialized = await healthAPI.initialize(io);
-        moduleStatus.health = healthInitialized;
-        console.log(`Health monitoring initialization: ${healthInitialized ? 'SUCCESS' : 'FAILED'}`);
+        let healthInitialized = false;
+        try {
+            // Check if health module exists and has initialize method
+            if (typeof healthMonitor.initialize === 'function') {
+                healthInitialized = await healthMonitor.initialize(io);
+                moduleStatus.health = healthInitialized;
+                console.log(`Health monitoring initialization: ${healthInitialized ? 'SUCCESS' : 'FAILED'}`);
+            } else {
+                console.warn('Health monitor module not properly defined');
+            }
+        } catch (healthError) {
+            console.error('Health monitoring initialization error:', healthError);
+        }
         
         console.log('All modules initialized');
         
@@ -359,7 +530,13 @@ async function initializeModules() {
         io.emit('database-status', moduleStatus.database);
         io.emit('binance-status', moduleStatus.binance);
         io.emit('telegram-status', moduleStatus.telegram);
-        io.emit('trading-status', { active: tradingsAPI.getTradingStatus().isActive });
+        
+        // Emit trading status if available
+        let tradingStatus = { active: false };
+        if (moduleStatus.trading && typeof tradingEngine.getTradingStatus === 'function') {
+            tradingStatus = tradingEngine.getTradingStatus();
+        }
+        io.emit('trading-status', tradingStatus);
         
         return true;
     } catch (error) {
@@ -394,14 +571,24 @@ process.on('SIGINT', async () => {
     console.log('Shutting down server...');
     
     // Close all WebSocket connections
-    try {
-        await binanceAPI.closeAllConnections();
-        console.log('All WebSocket connections closed');
-    } catch (error) {
-        console.error('Error closing WebSocket connections:', error);
+    if (moduleStatus.binance && typeof binanceAPI.closeAllConnections === 'function') {
+        try {
+            await binanceAPI.closeAllConnections();
+            console.log('All WebSocket connections closed');
+        } catch (error) {
+            console.error('Error closing WebSocket connections:', error);
+        }
     }
     
-    // Other cleanup tasks if needed
+    // Clean up database connections if connected
+    if (moduleStatus.database && dbconns.pool) {
+        try {
+            await dbconns.pool.end();
+            console.log('Database connections closed');
+        } catch (error) {
+            console.error('Error closing database connections:', error);
+        }
+    }
     
     // Close server
     server.close(() => {
@@ -419,9 +606,37 @@ process.on('SIGINT', async () => {
 // Unhandled rejection handling
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    
+    // Log to Telegram if connected and error reporting is enabled
+    if (moduleStatus.telegram && process.env.TELEGRAM_ERROR_REPORTING === 'true') {
+        telegramAPI.sendSystemAlert({
+            type: 'error',
+            message: 'Unhandled Promise Rejection',
+            details: reason ? reason.toString() : 'Unknown reason'
+        }).catch(telegramError => {
+            console.error('Error sending unhandled rejection to Telegram:', telegramError);
+        });
+    }
 });
 
 // Uncaught exception handling
 process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
+    
+    // Log to Telegram if connected and error reporting is enabled
+    if (moduleStatus.telegram && process.env.TELEGRAM_ERROR_REPORTING === 'true') {
+        telegramAPI.sendSystemAlert({
+            type: 'error',
+            message: 'Uncaught Exception',
+            details: error.message
+        }).catch(telegramError => {
+            console.error('Error sending uncaught exception to Telegram:', telegramError);
+        });
+    }
+    
+    // For uncaught exceptions, we should exit after cleanup
+    // but give a chance to log and notify
+    setTimeout(() => {
+        process.exit(1);
+    }, 1000);
 });
