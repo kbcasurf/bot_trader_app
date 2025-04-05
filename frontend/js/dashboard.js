@@ -193,6 +193,9 @@ function setupAutoRefresh() {
     dashboardState.autoRefreshInterval = setInterval(() => {
         console.log('Auto-refreshing data...');
         loadAllData();
+        
+        // Also refresh account info
+        requestAccountInfo();
     }, DASHBOARD_CONFIG.AUTO_REFRESH_INTERVAL);
     
     console.log(`Auto-refresh set up with interval: ${DASHBOARD_CONFIG.AUTO_REFRESH_INTERVAL}ms`);
@@ -274,28 +277,6 @@ function handleAccountInfoUpdate(data) {
       Connections.emit('get-account-info');
     }
   }
-  
-  /**
-   * Set up automatic data refresh
-   */
-  function setupAutoRefresh() {
-    // Clear any existing interval
-    if (dashboardState.autoRefreshInterval) {
-      clearInterval(dashboardState.autoRefreshInterval);
-    }
-    
-    // Set up new interval
-    dashboardState.autoRefreshInterval = setInterval(() => {
-      console.log('Auto-refreshing data...');
-      loadAllData();
-      
-      // Also refresh account info
-      requestAccountInfo();
-    }, DASHBOARD_CONFIG.AUTO_REFRESH_INTERVAL);
-    
-    console.log(`Auto-refresh set up with interval: ${DASHBOARD_CONFIG.AUTO_REFRESH_INTERVAL}ms`);
-  }
-
 
 /**
  * Set up theme toggle functionality
