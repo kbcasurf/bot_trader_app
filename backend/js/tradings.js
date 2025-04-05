@@ -2,20 +2,10 @@
 // Trading Logic Module
 // Handles trading decisions, execution and bridges between Binance API and database
 
-// Import required modules
-const { getTickerPrice, calculateQuantityFromUsdt } = require('./binance.js');
-const { 
-  getConfiguration, 
-  getReferencePrice, 
-  getHoldings, 
-  storeTransaction, 
-  updateHoldings, 
-  updateReferencePrice, 
-  getTransactions, 
-  updateConfiguration 
-} = require('./dbconns.js');
-const { sendSystemAlert, sendTradeNotification } = require('./telegram.js');
-
+// Import required modules (CommonJS syntax)
+const binanceAPI = require('./binance.js');
+const dbconns = require('./dbconns.js');
+const telegramAPI = require('./telegram.js');
 
 // Configuration for trading rules
 const TRADING_CONFIG = {
@@ -51,13 +41,20 @@ const tradingState = {
 // Cache of trading thresholds to reduce DB access
 const thresholdCache = {};
 
-// Initialize the trading module
-async function initialize(io) {
+// Socket.io instance (will be set during initialization)
+let io = null;
+
+/**
+ * Initialize the trading module
+ * @param {Object} socketIo - Socket.io instance for emitting updates
+ * @returns {boolean} Initialization success
+ */
+async function initialize(socketIo) {
     console.log('Initializing trading module...');
     
     try {
         // Store Socket.io instance for emitting updates
-        this.io = io;
+        io = socketIo;
         
         // Get global configuration
         await loadConfiguration();
@@ -78,7 +75,7 @@ async function initialize(io) {
  */
 async function loadConfiguration() {
     try {
-        const config = await getConfiguration();
+        const config = await dbconns.getConfiguration();
         
         // Initialize trading state for each symbol
         config.forEach(symbolConfig => {
@@ -170,15 +167,15 @@ function checkCircuitBreaker(success) {
             console.error(`Circuit breaker tripped after ${cb.ERROR_COUNT} consecutive errors.`);
             
             // Notify via Telegram
-            sendSystemAlert({
+            telegramAPI.sendSystemAlert({
                 type: 'error',
                 message: 'Trading circuit breaker has been tripped due to multiple consecutive errors.',
                 details: 'Trading operations have been suspended temporarily.'
             });
             
             // Emit trading status if io available
-            if (this.io) {
-                this.io.emit('trading-status', { 
+            if (io) {
+                io.emit('trading-status', { 
                     active: false, 
                     circuitBreaker: true, 
                     message: 'Trading suspended due to multiple consecutive errors'
@@ -225,7 +222,7 @@ async function evaluateTradingStrategy(symbol) {
         const formattedSymbol = formatSymbol(symbol);
         
         // Get current price from Binance
-        const priceData = await getTickerPrice(formattedSymbol);
+        const priceData = await binanceAPI.getTickerPrice(formattedSymbol);
         if (!priceData || !priceData.price) {
             console.warn(`Could not get current price for ${formattedSymbol}`);
             return false;
@@ -237,7 +234,7 @@ async function evaluateTradingStrategy(symbol) {
         tradingState.currentPrices[formattedSymbol] = currentPrice;
         
         // Get thresholds from database
-        const refPrices = await getReferencePrice(formattedSymbol);
+        const refPrices = await dbconns.getReferencePrice(formattedSymbol);
         
         // Skip if no initial purchase price (meaning no first purchase yet)
         if (!refPrices.initial_purchase_price || refPrices.initial_purchase_price <= 0) {
@@ -245,7 +242,7 @@ async function evaluateTradingStrategy(symbol) {
         }
         
         // Get holdings for this symbol
-        const holdings = await getHoldings(formattedSymbol);
+        const holdings = await dbconns.getHoldings(formattedSymbol);
         
         // Get thresholds from cache or config
         const thresholds = thresholdCache[formattedSymbol] || {
@@ -313,7 +310,7 @@ async function processFirstPurchase(symbol, investment) {
         }
         
         // Get current price
-        const priceData = await getTickerPrice(formattedSymbol);
+        const priceData = await binanceAPI.getTickerPrice(formattedSymbol);
         const currentPrice = parseFloat(priceData.price);
         
         if (!currentPrice || currentPrice <= 0) {
@@ -359,7 +356,7 @@ async function processSellAll(symbol) {
         const formattedSymbol = formatSymbol(symbol);
         
         // Get current holdings
-        const holdings = await getHoldings(formattedSymbol);
+        const holdings = await dbconns.getHoldings(formattedSymbol);
         
         // Check if there are any holdings to sell
         if (!holdings || parseFloat(holdings.quantity) <= 0) {
@@ -423,12 +420,12 @@ async function executeBuy(symbol, amount, automated = false, currentPrice = null
         // Get current price if not provided
         let price = currentPrice;
         if (!price) {
-            const priceData = await getTickerPrice(symbol);
+            const priceData = await binanceAPI.getTickerPrice(symbol);
             price = parseFloat(priceData.price);
         }
         
         // Calculate quantity based on USDT amount
-        const quantityData = await calculateQuantityFromUsdt(symbol, amount);
+        const quantityData = await binanceAPI.calculateQuantityFromUsdt(symbol, amount);
         const quantity = quantityData.quantity;
         
         console.log(`Executing buy order: ${amount} USDT worth of ${symbol} at $${price.toFixed(4)}`);
@@ -463,16 +460,16 @@ async function executeBuy(symbol, amount, automated = false, currentPrice = null
             automated
         };
         
-        await storeTransaction(transactionData);
+        await dbconns.storeTransaction(transactionData);
         
         // Update holdings
-        await updateHoldings(symbol);
+        await dbconns.updateHoldings(symbol);
         
         // Update reference prices
-        await updateReferencePrice(symbol, price);
+        await dbconns.updateReferencePrice(symbol, price);
         
         // Send notification via Telegram
-        await sendTradeNotification({
+        await telegramAPI.sendTradeNotification({
             symbol,
             type: 'BUY',
             price,
@@ -482,28 +479,28 @@ async function executeBuy(symbol, amount, automated = false, currentPrice = null
         });
         
         // Emit updates through Socket.IO if available
-        if (this.io) {
+        if (io) {
             // Emit price update
-            this.io.emit('price-update', {
+            io.emit('price-update', {
                 symbol,
                 price,
                 source: 'order'
             });
             
             // Get updated data
-            const transactions = await getTransactions(symbol);
-            const updatedHoldings = await getHoldings(symbol);
-            const refPrices = await getReferencePrice(symbol);
+            const transactions = await dbconns.getTransactions(symbol);
+            const updatedHoldings = await dbconns.getHoldings(symbol);
+            const refPrices = await dbconns.getReferencePrice(symbol);
             
             // Emit transaction update
-            this.io.emit('transaction-update', {
+            io.emit('transaction-update', {
                 symbol: symbol.replace('USDT', ''),
                 transactions,
                 refPrices
             });
             
             // Emit holdings update
-            this.io.emit('holdings-update', {
+            io.emit('holdings-update', {
                 symbol: symbol.replace('USDT', ''),
                 amount: updatedHoldings.quantity,
                 avgPrice: updatedHoldings.avg_price,
@@ -560,7 +557,7 @@ async function executeSellAll(symbol, automated = false, currentPrice = null) {
     
     try {
         // Get current holdings
-        const holdings = await getHoldings(symbol);
+        const holdings = await dbconns.getHoldings(symbol);
         
         // Check if there are holdings to sell
         if (!holdings || parseFloat(holdings.quantity) <= 0) {
@@ -571,7 +568,7 @@ async function executeSellAll(symbol, automated = false, currentPrice = null) {
         // Get current price if not provided
         let price = currentPrice;
         if (!price) {
-            const priceData = await getTickerPrice(symbol);
+            const priceData = await binanceAPI.getTickerPrice(symbol);
             price = parseFloat(priceData.price);
         }
         
@@ -610,16 +607,16 @@ async function executeSellAll(symbol, automated = false, currentPrice = null) {
             automated
         };
         
-        await storeTransaction(transactionData);
+        await dbconns.storeTransaction(transactionData);
         
         // Update holdings
-        await updateHoldings(symbol);
+        await dbconns.updateHoldings(symbol);
         
         // Update reference prices
-        await updateReferencePrice(symbol, price);
+        await dbconns.updateReferencePrice(symbol, price);
         
         // Send notification via Telegram
-        await sendTradeNotification({
+        await telegramAPI.sendTradeNotification({
             symbol,
             type: 'SELL',
             price,
@@ -629,28 +626,28 @@ async function executeSellAll(symbol, automated = false, currentPrice = null) {
         });
         
         // Emit updates through Socket.IO if available
-        if (this.io) {
+        if (io) {
             // Emit price update
-            this.io.emit('price-update', {
+            io.emit('price-update', {
                 symbol,
                 price,
                 source: 'order'
             });
             
             // Get updated data
-            const transactions = await getTransactions(symbol);
-            const updatedHoldings = await getHoldings(symbol);
-            const refPrices = await getReferencePrice(symbol);
+            const transactions = await dbconns.getTransactions(symbol);
+            const updatedHoldings = await dbconns.getHoldings(symbol);
+            const refPrices = await dbconns.getReferencePrice(symbol);
             
             // Emit transaction update
-            this.io.emit('transaction-update', {
+            io.emit('transaction-update', {
                 symbol: symbol.replace('USDT', ''),
                 transactions,
                 refPrices
             });
             
             // Emit holdings update
-            this.io.emit('holdings-update', {
+            io.emit('holdings-update', {
                 symbol: symbol.replace('USDT', ''),
                 amount: 0, // Since we sold everything
                 avgPrice: 0,
@@ -723,8 +720,8 @@ function setTradingActivity(isActive) {
     console.log(`Trading activity set to: ${tradingState.isActive ? 'ACTIVE' : 'INACTIVE'}`);
     
     // Emit trading status if io available
-    if (this.io) {
-        this.io.emit('trading-status', { 
+    if (io) {
+        io.emit('trading-status', { 
             active: tradingState.isActive,
             circuitBreaker: TRADING_CONFIG.CIRCUIT_BREAKER.TRIPPED
         });
@@ -748,7 +745,7 @@ async function setSymbolTradingActivity(symbol, isEnabled) {
     
     // Update configuration in database
     try {
-        await updateConfiguration(formattedSymbol, {
+        await dbconns.updateConfiguration(formattedSymbol, {
             active: !!isEnabled
         });
         
@@ -785,8 +782,8 @@ function resetCircuitBreaker() {
     console.log('Circuit breaker manually reset');
     
     // Emit trading status if io available
-    if (this.io) {
-        this.io.emit('trading-status', { 
+    if (io) {
+        io.emit('trading-status', { 
             active: tradingState.isActive,
             circuitBreaker: false
         });
@@ -795,7 +792,7 @@ function resetCircuitBreaker() {
     return true;
 }
 
-// Export all functions
+// Export all functions (CommonJS syntax)
 module.exports = {
     initialize,
     processFirstPurchase,

@@ -3,9 +3,9 @@
 // Handles monitoring health of all system connections and services
 
 // Import required modules
-const { testConnection, getWebSocketStatus } = require('./binance.js');
-const { getHealthStats } = require('./dbconns.js');
-const { testConnection: _testConnection, sendSystemAlert } = require('./telegram.js');
+const binanceAPI = require('./binance.js');
+const dbconns = require('./dbconns.js');
+const telegramAPI = require('./telegram.js');
 
 // Configuration for health checks
 const HEALTH_CONFIG = {
@@ -165,7 +165,7 @@ async function checkBinanceAPIHealth() {
         
         // Run the actual check
         const testResult = await Promise.race([
-            testConnection(),
+            binanceAPI.testConnection(),
             timeoutPromise
         ]);
         
@@ -197,7 +197,7 @@ async function checkBinanceWebSocketHealth() {
     
     try {
         // Get WebSocket status from Binance API module
-        const status = getWebSocketStatus();
+        const status = binanceAPI.getWebSocketStatus();
         
         // Determine if WebSocket is healthy
         const isHealthy = status && 
@@ -238,7 +238,7 @@ async function checkDatabaseHealth() {
         
         // Run the actual check
         const healthStats = await Promise.race([
-            getHealthStats(),
+            dbconns.getHealthStats(),
             timeoutPromise
         ]);
         
@@ -276,7 +276,7 @@ async function checkTelegramHealth() {
         
         // Run the actual check
         const testResult = await Promise.race([
-            _testConnection(),
+            telegramAPI.testConnection(),
             timeoutPromise
         ]);
         
@@ -378,7 +378,7 @@ function checkOverallHealth() {
             
             // Only send if Telegram is healthy
             if (healthState.status.telegram.healthy) {
-                sendSystemAlert({
+                telegramAPI.sendSystemAlert({
                     type: 'error',
                     message: 'System health check failed',
                     details: `Critical components status: ${JSON.stringify(allStatuses)}`
@@ -439,7 +439,7 @@ function updateHealthState(component, isHealthy, details = {}) {
             healthState.status.telegram.healthy && 
             now - healthState.lastNotification[component] > 300000) {  // 5 minutes between notifications
             
-            sendSystemAlert({
+            telegramAPI.sendSystemAlert({
                 type: 'warning',
                 message: `${component} service is down`,
                 details: details.error || 'No details available'

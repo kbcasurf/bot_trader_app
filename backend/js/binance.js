@@ -1,3 +1,4 @@
+// backend/js/binance.js
 const axios = require('axios');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
@@ -22,7 +23,7 @@ const WS_CONNECTION_LIFETIME = 23 * 60 * 60 * 1000; // 23 hours (1 hour less tha
 const HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
 const HEALTH_CHECK_TIMEOUT = 5000; // 5 seconds
 const POLLING_INTERVAL = 10000; // 10 seconds
-
+const OPEN = 1; // WebSocket open state constant
 
 // WebSocket state
 let wsInstance = null;
@@ -42,7 +43,6 @@ let pollingState = {
     isActive: false,
     intervalId: null
 };
-
 
 // Initialize WebSocket connections for the configured symbols
 function initializeWebSockets(io) {
@@ -78,8 +78,6 @@ async function closeAllConnections() {
     return true;
 }
 
-
-
 // Get WebSocket connection status
 function getWebSocketStatus() {
     // Create a status report
@@ -106,12 +104,10 @@ function getWebSocketStatus() {
     return status;
 }
 
-
-
 // Test Binance API connection
 async function testConnection() {
     try {
-        const response = await get(`${BASE_URL}/api/v3/ping`);
+        const response = await axios.get(`${BASE_URL}/api/v3/ping`);
         return response.status === 200;
     } catch (error) {
         console.error('Binance API connection test failed:', error.message);
@@ -119,11 +115,10 @@ async function testConnection() {
     }
 }
 
- 
 // Get current ticker price for a symbol
 async function getTickerPrice(symbol) {
     try {
-        const response = await get(`${BASE_URL}/api/v3/ticker/price`, {
+        const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`, {
             params: { symbol }
         });
         
@@ -134,13 +129,11 @@ async function getTickerPrice(symbol) {
     }
 }
 
-
-
 // Get ticker price for multiple symbols
 async function getMultipleTickers(symbols = []) {
     try {
         // If no symbols provided, get all tickers
-        const response = await get(`${BASE_URL}/api/v3/ticker/price`);
+        const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`);
         
         if (symbols.length === 0) {
             return response.data;
@@ -190,7 +183,7 @@ async function calculateQuantityFromUsdt(symbol, usdtAmount) {
 // Get exchange info for a symbol
 async function getExchangeInfo(symbol) {
     try {
-        const response = await get(`${BASE_URL}/api/v3/exchangeInfo`, {
+        const response = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`, {
             params: { symbol }
         });
         
@@ -254,8 +247,7 @@ function formatQuantity(quantity, symbolInfo) {
     }
 }
 
-
-/* 
+/* Uncomment if needed
 // Create a market buy order
 async function createMarketBuyOrder(symbol, quantity, isUsdtAmount = false) {
     try {
@@ -365,7 +357,7 @@ async function createMarketSellOrder(symbol, quantity, isUsdtAmount = false) {
         throw error;
     }
 }
- */
+*/
 
 // Start price polling
 function startPolling(symbols, io) {
@@ -457,7 +449,7 @@ function cleanupWebSocket(ws) {
     }
     
     // Close WebSocket if it's still open
-    if (ws.readyState === OPEN || ws.readyState === CONNECTING) {
+    if (ws.readyState === OPEN || ws.readyState === WebSocket.CONNECTING) {
         try {
             ws.terminate();
         } catch (err) {
@@ -465,9 +457,6 @@ function cleanupWebSocket(ws) {
         }
     }
 }
-
-
-
 
 // Schedule connection renewal
 function scheduleConnectionRenewal(symbols, io) {
@@ -503,9 +492,6 @@ function scheduleConnectionRenewal(symbols, io) {
     
     console.log(`Scheduled connection renewal in ${WS_CONNECTION_LIFETIME / 1000 / 60 / 60} hours`);
 }
-
-
-
 
 // Set up health check for WebSocket connection
 function setupHealthCheck(ws, symbols, io) {
@@ -557,10 +543,6 @@ function setupHealthCheck(ws, symbols, io) {
         }
     }, HEALTH_CHECK_INTERVAL);
 }
-
-
-
-
 
 // Implement exponential backoff for reconnection
 function getReconnectDelay() {
@@ -621,9 +603,7 @@ function handleReconnect(symbols, io) {
     }, delay);
 }
 
-
-
- // Main function to connect to Binance WebSocket
+// Main function to connect to Binance WebSocket
 function connectToWebSocket(symbols, io) {
     // Clean up existing connection if present
     if (wsInstance) {
@@ -677,8 +657,6 @@ function connectToWebSocket(symbols, io) {
         stopPolling();
     });
     
-
-
     // Message handler
     ws.on('message', (data) => {
         try {
@@ -743,9 +721,6 @@ function connectToWebSocket(symbols, io) {
         }
     });
 
-
-
-
     // Pong handler to mark connection as alive
     ws.on('pong', () => {
         ws.isAlive = true;
@@ -784,11 +759,9 @@ function connectToWebSocket(symbols, io) {
     return ws;
 }
 
-
-
 // Generate signature for signed endpoints
 function generateSignature(queryString) {
-    return createHmac('sha256', API_SECRET)
+    return crypto.createHmac('sha256', API_SECRET)
         .update(queryString)
         .digest('hex');
 }
@@ -800,7 +773,7 @@ async function getAccountInfo() {
         const queryString = `timestamp=${timestamp}`;
         const signature = generateSignature(queryString);
         
-        const response = await get(
+        const response = await axios.get(
             `${BASE_URL}/api/v3/account?${queryString}&signature=${signature}`,
             {
                 headers: {
@@ -816,8 +789,7 @@ async function getAccountInfo() {
     }
 }
 
-
-/* 
+/* Uncomment if needed
 // Execute a buy order based on USDT value
 async function executeBuyOrder(symbol, amount, amountType = 'amount') {
     try {
@@ -937,9 +909,8 @@ async function executeSellOrder(symbol, amount, amountType = 'amount') {
         };
     }
 }
- */
 
-/* // Legacy function for backward compatibility
+// Legacy function for backward compatibility
 function subscribeToTickerStream(symbols, io) {
     console.log(`Legacy subscribeToTickerStream called for symbols: ${symbols.join(', ')}`);
     
@@ -968,7 +939,7 @@ function unsubscribeFromTickerStream(symbols, io) {
         }
         
         // Reset state
-        wsState.isConnected = false;
+         wsState.isConnected = false;
         wsState.activeSymbols = [];
         
         return true;
@@ -976,9 +947,7 @@ function unsubscribeFromTickerStream(symbols, io) {
     
     return false;
 }
- */
-
-
+*/
 
 module.exports = {
     initializeWebSockets,
@@ -989,6 +958,11 @@ module.exports = {
     getTickerPrice,
     getMultipleTickers,
     calculateQuantityFromUsdt
- //   createMarketBuyOrder,
- //   createMarketSellOrder,
+    // Uncomment these if you need them:
+    // createMarketBuyOrder,
+    // createMarketSellOrder,
+    // executeBuyOrder,
+    // executeSellOrder,
+    // subscribeToTickerStream,
+    // unsubscribeFromTickerStream
 };

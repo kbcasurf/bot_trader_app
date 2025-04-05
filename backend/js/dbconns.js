@@ -9,10 +9,10 @@ const dotenv = require('dotenv');
 // Load environment variables
 dotenv.config({ path: '/app/.env' });
 
-// Create connection pool with optimal settings
-const pool = mariadb.createPool({
+// Database configuration
+const DB_CONFIG = {
     host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
+    port: parseInt(process.env.DB_PORT, 10) || 3306,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
@@ -23,37 +23,53 @@ const pool = mariadb.createPool({
     connectTimeout: 20000,
     socketTimeout: 60000,
     multipleStatements: false
-});
+};
 
-// Log pool creation
-console.log('Database connection pool created with configuration:', {
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    database: process.env.DB_NAME,
-    connectionLimit: 20
-});
+// Create connection pool with optimal settings
+let pool = null;
 
-// Register event handlers for pool
-pool.on('connection', (conn) => {
-    console.log('New database connection established');
-    
-    conn.on('error', (err) => {
-        console.error('Database connection error:', err);
+try {
+    pool = mariadb.createPool(DB_CONFIG);
+
+    // Log pool creation
+    console.log('Database connection pool created with configuration:', {
+        host: DB_CONFIG.host,
+        user: DB_CONFIG.user,
+        database: DB_CONFIG.database,
+        connectionLimit: DB_CONFIG.connectionLimit
     });
-});
 
-pool.on('acquire', () => {
-    console.log('Database connection acquired');
-});
+    // Register event handlers for pool
+    pool.on('connection', (conn) => {
+        console.log('New database connection established');
+        
+        conn.on('error', (err) => {
+            console.error('Database connection error:', err);
+        });
+    });
 
-pool.on('release', () => {
-    console.log('Database connection released');
-});
+    pool.on('acquire', () => {
+        console.log('Database connection acquired');
+    });
 
-// Test database connection
+    pool.on('release', () => {
+        console.log('Database connection released');
+    });
+} catch (error) {
+    console.error('Failed to create database connection pool:', error);
+}
+
+/**
+ * Test database connection
+ * @returns {Promise<boolean>} Connection status
+ */
 async function testConnection() {
     let conn;
     try {
+        if (!pool) {
+            throw new Error('Database connection pool not initialized');
+        }
+        
         conn = await pool.getConnection();
         console.log('Database connection successful');
         const rows = await conn.query('SELECT 1 as test');
@@ -62,30 +78,35 @@ async function testConnection() {
         console.error('Database connection test failed:', err);
         return false;
     } finally {
-        if (conn) conn.release();
+        if (conn) {
+            try {
+                await conn.release();
+            } catch (releaseError) {
+                console.error('Error releasing connection:', releaseError);
+            }
+        }
     }
 }
 
 /**
- * Get transactions for a specific symbol
- * @param {string} symbol - Cryptocurrency symbol (e.g. BTCUSDT)
- * @param {number} limit - Maximum number of transactions to return
- * @returns {Array} Array of transaction objects
+ * Execute a database query with proper error handling
+ * @param {string} query - SQL query to execute
+ * @param {Array} params - Query parameters
+ * @returns {Promise<Array>} Query results
  */
-async function getTransactions(symbol, limit = 30) {
+async function executeQuery(query, params = []) {
     let conn;
     try {
-        conn = await pool.getConnection();
-        const rows = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?',
-            [symbol, limit]
-        );
+        if (!pool) {
+            throw new Error('Database connection pool not initialized');
+        }
         
-        console.log(`Found ${rows.length} transactions for ${symbol}`);
-        return rows;
-    } catch (err) {
-        console.error('Error querying transactions:', err);
-        return [];
+        conn = await pool.getConnection();
+        const result = await conn.query(query, params);
+        return result;
+    } catch (error) {
+        console.error('Error executing query:', error);
+        throw error;
     } finally {
         if (conn) {
             try {
@@ -94,6 +115,27 @@ async function getTransactions(symbol, limit = 30) {
                 console.error('Error releasing connection:', releaseError);
             }
         }
+    }
+}
+
+/**
+ * Get transactions for a specific symbol
+ * @param {string} symbol - Cryptocurrency symbol (e.g. BTCUSDT)
+ * @param {number} limit - Maximum number of transactions to return
+ * @returns {Promise<Array>} Array of transaction objects
+ */
+async function getTransactions(symbol, limit = 30) {
+    try {
+        const rows = await executeQuery(
+            'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?',
+            [symbol, limit]
+        );
+        
+        console.log(`Found ${rows.length} transactions for ${symbol}`);
+        return rows;
+    } catch (error) {
+        console.error('Error querying transactions:', error);
+        return [];
     }
 }
 
@@ -106,13 +148,11 @@ async function getTransactions(symbol, limit = 30) {
  * @param {number} transaction.quantity - Transaction quantity
  * @param {number} transaction.investment - Investment amount in USDT
  * @param {boolean} transaction.automated - Whether transaction was automated
- * @returns {boolean} Success status
+ * @returns {Promise<boolean>} Success status
  */
 async function storeTransaction(transaction) {
-    let conn;
     try {
-        conn = await pool.getConnection();
-        await conn.query(
+        await executeQuery(
             'INSERT INTO transactions (symbol, type, price, quantity, investment, automated) VALUES (?, ?, ?, ?, ?, ?)',
             [
                 transaction.symbol,
@@ -125,53 +165,35 @@ async function storeTransaction(transaction) {
         );
         console.log(`Stored ${transaction.type} transaction for ${transaction.symbol}`);
         return true;
-    } catch (err) {
-        console.error('Error storing transaction:', err);
+    } catch (error) {
+        console.error('Error storing transaction:', error);
         return false;
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
     }
 }
 
 /**
  * Get holdings for a specific symbol
  * @param {string} symbol - Cryptocurrency symbol
- * @returns {Object} Holdings data object
+ * @returns {Promise<Object>} Holdings data object
  */
 async function getHoldings(symbol) {
-    let conn;
     try {
-        conn = await pool.getConnection();
-        const rows = await conn.query(
+        const rows = await executeQuery(
             'SELECT * FROM holdings WHERE symbol = ?',
             [symbol]
         );
         
         return rows[0] || { symbol, quantity: 0, avg_price: 0 };
-    } catch (err) {
-        console.error('Error querying holdings:', err);
+    } catch (error) {
+        console.error('Error querying holdings:', error);
         return { symbol, quantity: 0, avg_price: 0 };
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
     }
 }
 
 /**
  * Update holdings for a symbol based on all transactions
  * @param {string} symbol - Cryptocurrency symbol
- * @returns {Object} Updated holdings data
+ * @returns {Promise<Object>} Updated holdings data
  */
 async function updateHoldings(symbol) {
     let conn;
@@ -224,9 +246,9 @@ async function updateHoldings(symbol) {
         
         console.log(`Updated holdings for ${symbol}: ${quantity} at avg price ${avgPrice}`);
         return { symbol, quantity, avg_price: avgPrice };
-    } catch (err) {
-        console.error('Error updating holdings:', err);
-        throw err;
+    } catch (error) {
+        console.error('Error updating holdings:', error);
+        throw error;
     } finally {
         if (conn) {
             try {
@@ -241,13 +263,11 @@ async function updateHoldings(symbol) {
 /**
  * Get reference prices for a symbol
  * @param {string} symbol - Cryptocurrency symbol
- * @returns {Object} Reference prices object
+ * @returns {Promise<Object>} Reference prices object
  */
 async function getReferencePrice(symbol) {
-    let conn;
     try {
-        conn = await pool.getConnection();
-        const rows = await conn.query(
+        const rows = await executeQuery(
             'SELECT * FROM reference_prices WHERE symbol = ?',
             [symbol]
         );
@@ -260,8 +280,8 @@ async function getReferencePrice(symbol) {
             next_buy_threshold: 0,
             next_sell_threshold: 0
         };
-    } catch (err) {
-        console.error('Error getting reference prices:', err);
+    } catch (error) {
+        console.error('Error getting reference prices:', error);
         return {
             symbol,
             initial_purchase_price: 0,
@@ -269,14 +289,6 @@ async function getReferencePrice(symbol) {
             next_buy_threshold: 0,
             next_sell_threshold: 0
         };
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
     }
 }
 
@@ -284,7 +296,7 @@ async function getReferencePrice(symbol) {
  * Update reference prices for a symbol
  * @param {string} symbol - Cryptocurrency symbol
  * @param {number} currentPrice - Current price
- * @returns {Object} Updated reference prices
+ * @returns {Promise<Object>} Updated reference prices
  */
 async function updateReferencePrice(symbol, currentPrice) {
     let conn;
@@ -337,9 +349,9 @@ async function updateReferencePrice(symbol, currentPrice) {
             next_buy_threshold: nextBuyPrice,
             next_sell_threshold: nextSellPrice
         };
-    } catch (err) {
-        console.error('Error updating reference prices:', err);
-        throw err;
+    } catch (error) {
+        console.error('Error updating reference prices:', error);
+        throw error;
     } finally {
         if (conn) {
             try {
@@ -353,56 +365,30 @@ async function updateReferencePrice(symbol, currentPrice) {
 
 /**
  * Get account balances from database
- * @returns {Array} Array of balance objects
+ * @returns {Promise<Array>} Array of balance objects
  */
 async function getAccountBalance() {
-    let conn;
     try {
-        conn = await pool.getConnection();
-        
         // Get all holdings
-        const holdings = await conn.query('SELECT * FROM holdings');
-        
-        // Get current prices for USDT value calculation
-        // This is somewhat of a placeholder - in a real environment
-        // you'd have a prices table or fetch from an API
-        
+        const holdings = await executeQuery('SELECT * FROM holdings');
         return holdings;
-    } catch (err) {
-        console.error('Error getting account balance:', err);
+    } catch (error) {
+        console.error('Error getting account balance:', error);
         return [];
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
     }
 }
 
 /**
  * Get all configuration data
- * @returns {Array} Array of configuration objects
+ * @returns {Promise<Array>} Array of configuration objects
  */
 async function getConfiguration() {
-    let conn;
     try {
-        conn = await pool.getConnection();
-        const rows = await conn.query('SELECT * FROM configuration');
+        const rows = await executeQuery('SELECT * FROM configuration');
         return rows;
-    } catch (err) {
-        console.error('Error getting configuration:', err);
+    } catch (error) {
+        console.error('Error getting configuration:', error);
         return [];
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
     }
 }
 
@@ -410,15 +396,12 @@ async function getConfiguration() {
  * Update configuration for a symbol
  * @param {string} symbol - Cryptocurrency symbol
  * @param {Object} config - Configuration object
- * @returns {boolean} Success status
+ * @returns {Promise<boolean>} Success status
  */
 async function updateConfiguration(symbol, config) {
-    let conn;
     try {
-        conn = await pool.getConnection();
-        
         // Update configuration
-        await conn.query(
+        await executeQuery(
             `UPDATE configuration SET 
              investment_preset = ?,
              buy_threshold = ?,
@@ -442,24 +425,16 @@ async function updateConfiguration(symbol, config) {
         
         console.log(`Updated configuration for ${symbol}`);
         return true;
-    } catch (err) {
-        console.error('Error updating configuration:', err);
+    } catch (error) {
+        console.error('Error updating configuration:', error);
         return false;
-    } finally {
-        if (conn) {
-            try {
-                await conn.release();
-            } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
-            }
-        }
     }
 }
 
 /**
  * Get batch data for multiple symbols
  * @param {Array} symbols - Array of cryptocurrency symbols
- * @returns {Object} Object with data for each symbol
+ * @returns {Promise<Object>} Object with data for each symbol
  */
 async function getBatchData(symbols) {
     if (!symbols || !symbols.length) {
@@ -505,15 +480,15 @@ async function getBatchData(symbols) {
                         next_sell_threshold: 0
                     }
                 };
-            } catch (err) {
-                console.error(`Error processing batch data for ${symbol}:`, err);
-                results[symbol] = { error: err.message };
+            } catch (error) {
+                console.error(`Error processing batch data for ${symbol}:`, error);
+                results[symbol] = { error: error.message };
             }
         }
         
         return results;
-    } catch (err) {
-        console.error('Error in batch data processing:', err);
+    } catch (error) {
+        console.error('Error in batch data processing:', error);
         return {};
     } finally {
         if (conn) {
@@ -528,7 +503,7 @@ async function getBatchData(symbols) {
 
 /**
  * Get database health statistics
- * @returns {Object} Database health statistics
+ * @returns {Promise<Object>} Database health statistics
  */
 async function getHealthStats() {
     let conn;
@@ -538,33 +513,23 @@ async function getHealthStats() {
         // Get basic health check
         const healthCheck = await conn.query('SELECT 1 as health_check');
         
-        // Get connection statistics if possible
+        // Get connection statistics
         const connectionStats = {
-            activeConnections: typeof pool.activeConnections === 'function' ? pool.activeConnections() : 'unknown',
-            totalConnections: typeof pool.totalConnections === 'function' ? pool.totalConnections() : 'unknown',
-            connectionLimit: pool.config ? pool.config.connectionLimit : 'unknown'
+            activeConnections: pool.activeConnections(),
+            totalConnections: pool.totalConnections(),
+            connectionLimit: pool.config.connectionLimit
         };
-        
-        // Get table sizes and statistics if needed
-        // This might be heavy, so use with caution
-        /*
-        const tableSizes = await conn.query(`
-            SELECT table_name, table_rows, data_length, index_length
-            FROM information_schema.tables
-            WHERE table_schema = ?
-        `, [process.env.DB_NAME]);
-        */
         
         return {
             healthy: healthCheck && healthCheck.length > 0,
             lastChecked: new Date().toISOString(),
             connectionStats
         };
-    } catch (err) {
-        console.error('Error getting database health stats:', err);
+    } catch (error) {
+        console.error('Error getting database health stats:', error);
         return {
             healthy: false,
-            error: err.message,
+            error: error.message,
             lastChecked: new Date().toISOString()
         };
     } finally {
@@ -582,6 +547,7 @@ async function getHealthStats() {
 module.exports = {
     pool,
     testConnection,
+    executeQuery,
     getTransactions,
     storeTransaction,
     getHoldings,
