@@ -11,11 +11,11 @@ import { config } from 'dotenv';
 import { resolve } from 'path';
 
 // Import our custom modules
-import { getTransactions, getHoldings, getReferencePrice, getBatchData, testConnection } from './js/dbconns';
-import { getWebSocketStatus, getTickerPrice, getAccountInfo, initializeWebSockets, testConnection as _testConnection, closeAllConnections } from './js/binance';
-import { testConnection as __testConnection } from './js/telegram';
-import { getTradingStatus, processFirstPurchase, processSellAll, initialize } from './js/tradings';
-import { getHealthStatus, initialize as _initialize } from './js/health';
+import { getTransactions, getHoldings, getReferencePrice, getBatchData, testConnection } from './js/dbconns.js';
+import { getWebSocketStatus, getTickerPrice, getAccountInfo, initializeWebSockets, testConnection as _testConnection, closeAllConnections } from './js/binance.js';
+import { testConnection as __testConnection } from './js/telegram.js';
+import { getTradingStatus, processFirstPurchase, processSellAll, initialize } from './js/tradings.js';
+import { getHealthStatus, initialize as _initialize } from './js/health.js';
 
 // Load environment variables
 config({ path: resolve(process.cwd(), '.env') });

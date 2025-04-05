@@ -3,9 +3,9 @@
 // Handles trading decisions, execution and bridges between Binance API and database
 
 // Import required modules
-import { getTickerPrice, calculateQuantityFromUsdt } from './binance';
+import { getTickerPrice, calculateQuantityFromUsdt } from './binance.js';
 import { getConfiguration, getReferencePrice, getHoldings, storeTransaction, updateHoldings, updateReferencePrice, getTransactions, updateConfiguration } from './dbconns';
-import { sendSystemAlert, sendTradeNotification } from './telegram';
+import { sendSystemAlert, sendTradeNotification } from './telegram.js';
 
 // Configuration for trading rules
 const TRADING_CONFIG = {
