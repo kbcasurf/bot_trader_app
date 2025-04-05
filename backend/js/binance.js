@@ -1,7 +1,7 @@
 import { get } from 'axios';
 import { createHmac } from 'crypto';
 import { config } from 'dotenv';
-import WebSocket, { OPEN, CONNECTING } from 'ws';
+import WebSocket, { OPEN } from 'ws';
 
 // Load environment variables
 config({ path: '/app/.env' });
