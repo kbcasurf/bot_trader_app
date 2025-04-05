@@ -1,10 +1,10 @@
-import { get } from 'axios';
-import { createHmac } from 'crypto';
-import { config } from 'dotenv';
-import WebSocket from 'ws';
+const axios = require('axios');
+const crypto = require('crypto');
+const dotenv = require('dotenv');
+const WebSocket = require('ws');
 
 // Load environment variables
-config({ path: '/app/.env' });
+dotenv.config({ path: '/app/.env' });
 
 // Binance API credentials
 const API_KEY = process.env.BINANCE_API_KEY;

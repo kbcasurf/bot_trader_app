@@ -3,11 +3,10 @@
 // Handles all database operations and connections
 
 // Import required modules
-import { createPool } from 'mariadb';
-import { config } from 'dotenv';
+const mariadb = require('mariadb');
 
 // Load environment variables
-config({ path: '/app/.env' });
+dotenv.config({ path: '/app/.env' });
 
 // Create connection pool with optimal settings
 const pool = createPool({
