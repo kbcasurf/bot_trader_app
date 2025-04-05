@@ -16,15 +16,7 @@ const DB_CONFIG = {
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    connectionLimit: 10,              // Reduced from 20
-    acquireTimeout: 90000,            // Increased from 60000
-    connectTimeout: 90000,            // Increased from 60000
-    socketTimeout: 180000,            // Increased from 120000
-    idleTimeout: 180000,              // Increased from 120000
-    waitForConnections: true,
-    queueLimit: 0,
-    multipleStatements: false,
-    debug: false
+    connectionLimit: 8
 };
 
 // Create connection pool with optimal settings
@@ -517,9 +509,9 @@ async function getHealthStats() {
         
         // Get connection statistics - Fixed to avoid the undefined error
         const connectionStats = {
-            activeConnections: pool ? pool.activeConnections() : 0,
-            totalConnections: pool ? pool.totalConnections() : 0,
-            connectionLimit: pool && pool.config ? pool.config.connectionLimit : 20
+            activeConnections: pool ? (typeof pool.activeConnections === 'function' ? pool.activeConnections() : 0) : 0,
+            totalConnections: pool ? (typeof pool.totalConnections === 'function' ? pool.totalConnections() : 0) : 0,
+            connectionLimit: pool && pool.config ? pool.config.connectionLimit : DB_CONFIG.connectionLimit
         };
         
         return {
@@ -556,10 +548,10 @@ async function refreshConnectionPool() {
             return;
         }
         
-        // Test connection
+        // Test connection - Use a shorter timeout for the test
         let conn;
         try {
-            conn = await pool.getConnection();
+            conn = await pool.getConnection({timeout: 5000});
             await conn.query('SELECT 1 as health_check');
             console.log('Connection pool health check passed');
             await conn.release();
@@ -582,7 +574,7 @@ async function refreshConnectionPool() {
 }
 
 // Call this function every minute
-setInterval(refreshConnectionPool, 60000); // Check and fix pool every minute
+setInterval(refreshConnectionPool, 30000); // Check and fix pool every minute
 
 
 // Export all functions
