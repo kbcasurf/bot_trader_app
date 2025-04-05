@@ -248,7 +248,6 @@ function formatQuantity(quantity, symbolInfo) {
 }
 
 
-
 // Start price polling
 function startPolling(symbols, io) {
     // Don't start if already polling
@@ -679,8 +678,6 @@ async function getAccountInfo() {
     }
 }
 
-
-
 module.exports = {
     initializeWebSockets,
     closeAllConnections,
@@ -689,7 +686,5 @@ module.exports = {
     getAccountInfo,
     getTickerPrice,
     getMultipleTickers,
-    calculateQuantityFromUsdt,
-    subscribeToTickerStream,
-    unsubscribeFromTickerStream
+    calculateQuantityFromUsdt
 };
