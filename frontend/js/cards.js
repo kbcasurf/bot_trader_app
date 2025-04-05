@@ -2,19 +2,19 @@
 // Cryptocurrency Card Module
 // Handles rendering and state management for cryptocurrency cards
 
-// Import socket connection if needed
-const Connections = require('./conns.js');
+// Import socket connection from connections module
+import * as Connections from './conns.js';
 
 // Configuration for cards
 const CARD_CONFIG = {
     // Supported cryptocurrencies
     SUPPORTED_CRYPTOS: [
-        { symbol: 'btc', name: 'Bitcoin', image: 'images/btc.svg' },
-        { symbol: 'sol', name: 'Solana', image: 'images/sol.svg' },
-        { symbol: 'xrp', name: 'Ripple', image: 'images/xrp.svg' },
-        { symbol: 'pendle', name: 'Pendle', image: 'images/pendle.svg' },
-        { symbol: 'doge', name: 'Dogecoin', image: 'images/doge.svg' },
-        { symbol: 'near', name: 'Near', image: 'images/near.svg' }
+        { symbol: 'btc', name: 'Bitcoin', image: '/images/btc.svg' },
+        { symbol: 'sol', name: 'Solana', image: '/images/sol.svg' },
+        { symbol: 'xrp', name: 'Ripple', image: '/images/xrp.svg' },
+        { symbol: 'doge', name: 'Dogecoin', image: '/images/doge.svg' },
+        { symbol: 'near', name: 'Near', image: '/images/near.svg' },
+        { symbol: 'pendle', name: 'Pendle', image: '/images/pendle.svg' }
     ],
     
     // Investment presets
@@ -45,8 +45,12 @@ const cardState = {
     elements: {}         // References to DOM elements for each card
 };
 
-// Initialize card module
+/**
+ * Initialize card module
+ */
 function initialize() {
+    console.log('Initializing card module...');
+    
     // Initialize state for all supported cryptocurrencies
     CARD_CONFIG.SUPPORTED_CRYPTOS.forEach(crypto => {
         const symbol = crypto.symbol;
@@ -65,6 +69,7 @@ function initialize() {
     registerConnectionEvents();
     
     console.log('Card module initialized');
+    return true;
 }
 
 /**
@@ -134,7 +139,7 @@ function createCard(crypto) {
             </div>
             <div class="threshold sell">
                 <span class="label">Sell:</span>
-                <span class="value" id="${symbol}-sell-price">$0.00</span>
+                <span class="value" id="${symbol}-next-sell-price">$0.00</span>
             </div>
         </div>
         <div class="profit-loss-container">
@@ -165,7 +170,7 @@ function createCard(crypto) {
         firstPurchaseBtn: card.querySelector(`#${symbol}-first-purchase`),
         sellBtn: card.querySelector(`#${symbol}-sell-all`),
         nextBuyEl: card.querySelector(`#${symbol}-next-buy-price`),
-        nextSellEl: card.querySelector(`#${symbol}-sell-price`),
+        nextSellEl: card.querySelector(`#${symbol}-next-sell-price`),
         profitIndicator: card.querySelector(`#${symbol}-profit-indicator`),
         profitText: card.querySelector(`#${symbol}-profit-text`),
         historyList: card.querySelector(`#${symbol}-history`),
@@ -216,8 +221,11 @@ function setupCardEventHandlers(symbol) {
             // Set processing state
             setProcessingState(symbol, true);
             
-            // Execute buy
-            Connections.executeBuyOrder(symbol, amount);
+            // Execute buy by sending event to backend
+            Connections.emit('first-purchase', {
+                symbol: symbol.toUpperCase() + 'USDT',
+                investment: amount
+            });
         }
     });
     
@@ -239,8 +247,10 @@ function setupCardEventHandlers(symbol) {
             // Set processing state
             setProcessingState(symbol, true, 'sell');
             
-            // Execute sell
-            Connections.executeSellOrder(symbol);
+            // Execute sell by sending event to backend
+            Connections.emit('sell-all', {
+                symbol: symbol.toUpperCase() + 'USDT'
+            });
         }
     });
 }
@@ -253,6 +263,7 @@ function setupCardEventHandlers(symbol) {
  */
 function setProcessingState(symbol, isProcessing, type = 'buy') {
     const elements = cardState.elements[symbol];
+    if (!elements) return;
     
     // Update state
     cardState.isProcessing[symbol] = isProcessing;
@@ -285,7 +296,9 @@ function handlePriceUpdate(data) {
         return;
     }
     
-    const symbol = data.symbol.toLowerCase();
+    const fullSymbol = data.symbol.toUpperCase();
+    // Extract base symbol (remove USDT)
+    const symbol = fullSymbol.replace('USDT', '').toLowerCase();
     const price = parseFloat(data.price);
     
     // Skip if not a supported crypto
@@ -363,7 +376,8 @@ function handleTransactionUpdate(data) {
         return;
     }
     
-    const symbol = data.symbol.toLowerCase();
+    // Extract base symbol (remove USDT)
+    const symbol = data.symbol.toLowerCase().replace('usdt', '');
     
     // Skip if not a supported crypto
     if (!cardState.holdings.hasOwnProperty(symbol)) {
@@ -377,7 +391,8 @@ function handleTransactionUpdate(data) {
     if (data.refPrices) {
         cardState.thresholds[symbol] = {
             nextBuy: parseFloat(data.refPrices.next_buy_threshold) || 0,
-            nextSell: parseFloat(data.refPrices.next_sell_threshold) || 0
+            nextSell: parseFloat(data.refPrices.next_sell_threshold) || 0,
+            initialPrice: parseFloat(data.refPrices.initial_purchase_price) || 0
         };
         
         // Update threshold display
@@ -406,8 +421,8 @@ function updateTransactionHistory(symbol, transactions) {
         return;
     }
     
-    // Add transactions to list
-    transactions.forEach(tx => {
+    // Add transactions to list (most recent first)
+    transactions.slice(0, 10).forEach(tx => {
         const item = document.createElement('li');
         item.className = tx.type.toLowerCase();
         
@@ -448,7 +463,8 @@ function handleHoldingsUpdate(data) {
         return;
     }
     
-    const symbol = data.symbol.toLowerCase();
+    // Extract base symbol (remove USDT)
+    const symbol = data.symbol.toLowerCase().replace('usdt', '');
     
     // Skip if not a supported crypto
     if (!cardState.holdings.hasOwnProperty(symbol)) {
@@ -469,7 +485,8 @@ function handleHoldingsUpdate(data) {
     if (data.nextBuyThreshold !== undefined && data.nextSellThreshold !== undefined) {
         cardState.thresholds[symbol] = {
             nextBuy: parseFloat(data.nextBuyThreshold) || 0,
-            nextSell: parseFloat(data.nextSellThreshold) || 0
+            nextSell: parseFloat(data.nextSellThreshold) || 0,
+            initialPrice: parseFloat(data.initialPrice) || cardState.thresholds[symbol]?.initialPrice || 0
         };
         
         // Update threshold display
@@ -508,10 +525,10 @@ function updateHoldingsDisplay(symbol) {
 function updateThresholdDisplay(symbol) {
     const nextBuyEl = cardState.elements[symbol]?.nextBuyEl;
     const nextSellEl = cardState.elements[symbol]?.nextSellEl;
-    const thresholds = cardState.thresholds[symbol];
-    const currentPrice = cardState.prices[symbol];
-    
     if (!nextBuyEl || !nextSellEl) return;
+    
+    const thresholds = cardState.thresholds[symbol] || { nextBuy: 0, nextSell: 0 };
+    const currentPrice = cardState.prices[symbol] || 0;
     
     // Update buy threshold
     if (thresholds.nextBuy > 0) {
@@ -523,7 +540,7 @@ function updateThresholdDisplay(symbol) {
         nextBuyEl.textContent = `$${formattedBuy}`;
         
         // Add visual indicator if price is close to threshold
-        if (currentPrice <= thresholds.nextBuy * 1.01) {
+        if (currentPrice > 0 && currentPrice <= thresholds.nextBuy * 1.01) {
             nextBuyEl.classList.add('imminent');
         } else {
             nextBuyEl.classList.remove('imminent');
@@ -543,7 +560,7 @@ function updateThresholdDisplay(symbol) {
         nextSellEl.textContent = `$${formattedSell}`;
         
         // Add visual indicator if price is close to threshold
-        if (currentPrice >= thresholds.nextSell * 0.99) {
+        if (currentPrice > 0 && currentPrice >= thresholds.nextSell * 0.99) {
             nextSellEl.classList.add('imminent');
         } else {
             nextSellEl.classList.remove('imminent');
@@ -567,10 +584,10 @@ function calculateAndUpdateProfitLoss(symbol) {
     }
     
     // Get current price
-    const currentPrice = cardState.prices[symbol];
+    const currentPrice = cardState.prices[symbol] || 0;
     
     // If thresholds include initial price, use that
-    const initialPrice = cardState.thresholds[symbol]?.initialPrice;
+    const initialPrice = cardState.thresholds[symbol]?.initialPrice || 0;
     
     // If we have valid data, calculate profit/loss
     if (currentPrice > 0 && initialPrice > 0) {
@@ -633,13 +650,18 @@ function handleBatchDataUpdate(response) {
     }
     
     const batchData = response.data;
+    if (!batchData) return;
     
     // Process each symbol's data
     Object.entries(batchData).forEach(([symbol, data]) => {
+        // Extract base symbol by removing USDT
         const baseSymbol = symbol.replace('USDT', '').toLowerCase();
         
+        // Skip if not supported
+        if (!cardState.prices.hasOwnProperty(baseSymbol)) return;
+        
         // Process transactions if they exist
-        if (data.transactions) {
+        if (data.transactions && Array.isArray(data.transactions)) {
             updateTransactionHistory(baseSymbol, data.transactions);
         }
         
@@ -664,8 +686,19 @@ function handleBatchDataUpdate(response) {
             calculateAndUpdateProfitLoss(baseSymbol);
         }
         
-        // Reset processing state
-        setProcessingState(baseSymbol, false);
+        // If current price is included, update it
+        if (data.currentPrice) {
+            const currentPrice = parseFloat(data.currentPrice);
+            const previousPrice = cardState.prices[baseSymbol] || 0;
+            
+            cardState.prices[baseSymbol] = currentPrice;
+            updateCardPrice(baseSymbol, currentPrice, previousPrice);
+        }
+    });
+    
+    // Reset all processing states
+    Object.keys(cardState.isProcessing).forEach(symbol => {
+        setProcessingState(symbol, false);
     });
 }
 
@@ -674,9 +707,11 @@ function handleBatchDataUpdate(response) {
  * @param {Object} result - First purchase result
  */
 function handleFirstPurchaseResult(result) {
+    if (!result) return;
+    
     // Extract symbol if available, otherwise reset all
-    const symbolToReset = result?.symbol ? 
-        result.symbol.replace('USDT', '').toLowerCase() : null;
+    const fullSymbol = result.symbol || '';
+    const symbolToReset = fullSymbol.replace('USDT', '').toLowerCase();
     
     if (symbolToReset && cardState.isProcessing.hasOwnProperty(symbolToReset)) {
         // Reset processing state for specific symbol
@@ -701,9 +736,11 @@ function handleFirstPurchaseResult(result) {
  * @param {Object} result - Sell all result
  */
 function handleSellAllResult(result) {
+    if (!result) return;
+    
     // Extract symbol if available, otherwise reset all
-    const symbolToReset = result?.symbol ? 
-        result.symbol.replace('USDT', '').toLowerCase() : null;
+    const fullSymbol = result.symbol || '';
+    const symbolToReset = fullSymbol.replace('USDT', '').toLowerCase();
     
     if (symbolToReset && cardState.isProcessing.hasOwnProperty(symbolToReset)) {
         // Reset processing state for specific symbol
@@ -739,10 +776,10 @@ function updateAllCards() {
         const symbol = crypto.symbol;
         
         // Update displays
-        updateCardPrice(symbol, cardState.prices[symbol], 0);
+        updateCardPrice(symbol, cardState.prices[symbol] || 0, 0);
         updateHoldingsDisplay(symbol);
         updateThresholdDisplay(symbol);
-        updateProfitLossDisplay(symbol, cardState.profitLoss[symbol]);
+        updateProfitLossDisplay(symbol, cardState.profitLoss[symbol] || 0);
     });
 }
 
@@ -752,7 +789,7 @@ function updateAllCards() {
  * @returns {number} Investment amount
  */
 function getInvestmentAmount(symbol) {
-    return cardState.investment[symbol];
+    return cardState.investment[symbol] || CARD_CONFIG.PRESETS[CARD_CONFIG.DEFAULT_PRESET];
 }
 
 /**
@@ -787,8 +824,8 @@ function setInvestmentAmount(symbol, amount) {
     }
 }
 
-// Export public API using CommonJS syntax
-module.exports = {
+// Export all functions as ES module exports
+export {
     initialize,
     createCard,
     createAllCards,
