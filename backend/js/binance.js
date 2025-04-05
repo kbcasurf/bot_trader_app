@@ -12,14 +12,14 @@ const API_KEY = process.env.BINANCE_API_KEY;
 const API_SECRET = process.env.BINANCE_API_SECRET;
 
 // Binance API base URLs
-const BASE_URL = process.env.BINANCE_API_URL;
-const WS_BASE_URL = process.env.BINANCE_WEBSOCKET_URL;
+const BASE_URL = process.env.BINANCE_API_URL || 'https://testnet.binance.vision';
+const WS_BASE_URL = process.env.BINANCE_WEBSOCKET_URL || 'wss://testnet.binance.vision/ws';
 
 // Constants
 const MAX_RECONNECT_ATTEMPTS = 5;
 const INITIAL_RECONNECT_DELAY = 5000;
 const MAX_RECONNECT_DELAY = 60000;
-const WS_CONNECTION_LIFETIME = 23 * 60 * 60 * 1000; // 23 hours (1 hour less than Binance's 24h limit)
+const WS_CONNECTION_LIFETIME = 23 * 60 * 60 * 1000; // 23 hours
 const HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
 const HEALTH_CHECK_TIMEOUT = 5000; // 5 seconds
 const POLLING_INTERVAL = 10000; // 10 seconds
@@ -44,7 +44,11 @@ let pollingState = {
     intervalId: null
 };
 
-// Initialize WebSocket connections for the configured symbols
+/**
+ * Initialize WebSocket connections for the configured symbols
+ * @param {Object} io - Socket.io instance
+ * @returns {Object} WebSocket instance
+ */
 function initializeWebSockets(io) {
     // List of symbols to track
     const symbols = ['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'NEARUSDT', 'PENDLEUSDT'];
@@ -59,7 +63,10 @@ function initializeWebSockets(io) {
     return connectToWebSocket(symbols, io);
 }
 
-// Close all active WebSocket connections
+/**
+ * Close all active WebSocket connections
+ * @returns {Promise<boolean>} Success status
+ */
 async function closeAllConnections() {
     console.log('Closing all WebSocket connections');
     
@@ -78,7 +85,10 @@ async function closeAllConnections() {
     return true;
 }
 
-// Get WebSocket connection status
+/**
+ * Get WebSocket connection status
+ * @returns {Object} Status information
+ */
 function getWebSocketStatus() {
     // Create a status report
     const status = {
@@ -104,7 +114,10 @@ function getWebSocketStatus() {
     return status;
 }
 
-// Test Binance API connection
+/**
+ * Test Binance API connection
+ * @returns {Promise<boolean>} Connection status
+ */
 async function testConnection() {
     try {
         const response = await axios.get(`${BASE_URL}/api/v3/ping`);
@@ -115,7 +128,11 @@ async function testConnection() {
     }
 }
 
-// Get current ticker price for a symbol
+/**
+ * Get current ticker price for a symbol
+ * @param {string} symbol - Trading pair symbol
+ * @returns {Promise<Object>} Price data
+ */
 async function getTickerPrice(symbol) {
     try {
         const response = await axios.get(`${BASE_URL}/api/v3/ticker/price`, {
@@ -129,7 +146,11 @@ async function getTickerPrice(symbol) {
     }
 }
 
-// Get ticker price for multiple symbols
+/**
+ * Get ticker price for multiple symbols
+ * @param {Array} symbols - Array of trading pair symbols
+ * @returns {Promise<Array>} Array of ticker data
+ */
 async function getMultipleTickers(symbols = []) {
     try {
         // If no symbols provided, get all tickers
@@ -149,7 +170,12 @@ async function getMultipleTickers(symbols = []) {
     }
 }
 
-// Calculate order quantity based on USDT amount
+/**
+ * Calculate order quantity based on USDT amount
+ * @param {string} symbol - Trading pair symbol
+ * @param {number} usdtAmount - Amount in USDT
+ * @returns {Promise<Object>} Order quantity information
+ */
 async function calculateQuantityFromUsdt(symbol, usdtAmount) {
     try {
         // Get current price
@@ -180,7 +206,11 @@ async function calculateQuantityFromUsdt(symbol, usdtAmount) {
     }
 }
 
-// Get exchange info for a symbol
+/**
+ * Get exchange info for a symbol
+ * @param {string} symbol - Trading pair symbol
+ * @returns {Promise<Object>} Exchange information
+ */
 async function getExchangeInfo(symbol) {
     try {
         const response = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`, {
@@ -200,7 +230,12 @@ async function getExchangeInfo(symbol) {
     }
 }
 
-// Format quantity using LOT_SIZE filter
+/**
+ * Format quantity using LOT_SIZE filter
+ * @param {number} quantity - Raw quantity
+ * @param {Object} symbolInfo - Symbol exchange info
+ * @returns {string} Formatted quantity
+ */
 function formatQuantity(quantity, symbolInfo) {
     try {
         // Find the LOT_SIZE filter
@@ -247,8 +282,69 @@ function formatQuantity(quantity, symbolInfo) {
     }
 }
 
+/**
+ * Create a market buy order
+ * @param {string} symbol - Trading pair symbol
+ * @param {number} quantity - Quantity to buy
+ * @returns {Promise<Object>} Order result
+ */
+async function createMarketBuyOrder(symbol, quantity) {
+    try {
+        const timestamp = Date.now();
+        const queryString = `symbol=${symbol}&side=BUY&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
+        const signature = generateSignature(queryString);
+        
+        const response = await axios.post(
+            `${BASE_URL}/api/v3/order?${queryString}&signature=${signature}`,
+            null,
+            {
+                headers: {
+                    'X-MBX-APIKEY': API_KEY
+                }
+            }
+        );
+        
+        return response.data;
+    } catch (error) {
+        console.error('Failed to create market buy order:', error.response ? error.response.data : error.message);
+        throw error;
+    }
+}
 
-// Start price polling
+/**
+ * Create a market sell order
+ * @param {string} symbol - Trading pair symbol
+ * @param {number} quantity - Quantity to sell
+ * @returns {Promise<Object>} Order result
+ */
+async function createMarketSellOrder(symbol, quantity) {
+    try {
+        const timestamp = Date.now();
+        const queryString = `symbol=${symbol}&side=SELL&type=MARKET&quantity=${quantity}&timestamp=${timestamp}`;
+        const signature = generateSignature(queryString);
+        
+        const response = await axios.post(
+            `${BASE_URL}/api/v3/order?${queryString}&signature=${signature}`,
+            null,
+            {
+                headers: {
+                    'X-MBX-APIKEY': API_KEY
+                }
+            }
+        );
+        
+        return response.data;
+    } catch (error) {
+        console.error('Failed to create market sell order:', error.response ? error.response.data : error.message);
+        throw error;
+    }
+}
+
+/**
+ * Start price polling
+ * @param {Array} symbols - Array of trading pair symbols
+ * @param {Object} io - Socket.io instance
+ */
 function startPolling(symbols, io) {
     // Don't start if already polling
     if (pollingState.isActive) {
@@ -298,7 +394,9 @@ function startPolling(symbols, io) {
     });
 }
 
-// Stop polling
+/**
+ * Stop polling
+ */
 function stopPolling() {
     if (!pollingState.isActive) {
         return;
@@ -315,7 +413,10 @@ function stopPolling() {
     pollingState.isActive = false;
 }
 
-// Clean up a WebSocket instance
+/**
+ * Clean up a WebSocket instance
+ * @param {Object} ws - WebSocket instance
+ */
 function cleanupWebSocket(ws) {
     if (!ws) return;
     
@@ -347,7 +448,11 @@ function cleanupWebSocket(ws) {
     }
 }
 
-// Schedule connection renewal
+/**
+ * Schedule connection renewal
+ * @param {Array} symbols - Array of trading pair symbols
+ * @param {Object} io - Socket.io instance
+ */
 function scheduleConnectionRenewal(symbols, io) {
     // Clear any existing renewal timeout
     if (wsState.renewalTimeout) {
@@ -382,7 +487,12 @@ function scheduleConnectionRenewal(symbols, io) {
     console.log(`Scheduled connection renewal in ${WS_CONNECTION_LIFETIME / 1000 / 60 / 60} hours`);
 }
 
-// Set up health check for WebSocket connection
+/**
+ * Set up health check for WebSocket connection
+ * @param {Object} ws - WebSocket instance
+ * @param {Array} symbols - Array of trading pair symbols
+ * @param {Object} io - Socket.io instance
+ */
 function setupHealthCheck(ws, symbols, io) {
     // Clear any existing interval
     if (wsState.healthCheckInterval) {
@@ -433,7 +543,10 @@ function setupHealthCheck(ws, symbols, io) {
     }, HEALTH_CHECK_INTERVAL);
 }
 
-// Implement exponential backoff for reconnection
+/**
+ * Implement exponential backoff for reconnection
+ * @returns {number} Delay in milliseconds
+ */
 function getReconnectDelay() {
     return Math.min(
         INITIAL_RECONNECT_DELAY * Math.pow(1.5, wsState.reconnectAttempt),
@@ -441,7 +554,11 @@ function getReconnectDelay() {
     );
 }
 
-// Handle WebSocket reconnection
+/**
+ * Handle WebSocket reconnection
+ * @param {Array} symbols - Array of trading pair symbols
+ * @param {Object} io - Socket.io instance
+ */
 function handleReconnect(symbols, io) {
     // Don't attempt to reconnect if already in process
     if (wsState.isReconnecting) {
@@ -492,7 +609,12 @@ function handleReconnect(symbols, io) {
     }, delay);
 }
 
-// Main function to connect to Binance WebSocket
+/**
+ * Main function to connect to Binance WebSocket
+ * @param {Array} symbols - Array of trading pair symbols
+ * @param {Object} io - Socket.io instance
+ * @returns {Object} WebSocket instance
+ */
 function connectToWebSocket(symbols, io) {
     // Clean up existing connection if present
     if (wsInstance) {
@@ -567,27 +689,8 @@ function connectToWebSocket(symbols, io) {
                 return;
             }
             
-            // For ticker data (@ticker stream)
-            if (parsedData.e === '24hrTicker') {
-                // Extract symbol and price
-                const symbol = parsedData.s;
-                const price = parsedData.c;
-                
-                // Emit price update to clients
-                io.emit('price-update', {
-                    symbol,
-                    price,
-                    data: parsedData,
-                    source: 'websocket'
-                });
-                
-                // Log only occasionally to avoid flooding
-                if (Math.random() < 0.1) {
-                    // console.log(`Ticker update for ${symbol}: ${price}`);
-                }
-            }
             // For bookTicker data
-            else if (parsedData.s && (parsedData.b || parsedData.a)) {
+            if (parsedData.s && (parsedData.b || parsedData.a)) {
                 // Extract symbol and price (using best ask price)
                 const symbol = parsedData.s;
                 const price = parsedData.a || parsedData.b; // Prefer ask price, fall back to bid
@@ -648,14 +751,21 @@ function connectToWebSocket(symbols, io) {
     return ws;
 }
 
-// Generate signature for signed endpoints
+/**
+ * Generate signature for signed endpoints
+ * @param {string} queryString - Query string to sign
+ * @returns {string} Signature
+ */
 function generateSignature(queryString) {
     return crypto.createHmac('sha256', API_SECRET)
         .update(queryString)
         .digest('hex');
 }
 
-// Get account information
+/**
+ * Get account information
+ * @returns {Promise<Object>} Account information
+ */
 async function getAccountInfo() {
     try {
         const timestamp = Date.now();
@@ -678,6 +788,7 @@ async function getAccountInfo() {
     }
 }
 
+// Export all functions
 module.exports = {
     initializeWebSockets,
     closeAllConnections,
@@ -686,5 +797,7 @@ module.exports = {
     getAccountInfo,
     getTickerPrice,
     getMultipleTickers,
-    calculateQuantityFromUsdt
+    calculateQuantityFromUsdt,
+    createMarketBuyOrder,
+    createMarketSellOrder
 };

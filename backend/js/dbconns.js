@@ -7,22 +7,28 @@ const mariadb = require('mariadb');
 const dotenv = require('dotenv');
 
 // Load environment variables
-dotenv.config({ path: '/app/.env' });
+dotenv.config();
 
 // Database configuration
 const DB_CONFIG = {
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT, 10),
-    user: process.env.DB_USER,
+    host: process.env.DB_HOST || 'database',
+    port: parseInt(process.env.DB_PORT || '3306', 10),
+    user: process.env.DB_USER || 'trading_bot_user',
     password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    connectionLimit: 8
+    database: process.env.DB_NAME || 'crypto_trading_bot',
+    connectionLimit: 10,
+    idleTimeout: 60000, // Idle timeout - 60 seconds
+    acquireTimeout: 30000, // Acquire timeout - 30 seconds
+    connectTimeout: 20000, // Connect timeout - 20 seconds
+    waitForConnections: true,
+    queueLimit: 0 // No limit on queue size
 };
 
 // Create connection pool with optimal settings
 let pool = null;
 
 try {
+    // Create connection pool
     pool = mariadb.createPool(DB_CONFIG);
 
     // Log pool creation
@@ -43,11 +49,11 @@ try {
     });
 
     pool.on('acquire', () => {
-        console.log('Database connection acquired');
+        console.log('Database connection acquired from pool');
     });
 
     pool.on('release', () => {
-        console.log('Database connection released');
+        console.log('Database connection released back to pool');
     });
 } catch (error) {
     console.error('Failed to create database connection pool:', error);
@@ -65,7 +71,7 @@ async function testConnection() {
         }
         
         conn = await pool.getConnection();
-        console.log('Database connection successful');
+        console.log('Database connection test successful');
         const rows = await conn.query('SELECT 1 as test');
         return rows && rows.length > 0;
     } catch (err) {
@@ -75,8 +81,9 @@ async function testConnection() {
         if (conn) {
             try {
                 await conn.release();
+                console.log('Test connection released');
             } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
+                console.error('Error releasing test connection:', releaseError);
             }
         }
     }
@@ -120,15 +127,19 @@ async function executeQuery(query, params = []) {
  */
 async function getTransactions(symbol, limit = 30) {
     try {
-        const rows = await executeQuery(
-            'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?',
-            [symbol, limit]
-        );
+        const query = `
+            SELECT * FROM transactions 
+            WHERE symbol = ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        `;
+        
+        const rows = await executeQuery(query, [symbol, limit]);
         
         console.log(`Found ${rows.length} transactions for ${symbol}`);
         return rows;
     } catch (error) {
-        console.error('Error querying transactions:', error);
+        console.error(`Error querying transactions for ${symbol}:`, error);
         return [];
     }
 }
@@ -146,18 +157,41 @@ async function getTransactions(symbol, limit = 30) {
  */
 async function storeTransaction(transaction) {
     try {
-        await executeQuery(
-            'INSERT INTO transactions (symbol, type, price, quantity, investment, automated) VALUES (?, ?, ?, ?, ?, ?)',
-            [
-                transaction.symbol,
-                transaction.type,
-                transaction.price,
-                transaction.quantity,
-                transaction.investment,
-                transaction.automated || false
-            ]
-        );
+        // Validate input data
+        if (!transaction.symbol || !transaction.type || 
+            transaction.price === undefined || transaction.quantity === undefined) {
+            console.error('Invalid transaction data:', transaction);
+            return false;
+        }
+
+        // Insert transaction
+        const query = `
+            INSERT INTO transactions 
+            (symbol, type, price, quantity, investment, automated) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        `;
+        
+        const params = [
+            transaction.symbol,
+            transaction.type,
+            transaction.price,
+            transaction.quantity,
+            transaction.investment || 0,
+            transaction.automated || false
+        ];
+        
+        await executeQuery(query, params);
+        
         console.log(`Stored ${transaction.type} transaction for ${transaction.symbol}`);
+        
+        // Update holdings after transaction
+        await updateHoldings(transaction.symbol);
+        
+        // Update reference prices if it's a BUY transaction
+        if (transaction.type === 'BUY') {
+            await updateReferencePrice(transaction.symbol, transaction.price);
+        }
+        
         return true;
     } catch (error) {
         console.error('Error storing transaction:', error);
@@ -172,15 +206,25 @@ async function storeTransaction(transaction) {
  */
 async function getHoldings(symbol) {
     try {
-        const rows = await executeQuery(
-            'SELECT * FROM holdings WHERE symbol = ?',
-            [symbol]
-        );
+        const query = `
+            SELECT * FROM holdings 
+            WHERE symbol = ?
+        `;
         
-        return rows[0] || { symbol, quantity: 0, avg_price: 0 };
+        const rows = await executeQuery(query, [symbol]);
+        
+        return rows[0] || { 
+            symbol, 
+            quantity: 0, 
+            avg_price: 0 
+        };
     } catch (error) {
-        console.error('Error querying holdings:', error);
-        return { symbol, quantity: 0, avg_price: 0 };
+        console.error(`Error querying holdings for ${symbol}:`, error);
+        return { 
+            symbol, 
+            quantity: 0, 
+            avg_price: 0 
+        };
     }
 }
 
@@ -195,10 +239,11 @@ async function updateHoldings(symbol) {
         conn = await pool.getConnection();
         
         // Get all transactions for the symbol
-        const transactions = await conn.query(
-            'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp ASC',
-            [symbol]
-        );
+        const transactions = await conn.query(`
+            SELECT * FROM transactions 
+            WHERE symbol = ? 
+            ORDER BY timestamp ASC
+        `, [symbol]);
         
         // Calculate holdings
         let quantity = 0;
@@ -211,7 +256,7 @@ async function updateHoldings(symbol) {
                 const oldValue = quantity * avgPrice;
                 const newValue = parseFloat(tx.quantity) * parseFloat(tx.price);
                 quantity += parseFloat(tx.quantity);
-                totalInvestment += parseFloat(tx.investment);
+                totalInvestment += parseFloat(tx.investment || 0);
                 
                 if (quantity > 0) {
                     avgPrice = (oldValue + newValue) / quantity;
@@ -229,19 +274,21 @@ async function updateHoldings(symbol) {
         }
         
         // Update or insert holdings record
-        await conn.query(
-            `INSERT INTO holdings (symbol, quantity, avg_price) 
-             VALUES (?, ?, ?) 
-             ON DUPLICATE KEY UPDATE 
-             quantity = VALUES(quantity), 
-             avg_price = VALUES(avg_price)`,
-            [symbol, quantity, avgPrice]
-        );
+        await conn.query(`
+            INSERT INTO holdings 
+                (symbol, quantity, avg_price, last_updated) 
+            VALUES 
+                (?, ?, ?, NOW()) 
+            ON DUPLICATE KEY UPDATE 
+                quantity = VALUES(quantity), 
+                avg_price = VALUES(avg_price),
+                last_updated = NOW()
+        `, [symbol, quantity, avgPrice]);
         
         console.log(`Updated holdings for ${symbol}: ${quantity} at avg price ${avgPrice}`);
         return { symbol, quantity, avg_price: avgPrice };
     } catch (error) {
-        console.error('Error updating holdings:', error);
+        console.error(`Error updating holdings for ${symbol}:`, error);
         throw error;
     } finally {
         if (conn) {
@@ -261,10 +308,12 @@ async function updateHoldings(symbol) {
  */
 async function getReferencePrice(symbol) {
     try {
-        const rows = await executeQuery(
-            'SELECT * FROM reference_prices WHERE symbol = ?',
-            [symbol]
-        );
+        const query = `
+            SELECT * FROM reference_prices 
+            WHERE symbol = ?
+        `;
+        
+        const rows = await executeQuery(query, [symbol]);
         
         // Default values if no record exists
         return rows[0] || {
@@ -275,7 +324,7 @@ async function getReferencePrice(symbol) {
             next_sell_threshold: 0
         };
     } catch (error) {
-        console.error('Error getting reference prices:', error);
+        console.error(`Error getting reference prices for ${symbol}:`, error);
         return {
             symbol,
             initial_purchase_price: 0,
@@ -298,13 +347,23 @@ async function updateReferencePrice(symbol, currentPrice) {
         conn = await pool.getConnection();
         
         // Get existing reference prices
-        const existingPrices = await getReferencePrice(symbol);
+        const existingPricesRows = await conn.query(`
+            SELECT * FROM reference_prices 
+            WHERE symbol = ?
+        `, [symbol]);
+        
+        const existingPrices = existingPricesRows[0] || {
+            initial_purchase_price: 0,
+            last_purchase_price: 0,
+            next_buy_threshold: 0,
+            next_sell_threshold: 0
+        };
         
         // Get configuration for this symbol
-        const configRows = await conn.query(
-            'SELECT * FROM configuration WHERE symbol = ?',
-            [symbol]
-        );
+        const configRows = await conn.query(`
+            SELECT * FROM configuration 
+            WHERE symbol = ?
+        `, [symbol]);
         
         // Default thresholds if no config exists
         const buyThresholdPercent = configRows[0]?.buy_threshold_percent || 5;
@@ -319,22 +378,28 @@ async function updateReferencePrice(symbol, currentPrice) {
         const nextSellPrice = currentPrice * (1 + sellThresholdPercent / 100);
         
         // Update or insert reference prices
-        await conn.query(
-            `INSERT INTO reference_prices 
-             (symbol, initial_purchase_price, last_purchase_price, next_buy_threshold, next_sell_threshold) 
-             VALUES (?, ?, ?, ?, ?) 
-             ON DUPLICATE KEY UPDATE 
-             initial_purchase_price = CASE WHEN initial_purchase_price = 0 THEN ? ELSE initial_purchase_price END,
-             last_purchase_price = ?,
-             next_buy_threshold = ?,
-             next_sell_threshold = ?`,
-            [
-                symbol, initialPrice, currentPrice, nextBuyPrice, nextSellPrice,
-                initialPrice, currentPrice, nextBuyPrice, nextSellPrice
-            ]
-        );
+        await conn.query(`
+            INSERT INTO reference_prices 
+                (symbol, initial_purchase_price, last_purchase_price, next_buy_threshold, next_sell_threshold, updated_at) 
+            VALUES 
+                (?, ?, ?, ?, ?, NOW()) 
+            ON DUPLICATE KEY UPDATE 
+                initial_purchase_price = CASE WHEN initial_purchase_price = 0 THEN ? ELSE initial_purchase_price END,
+                last_purchase_price = ?,
+                next_buy_threshold = ?,
+                next_sell_threshold = ?,
+                updated_at = NOW()
+        `, [
+            symbol, initialPrice, currentPrice, nextBuyPrice, nextSellPrice,
+            initialPrice, currentPrice, nextBuyPrice, nextSellPrice
+        ]);
         
-        console.log(`Updated reference prices for ${symbol}: Initial=${initialPrice}, Last=${currentPrice}, NextBuy=${nextBuyPrice}, NextSell=${nextSellPrice}`);
+        console.log(`Updated reference prices for ${symbol}:
+            Initial=${initialPrice}, 
+            Last=${currentPrice}, 
+            NextBuy=${nextBuyPrice}, 
+            NextSell=${nextSellPrice}`
+        );
         
         return {
             symbol,
@@ -344,7 +409,7 @@ async function updateReferencePrice(symbol, currentPrice) {
             next_sell_threshold: nextSellPrice
         };
     } catch (error) {
-        console.error('Error updating reference prices:', error);
+        console.error(`Error updating reference prices for ${symbol}:`, error);
         throw error;
     } finally {
         if (conn) {
@@ -364,7 +429,8 @@ async function updateReferencePrice(symbol, currentPrice) {
 async function getAccountBalance() {
     try {
         // Get all holdings
-        const holdings = await executeQuery('SELECT * FROM holdings');
+        const query = `SELECT * FROM holdings`;
+        const holdings = await executeQuery(query);
         return holdings;
     } catch (error) {
         console.error('Error getting account balance:', error);
@@ -378,7 +444,8 @@ async function getAccountBalance() {
  */
 async function getConfiguration() {
     try {
-        const rows = await executeQuery('SELECT * FROM configuration');
+        const query = `SELECT * FROM configuration`;
+        const rows = await executeQuery(query);
         return rows;
     } catch (error) {
         console.error('Error getting configuration:', error);
@@ -394,33 +461,43 @@ async function getConfiguration() {
  */
 async function updateConfiguration(symbol, config) {
     try {
+        // Validate input
+        if (!symbol || !config) {
+            console.error('Invalid configuration update parameters');
+            return false;
+        }
+
         // Update configuration
-        await executeQuery(
-            `UPDATE configuration SET 
-             investment_preset = ?,
-             buy_threshold = ?,
-             sell_threshold = ?,
-             buy_threshold_percent = ?,
-             sell_threshold_percent = ?,
-             additional_purchase_amount = ?,
-             active = ?
-             WHERE symbol = ?`,
-            [
-                config.investment_preset || 50,
-                config.buy_threshold || 5,
-                config.sell_threshold || 5,
-                config.buy_threshold_percent || 5,
-                config.sell_threshold_percent || 5,
-                config.additional_purchase_amount || 50,
-                config.active || false,
-                symbol
-            ]
-        );
+        const query = `
+            UPDATE configuration SET 
+                investment_preset = ?,
+                buy_threshold = ?,
+                sell_threshold = ?,
+                buy_threshold_percent = ?,
+                sell_threshold_percent = ?,
+                additional_purchase_amount = ?,
+                active = ?,
+                updated_at = NOW()
+            WHERE symbol = ?
+        `;
+        
+        const params = [
+            config.investment_preset || 50,
+            config.buy_threshold || 5,
+            config.sell_threshold || 5,
+            config.buy_threshold_percent || 5,
+            config.sell_threshold_percent || 5,
+            config.additional_purchase_amount || 50,
+            config.active !== undefined ? config.active : false,
+            symbol
+        ];
+        
+        await executeQuery(query, params);
         
         console.log(`Updated configuration for ${symbol}`);
         return true;
     } catch (error) {
-        console.error('Error updating configuration:', error);
+        console.error(`Error updating configuration for ${symbol}:`, error);
         return false;
     }
 }
@@ -445,27 +522,33 @@ async function getBatchData(symbols) {
         for (const symbol of symbols) {
             try {
                 // Get transactions
-                const transactions = await conn.query(
-                    'SELECT * FROM transactions WHERE symbol = ? ORDER BY timestamp DESC LIMIT 30',
-                    [symbol]
-                );
+                const transactions = await conn.query(`
+                    SELECT * FROM transactions 
+                    WHERE symbol = ? 
+                    ORDER BY timestamp DESC 
+                    LIMIT 30
+                `, [symbol]);
                 
                 // Get holdings
-                const holdingsRows = await conn.query(
-                    'SELECT * FROM holdings WHERE symbol = ?',
-                    [symbol]
-                );
+                const holdingsRows = await conn.query(`
+                    SELECT * FROM holdings 
+                    WHERE symbol = ?
+                `, [symbol]);
                 
                 // Get reference prices
-                const refPriceRows = await conn.query(
-                    'SELECT * FROM reference_prices WHERE symbol = ?',
-                    [symbol]
-                );
+                const refPriceRows = await conn.query(`
+                    SELECT * FROM reference_prices 
+                    WHERE symbol = ?
+                `, [symbol]);
                 
                 // Store all data for this symbol
                 results[symbol] = {
-                    transactions: transactions,
-                    holdings: holdingsRows[0] || { symbol, quantity: 0, avg_price: 0 },
+                    transactions: transactions || [],
+                    holdings: holdingsRows[0] || { 
+                        symbol, 
+                        quantity: 0, 
+                        avg_price: 0 
+                    },
                     refPrices: refPriceRows[0] || { 
                         symbol,
                         initial_purchase_price: 0,
@@ -507,17 +590,40 @@ async function getHealthStats() {
         // Get basic health check
         const healthCheck = await conn.query('SELECT 1 as health_check');
         
-        // Get connection statistics - Fixed to avoid the undefined error
+        // Get connection statistics
         const connectionStats = {
-            activeConnections: pool ? (typeof pool.activeConnections === 'function' ? pool.activeConnections() : 0) : 0,
-            totalConnections: pool ? (typeof pool.totalConnections === 'function' ? pool.totalConnections() : 0) : 0,
-            connectionLimit: pool && pool.config ? pool.config.connectionLimit : DB_CONFIG.connectionLimit
+            activeConnections: pool._allConnections.size,
+            idleConnections: pool._freeConnections.size,
+            connectionLimit: pool.pool.config.connectionLimit
         };
+        
+        // Get database size information
+        const dbSizeQuery = `
+            SELECT 
+                table_schema as database_name,
+                ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) as size_mb
+            FROM information_schema.tables
+            WHERE table_schema = ?
+            GROUP BY table_schema
+        `;
+        
+        const dbSize = await conn.query(dbSizeQuery, [DB_CONFIG.database]);
+        
+        // Get table counts
+        const tableCountQuery = `
+            SELECT COUNT(*) as table_count
+            FROM information_schema.tables
+            WHERE table_schema = ?
+        `;
+        
+        const tableCount = await conn.query(tableCountQuery, [DB_CONFIG.database]);
         
         return {
             healthy: healthCheck && healthCheck.length > 0,
             lastChecked: new Date().toISOString(),
-            connectionStats
+            connectionStats,
+            dbSize: dbSize[0]?.size_mb || 0,
+            tableCount: tableCount[0]?.table_count || 0
         };
     } catch (error) {
         console.error('Error getting database health stats:', error);
@@ -537,7 +643,10 @@ async function getHealthStats() {
     }
 }
 
-
+/**
+ * Refresh the connection pool to ensure database stays connected
+ * @returns {Promise<void>}
+ */
 async function refreshConnectionPool() {
     try {
         console.log('Performing connection pool health check');
@@ -573,9 +682,169 @@ async function refreshConnectionPool() {
     }
 }
 
-// Call this function every minute
-setInterval(refreshConnectionPool, 30000); // Check and fix pool every minute
+// Call this function every minute to ensure pool stays healthy
+setInterval(refreshConnectionPool, 60000);
 
+// New function to get transaction summary statistics
+async function getTransactionSummary(symbol, period = '7d') {
+    try {
+        // Determine date range based on period
+        let dateClause;
+        switch (period) {
+            case '24h':
+                dateClause = 'timestamp >= DATE_SUB(NOW(), INTERVAL 1 DAY)';
+                break;
+            case '7d':
+                dateClause = 'timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
+                break;
+            case '30d':
+                dateClause = 'timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY)';
+                break;
+            case 'all':
+                dateClause = '1=1'; // All records
+                break;
+            default:
+                dateClause = 'timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
+        }
+        
+        // Query for buy transactions
+        const buyQuery = `
+            SELECT 
+                COUNT(*) as count,
+                SUM(investment) as total_investment
+            FROM transactions
+            WHERE symbol = ? AND type = 'BUY' AND ${dateClause}
+        `;
+        
+        // Query for sell transactions
+        const sellQuery = `
+            SELECT 
+                COUNT(*) as count,
+                SUM(quantity * price) as total_value
+            FROM transactions
+            WHERE symbol = ? AND type = 'SELL' AND ${dateClause}
+        `;
+        
+        // Execute both queries
+        const buyResult = await executeQuery(buyQuery, [symbol]);
+        const sellResult = await executeQuery(sellQuery, [symbol]);
+        
+        // Extract values
+        const buyCount = buyResult[0]?.count || 0;
+        const sellCount = sellResult[0]?.count || 0;
+        const totalBuy = buyResult[0]?.total_investment || 0;
+        const totalSell = sellResult[0]?.total_value || 0;
+        
+        // Calculate profit/loss
+        const profitLoss = totalSell - totalBuy;
+        
+        return {
+            symbol,
+            period,
+            totalTrades: buyCount + sellCount,
+            buyCount,
+            sellCount,
+            totalBuy,
+            totalSell,
+            profitLoss
+        };
+    } catch (error) {
+        console.error(`Error getting transaction summary for ${symbol}:`, error);
+        return {
+            symbol,
+            period,
+            totalTrades: 0,
+            buyCount: 0,
+            sellCount: 0,
+            totalBuy: 0,
+            totalSell: 0,
+            profitLoss: 0
+        };
+    }
+}
+
+// New function to verify database schema integrity
+async function verifyDatabaseSchema() {
+    let conn;
+    try {
+        conn = await pool.getConnection();
+        
+        // Define expected tables and required columns
+        const requiredTables = [
+            {
+                name: 'transactions',
+                columns: ['id', 'symbol', 'type', 'price', 'quantity', 'investment', 'automated', 'timestamp']
+            },
+            {
+                name: 'holdings',
+                columns: ['id', 'symbol', 'quantity', 'avg_price', 'initial_purchase_timestamp', 'last_updated']
+            },
+            {
+                name: 'reference_prices',
+                columns: ['id', 'symbol', 'initial_purchase_price', 'last_purchase_price', 'next_buy_threshold', 'next_sell_threshold', 'updated_at']
+            },
+            {
+                name: 'configuration',
+                columns: ['id', 'symbol', 'investment_preset', 'buy_threshold', 'sell_threshold', 'active', 'created_at', 'updated_at']
+            }
+        ];
+        
+        // Check if tables exist and have required columns
+        const issues = [];
+        
+        for (const table of requiredTables) {
+            // Check if table exists
+            const tableExistsQuery = `
+                SELECT COUNT(*) as count 
+                FROM information_schema.tables 
+                WHERE table_schema = ? AND table_name = ?
+            `;
+            const tableExists = await conn.query(tableExistsQuery, [DB_CONFIG.database, table.name]);
+            
+            if (tableExists[0].count === 0) {
+                issues.push(`Table '${table.name}' does not exist`);
+                continue;
+            }
+            
+            // Check if columns exist
+            const columnsQuery = `
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_schema = ? AND table_name = ?
+            `;
+            const columns = await conn.query(columnsQuery, [DB_CONFIG.database, table.name]);
+            
+            // Get column names as array
+            const columnNames = columns.map(col => col.column_name);
+            
+            // Check for missing columns
+            for (const requiredColumn of table.columns) {
+                if (!columnNames.includes(requiredColumn)) {
+                    issues.push(`Table '${table.name}' is missing column '${requiredColumn}'`);
+                }
+            }
+        }
+        
+        return {
+            isValid: issues.length === 0,
+            issues
+        };
+    } catch (error) {
+        console.error('Error verifying database schema:', error);
+        return {
+            isValid: false,
+            issues: [`Database schema verification failed: ${error.message}`]
+        };
+    } finally {
+        if (conn) {
+            try {
+                await conn.release();
+            } catch (releaseError) {
+                console.error('Error releasing connection:', releaseError);
+            }
+        }
+    }
+}
 
 // Export all functions
 module.exports = {
@@ -592,5 +861,8 @@ module.exports = {
     getConfiguration,
     updateConfiguration,
     getBatchData,
-    getHealthStats
+    getHealthStats,
+    refreshConnectionPool,
+    getTransactionSummary,
+    verifyDatabaseSchema
 };
