@@ -3,22 +3,22 @@
 // Responsible for setting up the server and initializing all modules
 
 // Import required modules
-import express, { json, urlencoded } from 'express';
-import { createServer } from 'http';
-import socketIo from 'socket.io';
-import cors from 'cors';
-import { config } from 'dotenv';
-import { resolve } from 'path';
+const express = require('express');
+const { createServer } = require('http');
+const socketIo = require('socket.io');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const path = require('path');
 
-// Import our custom modules
-import { getTransactions, getHoldings, getReferencePrice, getBatchData, testConnection } from './js/dbconns.js';
-import { getWebSocketStatus, getTickerPrice, getAccountInfo, initializeWebSockets, testConnection as _testConnection, closeAllConnections } from './js/binance.js';
-import { testConnection as __testConnection } from './js/telegram.js';
-import { getTradingStatus, processFirstPurchase, processSellAll, initialize } from './js/tradings.js';
-import { getHealthStatus, initialize as _initialize } from './js/health.js';
+// Import custom modules
+const { getTransactions, getHoldings, getReferencePrice, getBatchData, testConnection } = require('./js/dbconns.js');
+const { getWebSocketStatus, getTickerPrice, getAccountInfo, initializeWebSockets, testConnection: _testConnection, closeAllConnections } = require('./js/binance.js');
+const { testConnection: __testConnection } = require('./js/telegram.js');
+const { getTradingStatus, processFirstPurchase, processSellAll, initialize } = require('./js/tradings.js');
+const { getHealthStatus, initialize: _initialize } = require('./js/health.js');
 
 // Load environment variables
-config({ path: resolve(process.cwd(), '.env') });
+dotenv.config({ path: '/app/.env' });
 
 // Create Express app
 const app = express();

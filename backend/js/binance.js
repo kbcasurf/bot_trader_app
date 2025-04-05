@@ -980,7 +980,7 @@ function unsubscribeFromTickerStream(symbols, io) {
 
 
 
-export default {
+module.exports = {
     initializeWebSockets,
     closeAllConnections,
     getWebSocketStatus,
@@ -988,13 +988,7 @@ export default {
     getAccountInfo,
     getTickerPrice,
     getMultipleTickers,
-    calculateQuantityFromUsdt,
-    createMarketBuyOrder,
-    createMarketSellOrder,
-//    subscribeToTickerStream,
-//    unsubscribeFromTickerStream,
-//    executeBuyOrder,
-//    executeSellOrder,
-
-//    renewWebSocketConnection
+    calculateQuantityFromUsdt
+ //   createMarketBuyOrder,
+ //   createMarketSellOrder,
 };

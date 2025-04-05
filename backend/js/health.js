@@ -3,9 +3,9 @@
 // Handles monitoring health of all system connections and services
 
 // Import required modules
-import { testConnection, getWebSocketStatus } from './binance.js';
-import { getHealthStats } from './dbconns.js';
-import { testConnection as _testConnection, sendSystemAlert } from './telegram.js';
+const { testConnection, getWebSocketStatus } = require('./binance.js');
+const { getHealthStats } = require('./dbconns.js');
+const { testConnection: _testConnection, sendSystemAlert } = require('./telegram.js');
 
 // Configuration for health checks
 const HEALTH_CONFIG = {

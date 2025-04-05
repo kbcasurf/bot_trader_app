@@ -4,6 +4,7 @@
 
 // Import required modules
 const mariadb = require('mariadb');
+const dotenv = require('dotenv');
 
 // Load environment variables
 dotenv.config({ path: '/app/.env' });
@@ -578,7 +579,7 @@ async function getHealthStats() {
 }
 
 // Export all functions
-export default {
+module.exports = {
     pool,
     testConnection,
     getTransactions,

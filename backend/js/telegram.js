@@ -129,7 +129,7 @@ async function sendSystemAlert(alertInfo) {
     return await sendMessage(alertMessage);
 }
 
-export default {
+module.exports = {
     testConnection,
     sendMessage,
     sendTradeNotification,
