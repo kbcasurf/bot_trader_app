@@ -5,7 +5,6 @@
 // Import socket connection from connections module
 import * as Connections from './conns.js';
 import * as Cards from './cards.js';
-import * as Monitor from './monitor.js';
 
 // Dashboard configuration
 const DASHBOARD_CONFIG = {
@@ -113,9 +112,6 @@ function setupUI() {
     // Create and add USDT balance display
     setupUsdtBalanceDisplay();
 
-    // Register for status changes to update UI
-    Monitor.registerStatusListener(handleStatusChange);
-    
     // Set up disclaimer modal events
     setupDisclaimerModal();
 }
@@ -435,61 +431,6 @@ function setupThemeToggle() {
     });
 }
 
-/**
- * Handle status change events from the monitor
- * @param {string} service - Service that changed
- * @param {*} status - New status
- */
-function handleStatusChange(service, status) {
-    // For 'overall' status changes, update UI accordingly
-    if (service === 'overall') {
-        // If system is healthy, ensure auto-refresh is running
-        if (status === true && !dashboardState.autoRefreshInterval) {
-            setupAutoRefresh();
-        } 
-        // If system is unhealthy, maybe reduce refresh frequency
-        else if (status === false && dashboardState.autoRefreshInterval) {
-            // Don't completely stop, but could reduce frequency if desired
-            // For now, we'll keep the refresh going even if system is degraded
-        }
-    }
-    
-    // For trading status changes, update card interactivity
-    if (service === 'trading') {
-        const tradingEnabled = typeof status === 'object' 
-            ? (status.enabled && !status.circuitBreaker)
-            : Boolean(status);
-        
-        Monitor.toggleTradingAvailability(tradingEnabled);
-    }
-    
-    // Update status banner if needed
-    updateStatusBanner(service, status);
-}
-
-/**
- * Update status banner based on service status changes
- * @param {string} service - Service that changed
- * @param {*} status - New status
- */
-function updateStatusBanner(service, status) {
-    const banner = document.getElementById('system-status-banner');
-    const message = document.getElementById('status-message');
-    
-    if (!banner || !message) return;
-    
-    // Only show banner for significant issues
-    if (service === 'overall' && status === false) {
-        message.textContent = 'System is currently experiencing issues. Some features may be unavailable.';
-        banner.style.display = 'flex';
-    } else if (service === 'binance' && status === false) {
-        message.textContent = 'Unable to connect to Binance. Trading features may be unavailable.';
-        banner.style.display = 'flex';
-    } else if (service === 'database' && status === false) {
-        message.textContent = 'Database connection issues. Some data may be unavailable.';
-        banner.style.display = 'flex';
-    }
-}
 
 /**
  * Show a temporary notification to the user
