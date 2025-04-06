@@ -1,7 +1,21 @@
 -- File: database/schema.sql
 -- Complete updated schema with trading algorithm enhancements
 
--- Create transactions table
+-- Create trades table (used by the application)
+CREATE TABLE IF NOT EXISTS trades (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL,
+    action ENUM('buy', 'sell') NOT NULL,
+    quantity DECIMAL(18, 8) NOT NULL,
+    price DECIMAL(18, 8) NOT NULL,
+    usdt_amount DECIMAL(18, 2) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_symbol (symbol),
+    INDEX idx_created_at (created_at),
+    INDEX idx_symbol_action (symbol, action)
+);
+
+-- Create transactions table (legacy - keeping for compatibility)
 CREATE TABLE IF NOT EXISTS transactions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     symbol VARCHAR(20) NOT NULL,

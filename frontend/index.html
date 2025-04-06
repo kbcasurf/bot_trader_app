@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto Trading Bot</title>
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg" />
+  <link rel="stylesheet" href="/style.css">
+  <!-- Socket.io client library -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>Crypto Trading Bot</h1>
+      <p class="subtitle">Automated cryptocurrency trading platform</p>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container">
+        <span>🌞</span>
+        <label class="switch">
+          <input type="checkbox" id="theme-toggle">
+          <span class="slider round"></span>
+        </label>
+        <span>🌙</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Status Monitor is added via JavaScript -->
+    
+    <!-- Cryptocurrency Cards Grid -->
+    <div class="crypto-grid">
+      <!-- Cards are added via JavaScript -->
+    </div>
+    
+    <!-- Test Controls (visible in development only) -->
+    <!-- Added via JavaScript -->
+    
+    <!-- Disclaimer Link -->
+    <div class="disclaimer-link">
+      <a href="#" id="show-disclaimer">Disclaimer and Terms of Use</a>
+    </div>
+  </main>
+
+  <!-- Disclaimer Modal -->
+  <div id="disclaimer-modal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal">&times;</span>
+      <h2>Disclaimer and Terms of Use</h2>
+      <div class="modal-body">
+        <p><strong>Risk Warning:</strong> Cryptocurrency trading involves substantial risk and may not be suitable for all investors. The high degree of leverage can work against you as well as for you.</p>
+        
+        <p>Before deciding to trade cryptocurrencies you should carefully consider your investment objectives, level of experience, and risk appetite. The possibility exists that you could sustain a loss of some or all of your initial investment and therefore you should not invest money that you cannot afford to lose.</p>
+        
+        <p>This trading bot is provided for educational and informational purposes only. It is not intended as financial advice or a recommendation to buy or sell any cryptocurrency.</p>
+        
+        <p>Past performance is not indicative of future results. No representation is being made that any account will or is likely to achieve profits or losses similar to those discussed on this website.</p>
+        
+        <p>The authors and all affiliates assume no responsibility for your trading results.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification element for alerts -->
+  <!-- Added via JavaScript -->
+
+  <footer>
+    <p>&copy; 2025 Crypto Trading Bot | <a href="#" id="show-disclaimer">Terms of Use</a></p>
+  </footer>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

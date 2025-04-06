@@ -10,3 +10,5 @@ CREATE USER IF NOT EXISTS 'trading_bot_user'@'%' IDENTIFIED BY 'mariadb_secret';
 -- Grant privileges
 GRANT ALL PRIVILEGES ON crypto_trading_bot.* TO 'trading_bot_user'@'%';
 FLUSH PRIVILEGES;
+
+-- Import schema.sql (this will be handled by Docker which will run schema.sql after this file)
