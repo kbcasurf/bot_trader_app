@@ -1,11 +1,14 @@
 FROM node:18-alpine as build
+
 WORKDIR /app
 
-# Install dependencies first to benefit from Docker cache
+# Copy package files for layer caching
 COPY package*.json ./
+
+# Install minimal dependencies needed for build
 RUN npm install
 
-# Copy ALL application code including images folder
+# Copy application code
 COPY . .
 
 # Build for production
@@ -19,7 +22,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
 # Explicitly copy the images folder to ensure it's included
-COPY --from=build /app/images /usr/share/nginx/html/images
+COPY images /usr/share/nginx/html/images
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

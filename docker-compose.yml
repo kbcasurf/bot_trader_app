@@ -5,27 +5,35 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: frontend
+    restart: unless-stopped
     ports:
       - "8080:80"
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - ./.env:/app/.env
-      # Explicitly map the images directory to ensure it's accessible
-      - ./frontend/images:/app/images
+      # Only mount the images directory for easier updates
+      - ./frontend/images:/usr/share/nginx/html/images:ro
     environment:
-      - NODE_ENV=development
-      - VITE_BACKEND_URL=http://backend:3000  # Add explicit backend URL
+      - NODE_ENV=production  # Production mode for better performance
+      - VITE_BACKEND_URL=http://backend:3000
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       backend:
         condition: service_healthy
     networks:
       - bot-network
+    # Resource limits to avoid container bloat
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   # Backend service
   backend:
@@ -33,56 +41,94 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: backend
+    restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
-      - ./backend:/app
-      - /app/node_modules
-      - ./.env:/app/.env
+      - ./.env:/app/.env:ro
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - DB_HOST=database
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - DB_USER=${DB_USER:-trading_bot_user}
+      - DB_PASSWORD=${DB_PASSWORD:-mariadb_secret}
+      - DB_NAME=${DB_NAME:-crypto_trading_bot}
+      - BINANCE_API_KEY=${BINANCE_API_KEY:-your_binance_api_key}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-your_binance_api_secret}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-your_telegram_bot_token}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-your_telegram_chat_id}
+      # Add connection configuration
+      - DB_CONNECTION_LIMIT=10
+      - DB_CONNECT_TIMEOUT=20000
+      - API_TIMEOUT_MS=10000
+      # WebSocket configuration
+      - WS_RECONNECT_DELAY=2000
+      - WS_MAX_RECONNECT_DELAY=60000
+      - WS_HEARTBEAT_TIMEOUT=30000
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     depends_on:
       database:
         condition: service_healthy
     networks:
       - bot-network
+    # Resource limits to prevent memory leaks and high CPU usage
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
 
   # Database service
   database:
     build: ./database
     container_name: database
-    restart: always
+    restart: unless-stopped
+    # Tuned MariaDB configuration for better performance and stability
+    command: >
+      --innodb-buffer-pool-size=128M
+      --max-connections=100
+      --connect-timeout=20
+      --wait-timeout=600
+      --max-allowed-packet=16M
+      --tmp-table-size=32M
+      --max-heap-table-size=32M
+      --net-read-timeout=30
+      --net-write-timeout=60
     environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-      - MYSQL_USER=${DB_USER}
-      - MYSQL_PASSWORD=${DB_PASSWORD}
-      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpassword}
+      - MYSQL_USER=${DB_USER:-trading_bot_user}
+      - MYSQL_PASSWORD=${DB_PASSWORD:-mariadb_secret}
+      - MYSQL_DATABASE=${DB_NAME:-crypto_trading_bot}
     ports:
       - "3306:3306"
     volumes:
       - db-data:/var/lib/mysql
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     healthcheck:
-      test: mysqladmin ping -h database -u ${DB_USER} -p${DB_PASSWORD}
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: mysqladmin ping -h database -u ${DB_USER:-trading_bot_user} -p${DB_PASSWORD:-mariadb_secret}
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - bot-network
+    # Resource limits for database
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
 volumes:
   db-data:

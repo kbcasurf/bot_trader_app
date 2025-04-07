@@ -1,110 +1,79 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Trading Bot</title>
-    <link rel="stylesheet" href="style.css">
-    <link rel="icon" type="image/x-icon" href="/images/favicon.svg">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto Trading Bot</title>
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg" />
+  <link rel="stylesheet" href="/style.css">
+  <!-- Socket.io client library -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
-    <header>
-        <div class="header-content">
-            <img src="/images/btc2.png" alt="Bitcoin" class="header-icon">
-            <div class="header-text">
-                <h1>Crypto Trading Bot</h1>
-                <p>Automatically trade crypto for profit</p>
-            </div>
-        </div>
-        
-        <!-- Theme Switch -->
-        <div class="theme-switch-container">
-            <span class="theme-icon">☀️</span>
-            <label class="theme-switch">
-                <input type="checkbox" id="theme-toggle">
-                <span class="slider"></span>
-            </label>
-            <span class="theme-icon">🌙</span>
-        </div>
-    </header>
+  <header>
+    <div class="header-left">
+      <img src="/images/btc2.png" alt="Crypto Bot Logo" class="header-logo">
+      <div class="header-text">
+        <h1>Crypto Trading Bot</h1>
+        <p class="subtitle">Automated cryptocurrency trading platform</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container">
+        <span>🌞</span>
+        <label class="switch">
+          <input type="checkbox" id="theme-toggle">
+          <span class="slider round"></span>
+        </label>
+        <span>🌙</span>
+      </div>
+    </div>
+  </header>
 
+  <main>
+    <!-- Cryptocurrency Cards Grid -->
     <div class="crypto-grid">
-        <!-- Bitcoin card template - will be used to clone other cards -->
-        <div class="crypto-card" id="btc-card">
-            <div class="crypto-header">
-                <div class="crypto-header-left">
-                    <img src="/images/btc.svg" alt="Bitcoin" class="crypto-icon">
-                    <h3>BTC/USDT</h3>
-                </div>
-                <span class="current-price" id="btc-price">Price: $0.00</span>
-            </div>
-            <div class="investment-slider">
-                <label for="btc-investment">Investment Amount:</label>
-                <div class="slider-presets">
-                    <button class="preset-btn" data-value="50">$50</button>
-                    <button class="preset-btn active" data-value="100">$100</button>
-                    <button class="preset-btn" data-value="150">$150</button>
-                    <button class="preset-btn" data-value="200">$200</button>
-                </div>
-                <input type="hidden" id="btc-investment" value="100">
-            </div>
-            <button class="action-btn first-purchase" id="btc-first-purchase">Buy Crypto</button>
-            <div class="holdings">
-                <p>Current holdings: <span id="btc-holdings">0.00 BTC</span></p>
-            </div>
-            <div class="profit-loss-container">
-                <div class="profit-loss-bar"></div>
-                <div class="profit-loss-indicator" id="btc-profit-indicator"></div>
-                <div class="profit-loss-scale">
-                    <span>-5%</span>
-                    <span>0%</span>
-                    <span>+5%</span>
-                </div>
-                <p class="profit-loss-text">Profit/Loss: <span id="btc-profit-text">0.00%</span></p>
-            </div>
-            <div class="transaction-history">
-                <h4>Transaction History</h4>
-                <ul id="btc-history">
-                    <li class="no-transactions">No transactions yet</li>
-                </ul>
-            </div>
-            <button class="action-btn sell-all" id="btc-sell-all">Sell All</button>
-        </div>
+      <!-- Cards are added via JavaScript -->
     </div>
-
     
-    <div class="status-section">
-        <div class="status-card" id="connection-status">
-            <h3>Connection Status</h3>
-            <div class="status-indicator">
-                <div class="status-dot" id="backend-status-dot"></div>
-                <span id="backend-status-text">Backend: Connecting...</span>
-            </div>
-            <div class="status-indicator">
-                <div class="status-dot" id="db-status-dot"></div>
-                <span id="db-status-text">Database: Connecting...</span>
-            </div>
-        </div>
-        <div class="status-card" id="api-status">
-            <h3>API Status</h3>
-            <div class="status-indicator">
-                <div class="status-dot" id="binance-status-dot"></div>
-                <span id="binance-status-text">Binance: Connecting...</span>
-            </div>
-            <div class="status-indicator">
-                <div class="status-dot" id="telegram-status-dot"></div>
-                <span id="telegram-status-text">Telegram: Connecting...</span>
-            </div>
-        </div>
+    <!-- Status Monitor moved to the end of the page -->
+    <!-- Added via JavaScript -->
+    
+    <!-- Test Controls (visible in development only) -->
+    <!-- Added via JavaScript -->
+    
+    <!-- Disclaimer Link -->
+    <div class="disclaimer-link">
+      <a href="#" id="show-disclaimer">Disclaimer and Terms of Use</a>
     </div>
+  </main>
 
-    <!-- Optional: Add WebSocket monitor -->
-    <div id="websocket-monitor" style="display: none;">
-        <span class="status-label">WebSocket Status: </span>
-        <span class="status-value" id="ws-connection-status">Unknown</span>
+  <!-- Disclaimer Modal -->
+  <div id="disclaimer-modal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal">&times;</span>
+      <h2>Disclaimer and Terms of Use</h2>
+      <div class="modal-body">
+        <p><strong>Risk Warning:</strong> Cryptocurrency trading involves substantial risk and may not be suitable for all investors. The high degree of leverage can work against you as well as for you.</p>
+        
+        <p>Before deciding to trade cryptocurrencies you should carefully consider your investment objectives, level of experience, and risk appetite. The possibility exists that you could sustain a loss of some or all of your initial investment and therefore you should not invest money that you cannot afford to lose.</p>
+        
+        <p>This trading bot is provided for educational and informational purposes only. It is not intended as financial advice or a recommendation to buy or sell any cryptocurrency.</p>
+        
+        <p>Past performance is not indicative of future results. No representation is being made that any account will or is likely to achieve profits or losses similar to those discussed on this website.</p>
+        
+        <p>The authors and all affiliates assume no responsibility for your trading results.</p>
+      </div>
     </div>
+  </div>
 
-    <!-- Import scripts -->
-    <script src="./main.js" type="module"></script>
+  <!-- Notification element for alerts -->
+  <!-- Added via JavaScript -->
+
+  <footer>
+    <p>&copy; 2025 Crypto Trading Bot | <a href="#" id="show-disclaimer">Terms of Use</a></p>
+  </footer>
+
+  <script type="module" src="/main.js"></script>
 </body>
 </html>

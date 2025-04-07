@@ -1,60 +1,52 @@
-// vite.config.js
-export default {
+// frontend/vite.config.js
+// Vite configuration file
+
+import { defineConfig } from 'vite';
+
+export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 80,
+    strictPort: true,
+    hmr: {
+      port: 80,
+      clientPort: 8080,
+      host: 'localhost',
+    },
     proxy: {
+      // Proxy all socket.io requests to the backend
       '/socket.io': {
         target: 'http://backend:3000',
-        ws: true,
+        ws: true, // Enable WebSocket proxying
         changeOrigin: true,
-        secure: false,
-        // These additional options improve WebSocket handling
-        rewrite: (path) => path,
-        // Properly handle socket.io
-        configure: (proxy, _options) => {
-          proxy.on('error', (err, _req, _res) => {
-            console.log('proxy error', err);
-          });
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
-            console.log('Sending Request to the Target:', req.method, req.url);
-          });
-          proxy.on('proxyRes', (proxyRes, req, _res) => {
-            console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
-          });
-        }
+        secure: false
       },
+      // Proxy API requests to backend
       '/api': {
         target: 'http://backend:3000',
         changeOrigin: true,
         secure: false
       },
+      // Proxy health check to backend
       '/health': {
         target: 'http://backend:3000',
-        changeOrigin: true
+        changeOrigin: true,
+        secure: false
       }
     }
   },
-  // Add optimization for production build
   build: {
     outDir: 'dist',
-    minify: 'esbuild',
-    sourcemap: false,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          // Split vendor code into a separate chunk
-          vendor: ['socket.io-client'],
-          // Create a separate chunk for the application code
-          app: ['./js/conns.js', './js/dashboard.js']
-        },
-        // Ensure assets are handled correctly
-        assetFileNames: 'assets/[name]-[hash][extname]',
+    assetsDir: 'assets',
+    sourcemap: false,  // Set to false to reduce bundle size
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: false,
+        drop_debugger: true
       }
-    },
-    // Make sure assets are copied to the dist folder
-    assetsInclude: ['**/*.svg', '**/*.png', '**/*.jpg', '**/*.jpeg', '**/*.gif'],
+    }
   },
-  // Explicitly specify public directory for static assets
-  publicDir: 'images'
-}
+  envPrefix: 'VITE_',
+  publicDir: 'images',
+});

@@ -25,8 +25,24 @@ This trading bot monitors price movements from Binance Price Stream WebSocket an
 ### Configuration
 
 1. Clone this repository
-2. Copy the `.env.example` file to `.env`
-3. Fill in your Binance API keys, Telegram bot token, and other configuration details in the `.env` file
+2. Create a `.env` file in the root directory with the following variables:
+```
+# Database Configuration
+DB_USER=trading_bot_user
+DB_PASSWORD=your_secure_password
+DB_NAME=crypto_trading_bot
+MYSQL_ROOT_PASSWORD=your_secure_root_password
+
+# Binance API Configuration
+BINANCE_API_KEY=your_binance_api_key
+BINANCE_API_SECRET=your_binance_api_secret
+BINANCE_API_URL=https://api.binance.com
+BINANCE_WEBSOCKET_URL=wss://stream.binance.com:9443
+
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+```
 
 ### Running the Application
 
@@ -56,11 +72,29 @@ The bot implements a simple but effective "buy the dip, sell the rise" strategy:
 
 ## Technology Stack
 
-- Frontend: HTML, CSS, JavaScript
+- Frontend: HTML, CSS, JavaScript with Vite
 - Backend: Node.js, Express
 - Database: MariaDB
 - Containerization: Docker
 - APIs: Binance API, Telegram Bot API
+
+## Development
+
+To run the services individually for development:
+
+### Frontend
+```bash
+cd frontend
+npm install
+npm start
+```
+
+### Backend
+```bash
+cd backend
+npm install
+npm run dev
+```
 
 ## License
 

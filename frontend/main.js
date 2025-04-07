@@ -1,44 +1,23 @@
-// main.js - Application Entry Point
-// This file is the bootstrapper that initializes both modules
+// frontend/main.js
+// Main entry point for the frontend application
 
-import * as Connections from './js/conns.js';
+// Import module dependencies
+import './style.css';
 import * as Dashboard from './js/dashboard.js';
 
-// Helper function for when DOM is ready
-function whenDomReady(callback) {
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', callback);
-    } else {
-        callback();
-    }
-}
-
-// Flag to track initialization
-let isInitialized = false;
-
-// Initialize application
-function initializeApp() {
-    if (isInitialized) return;
-    isInitialized = true;
-    
-    console.log('Initializing Crypto Trading Bot application...');
-    
-    // Initialize connection module
-    Connections.initialize();
-    
-    // Initialize dashboard module after a slight delay
-    setTimeout(() => {
-        Dashboard.initialize();
-    }, 300);
-    
-    console.log('Application initialization complete');
-}
-
-// Start the application when DOM is ready
-whenDomReady(() => {
-    // Short delay to ensure all HTML elements are rendered
-    setTimeout(initializeApp, 500);
+// Main application initialization function
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('DOM loaded, initializing application...');
+  
+  // Initialize dashboard
+  Dashboard.initialize();
+  
+  // Global notification function for use by other modules
+  window.showNotification = Dashboard.showNotification;
 });
 
-// Export the socket for compatibility with any code that might be importing it
-export { Connections };
+// Export any functions needed for global access
+window.reloadData = () => {
+  console.log('Manual reload requested');
+  Dashboard.loadAllData();
+};

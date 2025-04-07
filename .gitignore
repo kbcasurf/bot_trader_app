@@ -1,24 +1,44 @@
 # Environment variables
 .env
-*.env
-*.env
-*./.env
-./.env.local
-./.env# Environment variables
-.env
-*.env
-*.env
-*./.env
-./.env.local
-./.env
-./.node_modules
-/.node_modules
-./node_modules/*
-/node_modules/*
-./node_modules*
-/node_modules*
+.env.*
+.env.local
+.env.development
+.env.production
 
-./package.json.lock
-package.json.lock
-backend/node_modules
-frontend/node_modules
+# Dependencies
+node_modules
+*/node_modules
+*/*/node_modules
+package-lock.json
+yarn.lock
+**/package-lock.json
+./npmrc
+.npmrc
+
+# OS and IDE files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build and distribution files
+dist
+build
+.cache
+
+# Database files
+*.sqlite
+*.db
+
+# Backup files
+*.bak
+*.backup
