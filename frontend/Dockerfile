@@ -1,16 +1,14 @@
 FROM node:18-alpine as build
 
-# Install build dependencies
-RUN apk add --no-cache python3 make g++
-
 WORKDIR /app
 
-# Install dependencies first to benefit from Docker cache
+# Copy package files for layer caching
 COPY package*.json ./
-RUN npm install
-RUN npm install -D terser@latest
 
-# Copy ALL application code
+# Install minimal dependencies needed for build
+RUN npm install
+
+# Copy application code
 COPY . .
 
 # Build for production

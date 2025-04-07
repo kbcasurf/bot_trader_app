@@ -20,13 +20,13 @@ function initialize() {
     return connectionState.socket;
   }
   
-  // Determine the backend URL - use hardcoded value that matches Docker service name
-  const backendUrl = 'http://backend:3000';
+  // Use relative URL to leverage Vite's proxy or window.location.origin for production
+  const backendUrl = window.location.origin;
   
   // Create socket connection
   connectionState.socket = io(backendUrl, {
     reconnectionDelayMax: 10000,
-    transports: ['websocket']
+    transports: ['websocket', 'polling'] // Allow fallback to polling if WebSocket fails
   });
   
   // Set up event handlers

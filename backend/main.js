@@ -6,6 +6,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const path = require('path');
 
 // Load internal modules
 const binance = require('./js/binance');
@@ -13,7 +14,14 @@ const db = require('./js/dbconns');
 const telegram = require('./js/telegram');
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+// Log environment information - only for debugging
+console.log('====== ENVIRONMENT DEBUG INFO ======');
+console.log(`API URL: ${process.env.BINANCE_API_URL}`);
+console.log(`WebSocket URL: ${process.env.BINANCE_WEBSOCKET_URL}`);
+console.log(`Using testnet environment: ${process.env.BINANCE_API_URL?.includes('testnet') ? 'YES' : 'NO'}`);
+console.log('===================================');
 
 // Create Express app
 const app = express();
@@ -92,6 +100,15 @@ async function startServer() {
       // Set up binance event handlers if connected
       if (binanceInitialized) {
         setupBinanceHandlers();
+        
+        // Perform initial account balance update at startup
+        try {
+          console.log('Performing initial account balance update...');
+          await binance.updateAccountBalances();
+        } catch (balanceError) {
+          console.error('Error during initial account balance update:', balanceError);
+          // Continue anyway - this is not critical for startup
+        }
       }
     } catch (binanceError) {
       console.error('Binance initialization error:', binanceError);
@@ -162,9 +179,21 @@ function setupSocketIO() {
     // Client requests account information
     socket.on('get-account-info', async () => {
       try {
+        // Get account info from Binance API
         const accountInfo = await binance.getAccountInfo();
-        socket.emit('account-info', accountInfo);
+        
+        // Get balances from database (these will have been updated from the API)
+        const dbBalances = await db.getAccountBalances();
+        
+        // Combine the data (add database balances to the response)
+        const combinedAccountInfo = {
+          ...accountInfo,
+          databaseBalances: dbBalances
+        };
+        
+        socket.emit('account-info', combinedAccountInfo);
       } catch (error) {
+        console.error('Error fetching account info:', error);
         socket.emit('account-info', { error: error.message });
       }
     });
@@ -179,11 +208,22 @@ function setupSocketIO() {
       try {
         const results = {};
         
+        // Before processing, verify that WebSocket is connected
+        if (!binance.isConnected()) {
+          throw new Error('WebSocket connection is down. Trading is halted until reconnection.');
+        }
+        
+        // Force an update of account balances from Binance to ensure fresh data
+        await binance.updateAccountBalances();
+        
+        // Get account balances from database (now guaranteed to be fresh from Binance)
+        const accountBalances = await db.getAccountBalances();
+        
         // Process each symbol
         for (const fullSymbol of data.symbols) {
           const symbol = fullSymbol.replace('USDT', '');
           
-          // Get current price
+          // Get current price from WebSocket data (not API)
           const priceData = await binance.getSymbolPrice(fullSymbol);
           
           // Get trading history
@@ -198,16 +238,24 @@ function setupSocketIO() {
             parseFloat(priceData.price)
           );
           
+          // Get the balance from the database (prefer this over calculated holdings)
+          const databaseBalance = accountBalances[symbol] || 0;
+          
           // Combine data
           results[symbol] = {
             price: parseFloat(priceData.price),
             history: tradingHistory,
-            holdings: holdings.quantity,
+            holdings: parseFloat(databaseBalance).toFixed(8), // Always use database balance which is now synced with Binance, but ensure we have decimal precision
             nextBuyPrice: thresholds.nextBuyPrice,
             nextSellPrice: thresholds.nextSellPrice,
             profitLossPercentage: thresholds.profitLossPercentage
           };
         }
+        
+        // Add USDT balance to the results
+        results.USDT = {
+          balance: parseFloat(accountBalances['USDT'] || 0).toFixed(8)
+        };
         
         // Send batch results
         socket.emit('batch-data-result', results);
@@ -232,7 +280,15 @@ function setupSocketIO() {
         // Send result back to client
         socket.emit('buy-result', { success: true, result });
         
-        // Send updated data
+        // Explicitly update account balances to make sure database is in sync with Binance
+        try {
+          await binance.updateAccountBalances();
+          console.log(`Account balances explicitly updated after buying ${data.symbol}`);
+        } catch (balanceError) {
+          console.error(`Error updating balances after purchase: ${balanceError.message}`);
+        }
+        
+        // Send updated data with a delay to ensure all systems are synced
         setTimeout(async () => {
           const updatedData = await getUpdateDataForSymbol(data.symbol);
           socket.emit('crypto-data-update', updatedData);
@@ -258,7 +314,15 @@ function setupSocketIO() {
         // Send result back to client
         socket.emit('sell-result', { success: true, result });
         
-        // Send updated data
+        // Explicitly update account balances to make sure database is in sync with Binance
+        try {
+          await binance.updateAccountBalances();
+          console.log(`Account balances explicitly updated after selling ${data.symbol}`);
+        } catch (balanceError) {
+          console.error(`Error updating balances after sale: ${balanceError.message}`);
+        }
+        
+        // Send updated data with a delay to ensure all systems are synced
         setTimeout(async () => {
           const updatedData = await getUpdateDataForSymbol(data.symbol);
           socket.emit('crypto-data-update', updatedData);
@@ -318,14 +382,22 @@ function setupSocketIO() {
  */
 async function getUpdateDataForSymbol(symbol) {
   try {
-    // Get current price
+    // Verify WebSocket connection first
+    if (!binance.isConnected()) {
+      throw new Error('WebSocket connection is down. Trading is halted until reconnection.');
+    }
+    
+    // Force an update of account balances from Binance to ensure fresh data
+    await binance.updateAccountBalances();
+    
+    // Get current price from WebSocket (not API)
     const priceData = await binance.getSymbolPrice(`${symbol}USDT`);
     
     // Get trading history
     const tradingHistory = await db.getTradingHistory(symbol);
     
-    // Get holdings
-    const holdings = await db.getCurrentHoldings(symbol);
+    // Get account balances from database (now guaranteed to be fresh from Binance)
+    const accountBalances = await db.getAccountBalances();
     
     // Calculate thresholds
     const thresholds = await db.calculateTradingThresholds(
@@ -333,12 +405,15 @@ async function getUpdateDataForSymbol(symbol) {
       parseFloat(priceData.price)
     );
     
+    // Get the balance from the database (will be the same as Binance's balance)
+    const databaseBalance = (accountBalances && accountBalances[symbol]) || 0;
+    
     // Combine data
     return {
       symbol,
       price: parseFloat(priceData.price),
       history: tradingHistory,
-      holdings: holdings.quantity,
+      holdings: parseFloat(databaseBalance).toFixed(8), // Always use the database balance which is now synced with Binance, with proper decimal precision
       nextBuyPrice: thresholds.nextBuyPrice,
       nextSellPrice: thresholds.nextSellPrice,
       profitLossPercentage: thresholds.profitLossPercentage

@@ -6,7 +6,7 @@ const { Telegraf } = require('telegraf');
 const dotenv = require('dotenv');
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: require('path').resolve(__dirname, '../../.env') });
 
 // Telegram bot configuration
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -41,22 +41,26 @@ function initialize() {
     bot.catch((err, ctx) => {
       console.error('Telegram bot error:', err);
     });
+    
+    // Check if we have a chat ID immediately to set isConfigured
+    if (TELEGRAM_CHAT_ID) {
+      isConfigured = true;
+    } else {
+      console.warn('TELEGRAM_CHAT_ID not found in environment variables');
+    }
 
     // Start bot
     bot.launch().then(() => {
       console.log('Telegram bot launched successfully');
       
-      // Check if we have a chat ID
-      if (TELEGRAM_CHAT_ID) {
-        isConfigured = true;
-        // Send a startup message
-        sendMessage('> Crypto Trading Bot started and ready to go!');
-      } else {
-        console.warn('TELEGRAM_CHAT_ID not found in environment variables');
+      // Send a startup message only if configured
+      if (isConfigured) {
+        sendMessage('> Crypto Trading Bot started and ready to go!');
       }
     }).catch(error => {
       console.error('Failed to launch Telegram bot:', error);
       bot = null;
+      isInitialized = false;
       return false;
     });
 
@@ -75,14 +79,24 @@ function initialize() {
  */
 async function sendMessage(message) {
   if (!isInitialized || !bot || !isConfigured) {
-    console.warn('Telegram bot not initialized or configured properly');
+    // This is a more informative error that will only be logged once per run
+    if (!global.telegramWarningLogged) {
+      console.error('TELEGRAM NOTIFICATION ERROR: Bot not initialized or configured properly. Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in your .env file.');
+      global.telegramWarningLogged = true;
+    } else {
+      // Use debug level for repeated warnings to reduce log noise
+      console.debug('Telegram bot not initialized or configured properly');
+    }
     return false;
   }
 
   try {
     // Make sure we have a chat ID
     if (!TELEGRAM_CHAT_ID) {
-      console.warn('No TELEGRAM_CHAT_ID configured');
+      if (!global.chatIdWarningLogged) {
+        console.error('TELEGRAM NOTIFICATION ERROR: No TELEGRAM_CHAT_ID configured in your .env file.');
+        global.chatIdWarningLogged = true;
+      }
       return false;
     }
 
@@ -114,13 +128,13 @@ async function sendTradeNotification(tradeInfo) {
   const { symbol, action, quantity, price, usdt } = tradeInfo;
   
   // Format the message
-  const emoji = action.toLowerCase() === 'buy' ? '=â BUY' : '=4 SELL';
+  const emoji = action.toLowerCase() === 'buy' ? '=ï¿½ BUY' : '=4 SELL';
   const message = `
 <b>${emoji}: ${symbol}</b>
 
 Quantity: ${quantity} ${symbol}
-Price: $${price.toFixed(2)}
-Value: $${usdt.toFixed(2)}
+Price: $${price.toFixed(4)}
+Value: $${usdt.toFixed(4)}
 Time: ${new Date().toLocaleString()}
   `;
   
@@ -170,11 +184,11 @@ async function sendStatusNotification(status) {
   }
   
   const message = `
-= <b>SYSTEM STATUS</b>
+= <b>SYSTEM STATUS</b>
 
-Server: ${serverRunning ? '' : 'L'}
-Database: ${dbConnected ? '' : 'L'}
-Binance API: ${binanceConnected ? '' : 'L'}
+Server: ${serverRunning ? '' : 'L'}
+Database: ${dbConnected ? '' : 'L'}
+Binance API: ${binanceConnected ? '' : 'L'}
 ${balanceInfo}
 Time: ${new Date().toLocaleString()}
   `;

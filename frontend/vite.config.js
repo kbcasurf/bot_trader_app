@@ -12,6 +12,27 @@ export default defineConfig({
       port: 80,
       clientPort: 8080,
       host: 'localhost',
+    },
+    proxy: {
+      // Proxy all socket.io requests to the backend
+      '/socket.io': {
+        target: 'http://backend:3000',
+        ws: true, // Enable WebSocket proxying
+        changeOrigin: true,
+        secure: false
+      },
+      // Proxy API requests to backend
+      '/api': {
+        target: 'http://backend:3000',
+        changeOrigin: true,
+        secure: false
+      },
+      // Proxy health check to backend
+      '/health': {
+        target: 'http://backend:3000',
+        changeOrigin: true,
+        secure: false
+      }
     }
   },
   build: {

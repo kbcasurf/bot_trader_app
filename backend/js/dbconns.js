@@ -6,63 +6,134 @@ const mariadb = require('mariadb');
 const dotenv = require('dotenv');
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: require('path').resolve(__dirname, '../../.env') });
 
-// Database connection configuration
+// Database connection configuration with better defaults and connection handling
 const dbConfig = {
   host: process.env.DB_HOST || 'database',
-  port: process.env.DB_PORT || 3306,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  connectionLimit: 5,
-  connectTimeout: 10000
+  port: parseInt(process.env.DB_PORT || '3306'),
+  user: process.env.DB_USER || 'trading_bot_user',
+  password: process.env.DB_PASSWORD || 'mariadb_secret',
+  database: process.env.DB_NAME || 'crypto_trading_bot',
+  connectionLimit: 10,
+  acquireTimeout: 30000,     // Longer timeout for acquiring connections (30s)
+  connectTimeout: 20000,     // Longer connection timeout (20s)
+  idleTimeout: 60000,        // How long connections can remain idle (60s)
+  maxIdle: 5,                // Max idle connections to keep in pool
+  trace: process.env.NODE_ENV !== 'production', // Stack trace for debugging in non-production
+  multipleStatements: false, // Security: disable multiple statements
+  dateStrings: true,         // Return dates as strings for consistency
+  resetAfterUse: true,       // Reset connection state after use
+  timezone: 'Z',             // UTC timezone for consistency
+  // Connection retry strategy
+  canRetry: true,            // Enable connection retries
+  acquireRetryDelay: 2000,   // Delay between connection retry attempts
+  acquireRetries: 5          // Number of connection retries
 };
 
 // Create a connection pool
 let pool = null;
 let isConnected = false;
 
+// Keep track of connection attempts to prevent endless retries
+let connectionAttempts = 0;
+const MAX_INIT_ATTEMPTS = 5;
+const CONNECTION_BACKOFF_MS = 3000; // 3 seconds
+
 /**
- * Initialize the database connection pool
+ * Initialize the database connection pool with retry mechanism
  * @returns {Promise<boolean>} True if initialization was successful
  */
 async function initialize() {
   try {
-    console.log('Initializing database connection pool...');
+    if (connectionAttempts >= MAX_INIT_ATTEMPTS) {
+      console.error(`Failed to connect to database after ${MAX_INIT_ATTEMPTS} attempts. Will operate in degraded mode.`);
+      return false;
+    }
     
-    // Create the connection pool
-    pool = mariadb.createPool(dbConfig);
+    connectionAttempts++;
+    console.log(`Initializing database connection pool (attempt ${connectionAttempts}/${MAX_INIT_ATTEMPTS})...`);
     
-    // Test the connection
-    const connection = await pool.getConnection();
+    // Create the connection pool if it doesn't exist
+    if (!pool) {
+      pool = mariadb.createPool(dbConfig);
+      
+      // Only log connection errors, not normal connection acquisition/release
+      // This reduces log noise for normal database operations
+      pool.on('error', function(err) {
+        console.error('Database connection error:', err);
+        // Only reset connection status for fatal errors
+        if (err.fatal) {
+          isConnected = false;
+        }
+      });
+    }
+    
+    // Test the connection with a timeout
+    const connection = await Promise.race([
+      pool.getConnection(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Connection timeout')), dbConfig.connectTimeout)
+      )
+    ]);
+    
     console.log('Database connection successful');
+    
+    // Check database version and server info for debugging
+    const [versionResult] = await connection.query('SELECT VERSION() as version');
+    console.log(`Connected to MariaDB version: ${versionResult.version}`);
     
     // Release the connection back to the pool
     connection.release();
     
+    // Reset connection attempts on success
+    connectionAttempts = 0;
     isConnected = true;
     return true;
   } catch (error) {
-    console.error('Failed to initialize database connection:', error);
+    console.error(`Failed to initialize database connection (attempt ${connectionAttempts}/${MAX_INIT_ATTEMPTS}):`, error);
     isConnected = false;
+    
+    // Try to reconnect after a delay, with increasing backoff
+    if (connectionAttempts < MAX_INIT_ATTEMPTS) {
+      const backoffTime = CONNECTION_BACKOFF_MS * connectionAttempts;
+      console.log(`Will retry database connection in ${backoffTime}ms...`);
+      await new Promise(resolve => setTimeout(resolve, backoffTime));
+      return initialize(); // Retry recursively
+    }
+    
     return false;
   }
 }
 
 /**
- * Get a connection from the pool
+ * Get a connection from the pool with better error handling
  * @returns {Promise<Object>} A database connection
  */
 async function getConnection() {
-  if (!pool) {
+  // If not connected, try to initialize (but only if we haven't exceeded max attempts)
+  if (!isConnected && connectionAttempts < MAX_INIT_ATTEMPTS) {
     await initialize();
+  }
+  
+  // If still not connected after initialization attempt, throw error
+  if (!isConnected) {
+    throw new Error('Database connection unavailable - operating in degraded mode');
   }
   
   try {
     return await pool.getConnection();
   } catch (error) {
     console.error('Error getting database connection:', error);
+    
+    // If error appears to be a connection issue, mark as disconnected
+    if (error.code === 'ECONNREFUSED' || error.code === 'ER_ACCESS_DENIED_ERROR' || 
+        error.code === 'ER_GET_CONNECTION_TIMEOUT' || error.code === 'PROTOCOL_CONNECTION_LOST') {
+      isConnected = false;
+      // Trigger reconnection attempt on next query
+      connectionAttempts = 0;
+    }
+    
     throw error;
   }
 }
@@ -76,23 +147,70 @@ function isReady() {
 }
 
 /**
- * Execute a SQL query
+ * Execute a SQL query with retry logic for transient errors
  * @param {string} sql - The SQL query to execute
  * @param {Array} params - The parameters for the query
+ * @param {Object} options - Query options
+ * @param {number} options.retries - Number of retries for transient errors (default: 2)
+ * @param {number} options.retryDelay - Delay between retries in ms (default: 1000)
  * @returns {Promise<Object>} The query result
  */
-async function query(sql, params = []) {
-  let conn;
-  try {
-    conn = await getConnection();
-    const result = await conn.query(sql, params);
-    return result;
-  } catch (error) {
-    console.error('Database query error:', error);
-    throw error;
-  } finally {
-    if (conn) conn.release();
+async function query(sql, params = [], options = {}) {
+  const retries = options.retries || 2;
+  const retryDelay = options.retryDelay || 1000;
+  let attempt = 0;
+  let lastError = null;
+  
+  while (attempt <= retries) {
+    let conn;
+    try {
+      conn = await getConnection();
+      
+      // Add query timeout for safety
+      const queryOptions = { 
+        timeout: 15000 // 15 second timeout for queries
+      };
+      
+      const result = await conn.query({
+        sql,
+        values: params,
+        ...queryOptions
+      });
+      
+      return result;
+    } catch (error) {
+      lastError = error;
+      console.error(`Database query error (attempt ${attempt + 1}/${retries + 1}):`, error);
+      
+      // Determine if error is transient and eligible for retry
+      const isTransientError = 
+        error.code === 'ER_LOCK_DEADLOCK' ||
+        error.code === 'ER_LOCK_WAIT_TIMEOUT' ||
+        error.code === 'ER_QUERY_INTERRUPTED' ||
+        error.code === 'PROTOCOL_CONNECTION_LOST' ||
+        error.code === 'ER_QUERY_TIMEOUT';
+      
+      if (isTransientError && attempt < retries) {
+        attempt++;
+        console.log(`Retrying query in ${retryDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        continue;
+      } else {
+        throw error;
+      }
+    } finally {
+      if (conn) {
+        try {
+          conn.release();
+        } catch (releaseError) {
+          console.error('Error releasing database connection:', releaseError);
+        }
+      }
+    }
   }
+  
+  // This should never be reached due to the throw in the loop, but just in case
+  throw lastError || new Error('Unknown error executing database query');
 }
 
 /**
@@ -261,6 +379,91 @@ async function getAllTradingSymbols() {
 }
 
 /**
+ * Update account balances in the database
+ * @param {Object} balances - The account balances { symbol: amount }
+ * @returns {Promise<boolean>} Success status
+ */
+async function updateAccountBalances(balances) {
+  if (!balances) {
+    throw new Error('No balance data provided');
+  }
+
+  // First check if the account_balances table exists, create it if not
+  try {
+    const checkTableSql = `
+      CREATE TABLE IF NOT EXISTS account_balances (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        symbol VARCHAR(20) NOT NULL UNIQUE,
+        balance DECIMAL(18, 8) NOT NULL DEFAULT 0,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_symbol (symbol)
+      )
+    `;
+    
+    await query(checkTableSql);
+    
+    // Insert or update balances for each symbol
+    for (const [symbol, balance] of Object.entries(balances)) {
+      const upsertSql = `
+        INSERT INTO account_balances (symbol, balance, last_updated)
+        VALUES (?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          balance = VALUES(balance),
+          last_updated = NOW()
+      `;
+      
+      await query(upsertSql, [symbol, balance]);
+    }
+    
+    console.log('Account balances updated in database');
+    return true;
+  } catch (error) {
+    console.error('Error updating account balances in database:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get current account balances from the database
+ * @returns {Promise<Object>} The account balances { symbol: amount }
+ */
+async function getAccountBalances() {
+  try {
+    // Check if the table exists first
+    const checkTableSql = `
+      CREATE TABLE IF NOT EXISTS account_balances (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        symbol VARCHAR(20) NOT NULL UNIQUE,
+        balance DECIMAL(18, 8) NOT NULL DEFAULT 0,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_symbol (symbol)
+      )
+    `;
+    
+    await query(checkTableSql);
+    
+    // Get all balances
+    const sql = `
+      SELECT symbol, balance
+      FROM account_balances
+    `;
+    
+    const result = await query(sql);
+    
+    // Convert to object
+    const balances = {};
+    for (const row of result) {
+      balances[row.symbol] = parseFloat(row.balance);
+    }
+    
+    return balances;
+  } catch (error) {
+    console.error('Error getting account balances from database:', error);
+    throw error;
+  }
+}
+
+/**
  * Close the database connection pool
  */
 async function close() {
@@ -284,5 +487,7 @@ module.exports = {
   getCurrentHoldings,
   calculateTradingThresholds,
   getAllTradingSymbols,
+  updateAccountBalances,
+  getAccountBalances,
   close
 };

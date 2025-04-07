@@ -194,9 +194,14 @@ function setupWebSocketMonitor() {
     </div>
   `;
   
-  // Add to page
+  // Add to page - add at the end of main container, before the disclaimer
   const mainContainer = document.querySelector('main') || document.body;
-  mainContainer.prepend(monitorContainer);
+  const disclaimerLink = document.querySelector('.disclaimer-link');
+  if (disclaimerLink) {
+    mainContainer.insertBefore(monitorContainer, disclaimerLink);
+  } else {
+    mainContainer.appendChild(monitorContainer);
+  }
   
   // Set up auto-trading toggle button
   const toggleButton = document.getElementById('toggle-auto-trading');
@@ -567,10 +572,17 @@ function handleAccountInfoUpdate(data) {
   // Extract USDT balance from account info
   let usdtBalance = 0;
   
-  if (data.balances && Array.isArray(data.balances)) {
+  // First, check for database balances which are more reliable
+  if (data.databaseBalances && data.databaseBalances.USDT !== undefined) {
+    usdtBalance = parseFloat(data.databaseBalances.USDT) || 0;
+    console.log('Using USDT balance from database:', usdtBalance);
+  }
+  // Fallback to direct Binance API data if database balance isn't available
+  else if (data.balances && Array.isArray(data.balances)) {
     const usdtAsset = data.balances.find(b => b.asset === 'USDT');
     if (usdtAsset) {
       usdtBalance = parseFloat(usdtAsset.free) || 0;
+      console.log('Using USDT balance from Binance API:', usdtBalance);
     }
   }
   
@@ -658,6 +670,14 @@ function setupNotificationSystem() {
   document.addEventListener('showNotification', (event) => {
     if (event.detail) {
       showNotification(event.detail.message, event.detail.type);
+    }
+  });
+  
+  // Listen for USDT balance update events from cards.js
+  document.addEventListener('usdt-balance-update', (event) => {
+    if (event.detail && typeof event.detail.balance === 'number') {
+      dashboardState.usdtBalance = event.detail.balance;
+      updateBalanceDisplay();
     }
   });
 }

@@ -42,8 +42,19 @@ function initialize(socket) {
   
   // Register for batch data updates
   socket.on('batch-data-result', (results) => {
+    // Check if we have a USDT balance and emit an event for it
+    if (results.USDT && results.USDT.balance !== undefined) {
+      const usdtEvent = new CustomEvent('usdt-balance-update', {
+        detail: { balance: results.USDT.balance }
+      });
+      document.dispatchEvent(usdtEvent);
+    }
+    
+    // Process each crypto card data (skip USDT as it's not a card)
     for (const [symbol, data] of Object.entries(results)) {
-      updateCardData(symbol, data);
+      if (symbol !== 'USDT') {
+        updateCardData(symbol, data);
+      }
     }
   });
   
@@ -75,8 +86,8 @@ function createCard(crypto) {
   card.id = `card-${symbol.toLowerCase()}`;
   card.dataset.symbol = symbol;
   
-  // Set card header style with crypto color
-  card.style.setProperty('--crypto-color', color);
+  // We no longer need to set individual colors as we use a unified color in CSS
+  // card.style.setProperty('--crypto-color', color);
   
   // Create card HTML
   card.innerHTML = `
@@ -263,25 +274,11 @@ function updatePrice(symbol, price) {
   // Update price display
   const priceElement = card.querySelector(`#${symbol}-price`);
   if (priceElement) {
-    // Format price with appropriate decimal places
-    let formattedPrice;
-    
-    if (price >= 1000) {
-      formattedPrice = price.toLocaleString(undefined, { 
-        minimumFractionDigits: 2, 
-        maximumFractionDigits: 2 
-      });
-    } else if (price >= 1) {
-      formattedPrice = price.toLocaleString(undefined, { 
-        minimumFractionDigits: 2, 
-        maximumFractionDigits: 4 
-      });
-    } else {
-      formattedPrice = price.toLocaleString(undefined, { 
-        minimumFractionDigits: 4, 
-        maximumFractionDigits: 6 
-      });
-    }
+    // Format price with 4 decimal places for all values
+    const formattedPrice = price.toLocaleString(undefined, { 
+      minimumFractionDigits: 4, 
+      maximumFractionDigits: 4 
+    });
     
     priceElement.textContent = `$${formattedPrice}`;
     
@@ -317,7 +314,8 @@ function updateCardData(symbol, data) {
   // Update holdings
   const holdingsElement = card.querySelector(`#${symbol}-holdings`);
   if (holdingsElement && data.holdings !== undefined) {
-    holdingsElement.textContent = `${data.holdings} ${symbol}`;
+    // Always format holdings with 4 decimal places for consistency
+    holdingsElement.textContent = `${parseFloat(data.holdings).toFixed(4)} ${symbol}`;
     
     // Enable/disable sell button based on holdings
     const sellButton = card.querySelector(`#${symbol}-sell`);
@@ -329,14 +327,14 @@ function updateCardData(symbol, data) {
   // Update next buy price
   const nextBuyElement = card.querySelector(`#${symbol}-next-buy`);
   if (nextBuyElement && data.nextBuyPrice !== undefined) {
-    nextBuyElement.textContent = `$${data.nextBuyPrice.toFixed(2)}`;
+    nextBuyElement.textContent = `$${data.nextBuyPrice.toFixed(4)}`;
   }
   
   // Update next sell price
   const nextSellElement = card.querySelector(`#${symbol}-next-sell`);
   if (nextSellElement && data.nextSellPrice !== undefined) {
     nextSellElement.textContent = data.nextSellPrice > 0
-      ? `$${data.nextSellPrice.toFixed(2)}`
+      ? `$${data.nextSellPrice.toFixed(4)}`
       : 'N/A';
   }
   
@@ -422,8 +420,8 @@ function updateTransactionHistory(symbol, history) {
       
       li.innerHTML = `
         <span class="transaction-type">${action.toUpperCase()}</span>
-        <span class="transaction-amount">${quantity} ${symbol}</span>
-        <span class="transaction-price">$${parseFloat(price).toFixed(2)}</span>
+        <span class="transaction-amount">${parseFloat(quantity).toFixed(4)} ${symbol}</span>
+        <span class="transaction-price">$${parseFloat(price).toFixed(4)}</span>
         <span class="transaction-time">${formattedDate} ${formattedTime}</span>
       `;
       

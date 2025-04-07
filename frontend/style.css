@@ -3,7 +3,7 @@
 /* Variables and Root Styles */
 :root {
   /* Color scheme - Light mode */
-  --bg-color: #f5f7fa;
+  --bg-color: #f0f2f5;
   --card-bg: #ffffff;
   --text-color: #333333;
   --secondary-text: #666666;
@@ -23,6 +23,7 @@
   --button-secondary: #e0e0e0;
   --button-secondary-hover: #d0d0d0;
   --disabled-color: #bdbdbd;
+  --card-header-bg: #3a7bd5;  /* New unified color for card headers */
   
   /* Font settings */
   --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -44,6 +45,7 @@ body.dark-mode {
   --slider-track: #333333;
   --button-secondary: #333333;
   --button-secondary-hover: #444444;
+  --card-header-bg: #2c5282;  /* Darker blue for dark mode */
 }
 
 /* Global Styles */
@@ -78,6 +80,18 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+}
+
+.header-logo {
+  width: 48px;
+  height: 48px;
+  margin-right: 12px;
 }
 
 .header-left h1 {
@@ -105,13 +119,14 @@ footer {
   font-size: 0.9rem;
 }
 
-/* Status Monitor */
+/* Status Monitor - moved to end of main content */
 .status-monitor {
   background-color: var(--card-bg);
   border-radius: var(--card-border-radius);
   border: 1px solid var(--border-color);
   padding: var(--spacing-unit);
-  margin-bottom: var(--spacing-unit);
+  margin-top: var(--spacing-unit);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .status-section {
@@ -158,6 +173,7 @@ footer {
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .balance-label {
@@ -181,21 +197,21 @@ footer {
 
 /* Crypto Card */
 .crypto-card {
-  --crypto-color: #2196f3; /* Default color, overridden via JS */
   background-color: var(--card-bg);
   border-radius: var(--card-border-radius);
   border: 1px solid var(--border-color);
   overflow: hidden;
   transition: transform 0.2s, box-shadow 0.2s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .crypto-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
 }
 
 .card-header {
-  background-color: var(--crypto-color);
+  background-color: var(--card-header-bg);  /* Use unified color instead of individual colors */
   padding: var(--spacing-unit);
   display: flex;
   align-items: center;
@@ -204,8 +220,8 @@ footer {
 }
 
 .crypto-logo {
-  width: 36px;
-  height: 36px;
+  width: 48px;  /* Increased size from 36px to 48px */
+  height: 48px;  /* Increased size from 36px to 48px */
   border-radius: 50%;
   background-color: white;
   padding: 4px;
@@ -633,6 +649,7 @@ input:checked + .slider:before {
   background-color: var(--card-bg);
   border-radius: var(--card-border-radius);
   border: 1px solid var(--border-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .test-buttons {
