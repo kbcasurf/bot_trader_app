@@ -4,16 +4,18 @@ services:
     build: 
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_BACKEND_URL=${EXTERNAL_HOST:+http://${EXTERNAL_HOST}:3000}
     container_name: frontend
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "80:80"  # Use standard port mapping for simplicity
+    environment:
+      - NODE_ENV=production
+      - VITE_BACKEND_URL=${EXTERNAL_HOST:+http://${EXTERNAL_HOST}:3000}
     volumes:
       # Only mount the images directory for easier updates
       - ./frontend/images:/usr/share/nginx/html/images:ro
-    environment:
-      - NODE_ENV=production  # Production mode for better performance
-      - VITE_BACKEND_URL=http://backend:3000
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
       interval: 30s
@@ -43,12 +45,15 @@ services:
     container_name: backend
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3000:3000"  # Use standard port mapping for simplicity
+    networks:
+      - bot-network
     volumes:
       - ./.env:/app/.env:ro
     environment:
       - NODE_ENV=production
       - DB_HOST=database
+      - EXTERNAL_HOST=${EXTERNAL_HOST}
       - DB_USER=${DB_USER:-trading_bot_user}
       - DB_PASSWORD=${DB_PASSWORD:-mariadb_secret}
       - DB_NAME=${DB_NAME:-crypto_trading_bot}

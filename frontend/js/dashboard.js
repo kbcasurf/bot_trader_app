@@ -87,13 +87,14 @@ function initialize() {
  * Initialize the Socket.IO connection to the backend
  */
 function initializeSocketConnection() {
-  // Determine the backend URL
-  const backendUrl = process.env.VITE_BACKEND_URL || 'http://localhost:3000';
+  // Determine the backend URL - use import.meta.env for Vite environment variables
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+  console.log('Connecting to backend WebSocket at:', backendUrl);
   
   // Create the Socket.IO connection
   dashboardState.socket = io(backendUrl, {
     reconnectionDelayMax: 10000,
-    transports: ['websocket']
+    transports: ['websocket', 'polling'] // Add polling as fallback for better compatibility
   });
   
   // Initialize Cards module with socket connection

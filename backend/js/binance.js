@@ -327,11 +327,19 @@ function handleWebSocketMessage(data) {
 function handleWebSocketError(error) {
   console.error('WebSocket error occurred:', error.message);
   
+  // Save auto-trading state before disabling trading
+  const wasAutoTradingEnabled = state.autoTradingEnabled;
+  
   // Update state
   state.isConnected = false;
   state.serviceStatus.wsConnected = false;
   state.tradingEnabled = false; // Disable trading when WebSocket is down
   state.serviceStatus.lastError = error.message;
+  
+  // If auto-trading was enabled, send notification that it's temporarily disabled
+  if (wasAutoTradingEnabled) {
+    telegram.sendMessage('⚠️ Auto-trading temporarily disabled due to WebSocket connection error. Will be restored upon reconnection.');
+  }
   
   // Notify users
   console.log('Trading has been halted due to WebSocket connection error');
@@ -339,7 +347,7 @@ function handleWebSocketError(error) {
   notifyConnectionChange(false);
   
   // Schedule reconnection
-  scheduleReconnect();
+  scheduleReconnect(null, wasAutoTradingEnabled);
 }
 
 /**
@@ -348,10 +356,18 @@ function handleWebSocketError(error) {
  * @param {string} reason - The close reason
  */
 function handleWebSocketClose(code, reason) {
+  // Save auto-trading state before disabling trading
+  const wasAutoTradingEnabled = state.autoTradingEnabled;
+  
   // Update state
   state.isConnected = false;
   state.serviceStatus.wsConnected = false;
   state.tradingEnabled = false; // Disable trading when WebSocket is down
+  
+  // If auto-trading was enabled, send notification that it's temporarily disabled
+  if (wasAutoTradingEnabled) {
+    telegram.sendMessage('⚠️ Auto-trading temporarily disabled due to WebSocket connection closure. Will be restored upon reconnection.');
+  }
   
   // Notify users
   console.log('Trading has been halted due to WebSocket connection closure');
@@ -359,7 +375,7 @@ function handleWebSocketClose(code, reason) {
   notifyConnectionChange(false);
   
   // Schedule reconnection
-  scheduleReconnect();
+  scheduleReconnect(null, wasAutoTradingEnabled);
 }
 
 /**
@@ -398,8 +414,9 @@ function closeWebSocketConnection() {
 /**
  * Schedule a reconnection attempt with exponential backoff
  * @param {number} delay - Optional delay override (ms)
+ * @param {boolean} restoreAutoTrading - Whether to restore auto-trading state after reconnection
  */
-function scheduleReconnect(delay = null) {
+function scheduleReconnect(delay = null, restoreAutoTrading = false) {
   // Clear any existing reconnection interval
   if (state.wsReconnectInterval) {
     clearInterval(state.wsReconnectInterval);
@@ -427,11 +444,20 @@ function scheduleReconnect(delay = null) {
       if (state.isConnected) {
         state.tradingEnabled = true;
         console.log('Trading has been re-enabled as WebSocket connection is established');
-        telegram.sendMessage('Trading resumed: WebSocket connection to Binance established');
+        telegram.sendMessage('✅ Trading resumed: WebSocket connection to Binance established');
+        
+        // Restore auto-trading state if it was previously enabled
+        if (restoreAutoTrading) {
+          state.autoTradingEnabled = true;
+          console.log('Auto-trading has been automatically re-enabled');
+          telegram.sendMessage('🤖 Auto-trading has been automatically re-enabled after connection was restored');
+          // Notify clients about auto-trading status change
+          binanceEvents.emit('auto_trading_status', { enabled: true });
+        }
       }
     } catch (error) {
       console.error('Failed to reconnect to Binance WebSocket:', error);
-      scheduleReconnect(); // Schedule another reconnection attempt
+      scheduleReconnect(null, restoreAutoTrading); // Schedule another reconnection attempt, preserving auto-trading flag
     }
   }, reconnectDelay);
 }
@@ -892,11 +918,24 @@ function setAutoTrading(enabled) {
     throw new Error('Cannot enable auto-trading: WebSocket connection is down');
   }
   
+  // Check if this is actually a change in state
+  const isStateChange = state.autoTradingEnabled !== enabled;
+  
+  // Update state
   state.autoTradingEnabled = enabled;
   console.log(`Auto-trading ${enabled ? 'enabled' : 'disabled'}`);
   
-  // Notify via Telegram
-  telegram.sendMessage(`> Auto-trading has been ${enabled ? 'enabled' : 'disabled'}`);
+  // Notify via Telegram with different message formats based on enabled state
+  if (enabled) {
+    telegram.sendMessage(`✅ Auto-trading has been enabled. The bot will now automatically execute trades according to your strategy.`);
+  } else {
+    // Add more details for disablement - indicate whether it was manual or system-initiated
+    const disableReason = isStateChange ? 'manually' : 'already';
+    telegram.sendMessage(`🛑 Auto-trading has been ${disableReason} disabled. No automatic trades will be executed until re-enabled.`);
+  }
+  
+  // Emit auto-trading status change event
+  binanceEvents.emit('auto_trading_status', { enabled: enabled });
 }
 
 /**
@@ -942,6 +981,22 @@ function onConnectionChange(handler) {
         handler(isConnected);
       } catch (error) {
         console.error('Error in connection change handler:', error);
+      }
+    });
+  }
+}
+
+/**
+ * Register a handler for auto-trading status changes
+ * @param {Function} handler - The handler function(statusData)
+ */
+function onAutoTradingStatusChange(handler) {
+  if (typeof handler === 'function') {
+    binanceEvents.on('auto_trading_status', (statusData) => {
+      try {
+        handler(statusData);
+      } catch (error) {
+        console.error('Error in auto-trading status change handler:', error);
       }
     });
   }
@@ -1127,6 +1182,7 @@ module.exports = {
   onPriceUpdate,
   onOrderUpdate,
   onConnectionChange,
+  onAutoTradingStatusChange,
   getSupportedSymbols: () => [...state.supportedSymbols],
   getCurrentPrice: (symbol) => state.lastPrices.get(symbol) || 0,
   getHealthStatus,

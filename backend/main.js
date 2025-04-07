@@ -20,6 +20,8 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 console.log('====== ENVIRONMENT DEBUG INFO ======');
 console.log(`API URL: ${process.env.BINANCE_API_URL}`);
 console.log(`WebSocket URL: ${process.env.BINANCE_WEBSOCKET_URL}`);
+console.log(`External Host: ${process.env.EXTERNAL_HOST || 'Not set'}`);
+console.log(`Backend URL: ${process.env.VITE_BACKEND_URL || 'Not set'}`);
 console.log(`Using testnet environment: ${process.env.BINANCE_API_URL?.includes('testnet') ? 'YES' : 'NO'}`);
 console.log('===================================');
 
@@ -27,16 +29,53 @@ console.log('===================================');
 const app = express();
 const server = http.createServer(app);
 
-// Middleware
-app.use(cors());
+// Middleware - disable CORS restrictions completely
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: '*',
+  credentials: true
+}));
 app.use(express.json());
 
-// Create Socket.IO server
+// Additional headers to ensure CORS is disabled
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', '*');
+  next();
+});
+
+// Determine the allowed origins for Socket.IO
+let corsOrigin = "*";
+if (process.env.EXTERNAL_HOST) {
+  corsOrigin = [
+    `http://${process.env.EXTERNAL_HOST}`,
+    `http://${process.env.EXTERNAL_HOST}:80`,
+    "http://localhost",
+    "http://localhost:80",
+    "http://localhost:3000"
+  ];
+}
+
+// Get transports from environment or use defaults
+const transports = (process.env.SOCKET_TRANSPORTS || 'websocket,polling').split(',');
+console.log(`Socket.IO using transports: ${transports.join(', ')}`);
+
+// Create Socket.IO server with fully permissive CORS
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+    origin: corsOrigin,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    credentials: true
+  },
+  path: '/socket.io',
+  transports: transports,
+  allowEIO3: true, // For compatibility with older clients
+  pingTimeout: 60000, // Increase ping timeout for better connection stability
+  pingInterval: 25000, // More frequent pings to detect disconnections faster
+  connectTimeout: 30000 // Allow more time for initial connection
 });
 
 // Application state
@@ -155,6 +194,12 @@ function setupBinanceHandlers() {
     appState.isBinanceConnected = isConnected;
     // Broadcast connection status to all connected clients
     io.emit('binance-connection', { connected: isConnected });
+  });
+  
+  // Handle auto-trading status changes
+  binance.onAutoTradingStatusChange((statusData) => {
+    // Broadcast auto-trading status to all connected clients
+    io.emit('auto-trading-status', statusData);
   });
 }
 

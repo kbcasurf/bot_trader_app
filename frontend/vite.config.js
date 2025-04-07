@@ -10,26 +10,25 @@ export default defineConfig({
     strictPort: true,
     hmr: {
       port: 80,
-      clientPort: 8080,
-      host: 'localhost',
+      host: process.env.EXTERNAL_HOST || 'localhost',
     },
     proxy: {
       // Proxy all socket.io requests to the backend
       '/socket.io': {
-        target: 'http://backend:3000',
+        target: process.env.VITE_BACKEND_URL || 'http://backend:3000',
         ws: true, // Enable WebSocket proxying
         changeOrigin: true,
         secure: false
       },
       // Proxy API requests to backend
       '/api': {
-        target: 'http://backend:3000',
+        target: process.env.VITE_BACKEND_URL || 'http://backend:3000',
         changeOrigin: true,
         secure: false
       },
       // Proxy health check to backend
       '/health': {
-        target: 'http://backend:3000',
+        target: process.env.VITE_BACKEND_URL || 'http://backend:3000',
         changeOrigin: true,
         secure: false
       }

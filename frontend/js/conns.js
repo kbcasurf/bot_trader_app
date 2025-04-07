@@ -20,13 +20,15 @@ function initialize() {
     return connectionState.socket;
   }
   
-  // Use relative URL to leverage Vite's proxy or window.location.origin for production
-  const backendUrl = window.location.origin;
+  // Use configured backend URL if available, otherwise fallback to origin
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || window.location.origin;
+  console.log('Connecting to backend WebSocket at:', backendUrl);
   
   // Create socket connection
   connectionState.socket = io(backendUrl, {
     reconnectionDelayMax: 10000,
-    transports: ['websocket', 'polling'] // Allow fallback to polling if WebSocket fails
+    transports: ['websocket', 'polling'], // Allow fallback to polling if WebSocket fails
+    path: '/socket.io'
   });
   
   // Set up event handlers
