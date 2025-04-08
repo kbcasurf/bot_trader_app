@@ -879,29 +879,49 @@ async function checkAutoTrading(symbol, currentPrice) {
   }
   
   try {
-    // Get trading thresholds
+    // Get reference prices and thresholds from database
+    const refPrices = await db.getReferencePrice(symbol);
     const thresholds = await db.calculateTradingThresholds(symbol, currentPrice);
     
     // Get current holdings
     const holdings = await db.getCurrentHoldings(symbol);
     
-    // Check if we should buy (price below buy threshold)
+    // Log price comparison for debugging
+    if (Math.random() < 0.01) { // Only log occasionally to reduce spam
+      console.log(`Auto-trading check for ${symbol}: Current Price = $${currentPrice.toFixed(4)}, ` + 
+                  `Next Buy = $${thresholds.nextBuyPrice.toFixed(4)}, Next Sell = $${thresholds.nextSellPrice.toFixed(4)}`);
+    }
+    
+    // Check if we should buy (price at or below fixed buy threshold)
     if (currentPrice <= thresholds.nextBuyPrice) {
       // Only buy if we have USDT available
       const accountInfo = await getAccountInfo();
       const usdtBalance = accountInfo.balances.find(b => b.asset === 'USDT');
       
       if (usdtBalance && parseFloat(usdtBalance.free) >= 50) {
-        console.log(`Auto-trading: Buying ${symbol} at $${currentPrice}`);
-        // Use the price from WebSocket directly instead of making a new API call
+        console.log(`Auto-trading: Buying ${symbol} at $${currentPrice.toFixed(4)} (Buy threshold: $${thresholds.nextBuyPrice.toFixed(4)})`);
+        
+        // Execute buy - this will also update the reference prices in recordTrade function
         await buyWithUsdt(symbol, 50);
+        
+        // No need to manually update reference prices here as it's done in recordTrade
+        // Logging for clarity
+        console.log(`Auto-trading buy executed: ${symbol} at $${currentPrice.toFixed(4)}`);
+      } else {
+        console.log(`Auto-trading buy skipped for ${symbol}: Insufficient USDT balance`);
       }
     }
     
-    // Check if we should sell (price above sell threshold and we have holdings)
+    // Check if we should sell (price at or above fixed sell threshold and we have holdings)
     if (currentPrice >= thresholds.nextSellPrice && holdings.quantity > 0) {
-      console.log(`Auto-trading: Selling ${symbol} at $${currentPrice}`);
+      console.log(`Auto-trading: Selling ${symbol} at $${currentPrice.toFixed(4)} (Sell threshold: $${thresholds.nextSellPrice.toFixed(4)})`);
+      
+      // Execute sell - this will also update the reference prices in recordTrade function
       await sellAll(symbol);
+      
+      // No need to manually update reference prices here as it's done in recordTrade
+      // Logging for clarity
+      console.log(`Auto-trading sell executed: ${symbol} at $${currentPrice.toFixed(4)}`);
     }
   } catch (error) {
     console.error(`Error in auto-trading check for ${symbol}:`, error);
