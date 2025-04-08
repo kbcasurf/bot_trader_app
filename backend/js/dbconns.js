@@ -504,17 +504,33 @@ async function getReferencePrice(symbol) {
     const result = await query(sql, [symbol]);
     
     if (result.length === 0) {
-      // If no reference prices exist, create a new entry
+      // If no reference prices exist, create a new entry with ON DUPLICATE KEY UPDATE
       const insertSql = `
         INSERT INTO reference_prices 
         (symbol, initial_purchase_price, last_purchase_price, last_sell_price, 
          next_buy_threshold, next_sell_threshold)
         VALUES (?, 0, 0, 0, 0, 0)
+        ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP
       `;
       
       await query(insertSql, [symbol]);
       
-      // Return default values
+      // Query again to get the record (whether it was inserted or already existed)
+      const result = await query(sql, [symbol]);
+      
+      if (result.length > 0) {
+        return {
+          symbol,
+          initialPurchasePrice: parseFloat(result[0].initial_purchase_price),
+          lastPurchasePrice: parseFloat(result[0].last_purchase_price),
+          lastSellPrice: parseFloat(result[0].last_sell_price),
+          nextBuyThreshold: parseFloat(result[0].next_buy_threshold),
+          nextSellThreshold: parseFloat(result[0].next_sell_threshold),
+          updatedAt: result[0].updated_at
+        };
+      }
+      
+      // If still no results (unlikely), return default values
       return {
         symbol,
         initialPurchasePrice: 0,

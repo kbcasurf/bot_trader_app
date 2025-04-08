@@ -27,15 +27,7 @@ services:
         condition: service_healthy
     networks:
       - bot-network
-    # Resource limits to avoid container bloat
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
+
 
   # Backend service
   backend:
@@ -78,17 +70,7 @@ services:
     depends_on:
       database:
         condition: service_healthy
-    networks:
-      - bot-network
-    # Resource limits to prevent memory leaks and high CPU usage
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.5'
-          memory: 256M
+        
 
   # Database service
   database:
@@ -125,15 +107,6 @@ services:
       start_period: 60s
     networks:
       - bot-network
-    # Resource limits for database
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
 
 volumes:
   db-data:
