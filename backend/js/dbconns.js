@@ -808,6 +808,115 @@ async function close() {
   }
 }
 
+/**
+ * Save app settings to the database
+ * @param {Object} settings - The settings to save
+ * @returns {Promise<boolean>} Success status
+ */
+async function saveAppSettings(settings) {
+  try {
+    // First check if the app_settings table exists, create it if not
+    const checkTableSql = `
+      CREATE TABLE IF NOT EXISTS app_settings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        setting_key VARCHAR(50) NOT NULL UNIQUE,
+        setting_value TEXT,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_key (setting_key)
+      )
+    `;
+    
+    await query(checkTableSql);
+    
+    // Insert or update settings
+    for (const [key, value] of Object.entries(settings)) {
+      const upsertSql = `
+        INSERT INTO app_settings (setting_key, setting_value, last_updated)
+        VALUES (?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          setting_value = VALUES(setting_value),
+          last_updated = NOW()
+      `;
+      
+      await query(upsertSql, [key, JSON.stringify(value)]);
+    }
+    
+    console.log('App settings saved to database');
+    return true;
+  } catch (error) {
+    console.error('Error saving app settings to database:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get app settings from the database
+ * @param {string} key - The setting key to retrieve (optional, if not provided returns all settings)
+ * @returns {Promise<Object|any>} The settings or specific setting value
+ */
+async function getAppSettings(key = null) {
+  try {
+    // Check if the table exists first
+    const checkTableSql = `
+      CREATE TABLE IF NOT EXISTS app_settings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        setting_key VARCHAR(50) NOT NULL UNIQUE,
+        setting_value TEXT,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_key (setting_key)
+      )
+    `;
+    
+    await query(checkTableSql);
+    
+    let sql, params;
+    
+    // Get specific setting or all settings
+    if (key) {
+      sql = `
+        SELECT setting_key, setting_value
+        FROM app_settings
+        WHERE setting_key = ?
+      `;
+      params = [key];
+    } else {
+      sql = `
+        SELECT setting_key, setting_value
+        FROM app_settings
+      `;
+      params = [];
+    }
+    
+    const result = await query(sql, params);
+    
+    if (key) {
+      // Return the specific setting value or null if not found
+      if (result.length > 0) {
+        try {
+          return JSON.parse(result[0].setting_value);
+        } catch (e) {
+          return result[0].setting_value;
+        }
+      }
+      return null;
+    } else {
+      // Convert to object and parse JSON values
+      const settings = {};
+      for (const row of result) {
+        try {
+          settings[row.setting_key] = JSON.parse(row.setting_value);
+        } catch (e) {
+          settings[row.setting_key] = row.setting_value;
+        }
+      }
+      return settings;
+    }
+  } catch (error) {
+    console.error('Error getting app settings from database:', error);
+    return key ? null : {};
+  }
+}
+
 // Export public API
 module.exports = {
   initialize,
@@ -821,5 +930,7 @@ module.exports = {
   getAccountBalances,
   getReferencePrice,
   updateReferencePrice,
+  saveAppSettings,
+  getAppSettings,
   close
 };

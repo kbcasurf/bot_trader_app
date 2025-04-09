@@ -53,9 +53,138 @@ const WS_CONFIG = {
   reconnectDelay: 2000,      // Initial delay for reconnection attempts
   maxReconnectDelay: 60000,  // Maximum delay for reconnection attempts
   maxReconnectAttempts: 10,  // Maximum number of reconnection attempts
-  heartbeatTimeout: 30000,   // Time without message to trigger reconnect
+  heartbeatTimeout: 60000,   // Increased time without message to trigger reconnect (60s instead of 30s)
   pongTimeout: 5000          // Timeout waiting for pong response
 };
+
+/**
+ * Fetch historical trades for a symbol from Binance API
+ * @param {string} symbol - The trading pair symbol (e.g., "BTCUSDT")
+ * @param {number} limit - The maximum number of trades to fetch (default: 10)
+ * @returns {Promise<Array>} The historical trades
+ */
+async function fetchHistoricalTrades(symbol, limit = 10) {
+  try {
+    console.log(`Fetching historical trades for ${symbol}...`);
+    const basePath = process.env.BINANCE_API_BASE_PATH || '/api';
+    
+    // Prepare the query params
+    const params = {
+      symbol: symbol,
+      limit: limit
+    };
+    
+    // Add timestamp and signature for authenticated request
+    params.timestamp = Date.now();
+    params.recvWindow = 60000;
+    const signature = createSignature(params);
+    params.signature = signature;
+    
+    // Build query string
+    const queryString = Object.keys(params)
+      .map(key => `${key}=${params[key]}`)
+      .join('&');
+    
+    // Make the request to Binance API for my trades
+    const response = await axios.get(
+      `${BINANCE_API_URL}${basePath}/v3/myTrades?${queryString}`,
+      {
+        headers: {
+          'X-MBX-APIKEY': BINANCE_API_KEY
+        },
+        timeout: 10000
+      }
+    );
+    
+    console.log(`Received ${response.data.length} historical trades for ${symbol}`);
+    return response.data;
+  } catch (error) {
+    console.error(`Error fetching historical trades for ${symbol}:`, error.response ? error.response.data : error.message);
+    return [];
+  }
+}
+
+/**
+ * Import historical trades for all supported symbols
+ * @param {boolean} force - Force import even if trades exist
+ * @returns {Promise<Object>} Import statistics
+ */
+async function importHistoricalTrades(force = false) {
+  let importStats = {
+    totalImported: 0,
+    symbolsProcessed: 0,
+    errors: 0
+  };
+  
+  try {
+    console.log('Starting historical trades import...');
+    
+    // Check if we have a valid connection
+    if (!state.serviceStatus.apiConnected) {
+      console.error('Cannot import historical trades: API connection is not available');
+      return importStats;
+    }
+    
+    // Process each supported symbol
+    for (const baseSymbol of state.supportedSymbols) {
+      try {
+        const tradingPair = `${baseSymbol}USDT`;
+        
+        // Check if we already have trades for this symbol in the database
+        const existingTrades = await db.getTradingHistory(baseSymbol);
+        if (existingTrades.length > 0 && !force) {
+          console.log(`Skipping ${baseSymbol}: ${existingTrades.length} trades already exist in database`);
+          continue;
+        }
+        
+        // Fetch historical trades from Binance
+        const trades = await fetchHistoricalTrades(tradingPair, 10);
+        
+        // Process and save each trade
+        let importedCount = 0;
+        for (const trade of trades) {
+          // Transform Binance trade format to our database format
+          const tradeData = {
+            symbol: baseSymbol,
+            action: trade.isBuyer ? 'buy' : 'sell',
+            quantity: parseFloat(trade.qty),
+            price: parseFloat(trade.price),
+            usdt_amount: parseFloat(trade.quoteQty)
+          };
+          
+          // Record the trade in our database
+          await db.recordTrade(tradeData);
+          importedCount++;
+        }
+        
+        console.log(`Imported ${importedCount} historical trades for ${baseSymbol}`);
+        importStats.totalImported += importedCount;
+        importStats.symbolsProcessed++;
+        
+      } catch (error) {
+        console.error(`Error importing trades for ${baseSymbol}:`, error);
+        importStats.errors++;
+      }
+      
+      // Add a small delay between symbols to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    console.log(`Historical trades import complete. Imported ${importStats.totalImported} trades across ${importStats.symbolsProcessed} symbols.`);
+    
+    // After import, update account balances
+    try {
+      await updateAccountBalances();
+    } catch (error) {
+      console.error('Error updating account balances after historical import:', error);
+    }
+    
+    return importStats;
+  } catch (error) {
+    console.error('Error in historical trades import:', error);
+    return importStats;
+  }
+}
 
 /**
  * Initialize the Binance API connection
@@ -107,8 +236,22 @@ async function initialize() {
     // Only enable trading if both API and WebSocket are connected
     state.tradingEnabled = state.serviceStatus.apiConnected && state.isConnected;
     
+    // Load auto-trading state from database if available
+    try {
+      if (db.isReady()) {
+        const savedAutoTradingState = await db.getAppSettings('autoTradingEnabled');
+        if (savedAutoTradingState !== null) {
+          state.autoTradingEnabled = savedAutoTradingState;
+          console.log(`Restored auto-trading state from database: ${state.autoTradingEnabled}`);
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to load auto-trading state from database:', error.message);
+      // Continue anyway - this is not critical
+    }
+    
     // Notify via Telegram
-    telegram.sendMessage(`Binance connection: API=${state.serviceStatus.apiConnected}, WebSocket=${state.isConnected}`);
+    telegram.sendMessage(`Binance connection: API=${state.serviceStatus.apiConnected}, WebSocket=${state.isConnected}, Auto-Trading=${state.autoTradingEnabled}`);
     
     return state.tradingEnabled;
   } catch (error) {
@@ -183,9 +326,10 @@ async function initializeWebSocket() {
         state.lastMessageTime = Date.now();
         
         // Set up heartbeat interval to detect stale connections
+        // Run the check at half the heartbeat timeout interval
         state.wsHeartbeatInterval = setInterval(() => {
           checkWebSocketHealth();
-        }, WS_CONFIG.heartbeatTimeout);
+        }, WS_CONFIG.heartbeatTimeout / 2);
         
         // Notify connection change
         notifyConnectionChange(true);
@@ -388,9 +532,14 @@ function checkWebSocketHealth() {
   if (messageAge > WS_CONFIG.heartbeatTimeout && state.isConnected) {
     console.warn(`No WebSocket messages received for ${messageAge}ms, reconnecting...`);
     
+    // Save auto-trading state before disconnecting
+    const autoTradingWasEnabled = state.autoTradingEnabled;
+    
     // Force reconnection due to stale connection
     closeWebSocketConnection();
-    scheduleReconnect(0); // Immediate reconnect
+    
+    // Pass the auto-trading state to the reconnect function
+    scheduleReconnect(0, autoTradingWasEnabled); // Immediate reconnect with auto-trading restoration
   }
 }
 
@@ -770,8 +919,8 @@ async function buyWithUsdt(symbol, usdtAmount) {
     // Calculate quantity
     const quantity = usdtAmount / currentPrice;
     
-    // Format quantity with appropriate precision
-    const formattedQuantity = formatQuantity(symbol, quantity);
+    // Format quantity with appropriate precision and ensure minimum notional
+    const formattedQuantity = formatQuantity(symbol, quantity, currentPrice);
     
     // Place the order
     return await placeMarketOrder({
@@ -807,9 +956,13 @@ async function sellAll(symbol) {
       throw new Error(`No ${symbol} balance available`);
     }
     
-    // Format quantity with appropriate precision
+    // Get current price from WebSocket for notional value check
+    const tickerData = await getSymbolPrice(`${symbol}USDT`);
+    const currentPrice = parseFloat(tickerData.price);
+    
+    // Format quantity with appropriate precision and ensure minimum notional
     const quantity = parseFloat(asset.free);
-    const formattedQuantity = formatQuantity(symbol, quantity);
+    const formattedQuantity = formatQuantity(symbol, quantity, currentPrice);
     
     // Place the order
     return await placeMarketOrder({
@@ -825,20 +978,22 @@ async function sellAll(symbol) {
 
 /**
  * Format quantity with appropriate precision based on Binance LOT_SIZE filter
+ * and ensure it meets minimum notional value requirements
  * @param {string} symbol - The cryptocurrency symbol
  * @param {number} quantity - The quantity to format
+ * @param {number} currentPrice - The current price of the symbol (for notional calculation)
  * @returns {string} The formatted quantity
  */
-function formatQuantity(symbol, quantity) {
+function formatQuantity(symbol, quantity, currentPrice) {
   // LOT_SIZE filters for each trading pair
   // These should ideally be fetched dynamically from exchangeInfo in production
   const lotSizeFilters = {
-    'BTC': { minQty: 0.00001, maxQty: 9000, stepSize: 0.00001 },
-    'SOL': { minQty: 0.01, maxQty: 9000, stepSize: 0.01 },
-    'XRP': { minQty: 1, maxQty: 90000, stepSize: 1 },       // Updated for XRP
-    'PENDLE': { minQty: 0.1, maxQty: 90000, stepSize: 0.1 },
-    'DOGE': { minQty: 1, maxQty: 90000, stepSize: 1 },      // Updated for DOGE
-    'NEAR': { minQty: 0.1, maxQty: 90000, stepSize: 0.1 }
+    'BTC': { minQty: 0.00001, maxQty: 9000, stepSize: 0.00001, minNotional: 10 },
+    'SOL': { minQty: 0.01, maxQty: 9000, stepSize: 0.01, minNotional: 10 },
+    'XRP': { minQty: 1, maxQty: 90000, stepSize: 1, minNotional: 10 },
+    'PENDLE': { minQty: 0.1, maxQty: 90000, stepSize: 0.1, minNotional: 10 },
+    'DOGE': { minQty: 1, maxQty: 90000, stepSize: 1, minNotional: 10 },
+    'NEAR': { minQty: 0.1, maxQty: 90000, stepSize: 0.1, minNotional: 10 }
   };
   
   // Get LOT_SIZE filter for this symbol
@@ -851,6 +1006,16 @@ function formatQuantity(symbol, quantity) {
   
   // Ensure quantity is within min/max bounds
   quantity = Math.max(filter.minQty, Math.min(filter.maxQty, quantity));
+  
+  // Check if the order meets minimum notional value and adjust if needed
+  if (currentPrice && currentPrice > 0) {
+    const notional = quantity * currentPrice;
+    if (notional < filter.minNotional) {
+      console.log(`Increasing quantity for ${symbol} to meet minimum notional requirement (${notional.toFixed(2)} < ${filter.minNotional})`);
+      quantity = Math.ceil((filter.minNotional / currentPrice) * 100) / 100;
+      console.log(`Adjusted quantity to ${quantity} (notional: ${(quantity * currentPrice).toFixed(2)})`);
+    }
+  }
   
   // Calculate steps and ensure it adheres to stepSize
   // Formula: floor((quantity - minQty) / stepSize) * stepSize + minQty
@@ -874,11 +1039,33 @@ function formatQuantity(symbol, quantity) {
  * @param {number} currentPrice - The current price
  */
 async function checkAutoTrading(symbol, currentPrice) {
-  if (!state.autoTradingEnabled || !state.tradingEnabled || !state.isConnected) {
+  // Early return if auto-trading is not enabled or trading conditions aren't met
+  if (!state.autoTradingEnabled) {
+    return;
+  }
+  
+  if (!state.tradingEnabled) {
+    console.log(`Auto-trading check skipped: Trading is disabled`);
+    return;
+  }
+  
+  if (!state.isConnected) {
+    console.log(`Auto-trading check skipped: WebSocket connection is down`);
+    return;
+  }
+  
+  if (!state.serviceStatus.apiConnected) {
+    console.log(`Auto-trading check skipped: API connection is down`);
     return;
   }
   
   try {
+    // Add more detailed log to track auto-trading executions
+    console.log(`Performing auto-trading check for ${symbol} at price $${currentPrice.toFixed(4)}`);
+    
+    // Emit event for auto-trading check
+    binanceEvents.emit('auto_trading_check', { symbol, price: currentPrice });
+    
     // Get reference prices and thresholds from database
     const refPrices = await db.getReferencePrice(symbol);
     const thresholds = await db.calculateTradingThresholds(symbol, currentPrice);
@@ -886,8 +1073,8 @@ async function checkAutoTrading(symbol, currentPrice) {
     // Get current holdings
     const holdings = await db.getCurrentHoldings(symbol);
     
-    // Log price comparison for debugging
-    if (Math.random() < 0.01) { // Only log occasionally to reduce spam
+    // Log price comparison for debugging - increase frequency to help diagnose issues
+    if (Math.random() < 0.1) { // Log ~10% of checks
       console.log(`Auto-trading check for ${symbol}: Current Price = $${currentPrice.toFixed(4)}, ` + 
                   `Next Buy = $${thresholds.nextBuyPrice.toFixed(4)}, Next Sell = $${thresholds.nextSellPrice.toFixed(4)}`);
     }
@@ -899,14 +1086,31 @@ async function checkAutoTrading(symbol, currentPrice) {
       const usdtBalance = accountInfo.balances.find(b => b.asset === 'USDT');
       
       if (usdtBalance && parseFloat(usdtBalance.free) >= 50) {
-        console.log(`Auto-trading: Buying ${symbol} at $${currentPrice.toFixed(4)} (Buy threshold: $${thresholds.nextBuyPrice.toFixed(4)})`);
+        console.log(`AUTO-TRADING TRIGGERED: Buying ${symbol} at $${currentPrice.toFixed(4)} (Buy threshold: $${thresholds.nextBuyPrice.toFixed(4)})`);
         
-        // Execute buy - this will also update the reference prices in recordTrade function
-        await buyWithUsdt(symbol, 50);
+        // Send telegram notification for auto-trading trigger
+        telegram.sendMessage(`🤖 Auto-trading BUY triggered for ${symbol} at $${currentPrice.toFixed(4)} (below threshold: $${thresholds.nextBuyPrice.toFixed(4)})`);
         
-        // No need to manually update reference prices here as it's done in recordTrade
-        // Logging for clarity
-        console.log(`Auto-trading buy executed: ${symbol} at $${currentPrice.toFixed(4)}`);
+        try {
+          // Execute buy - this will also update the reference prices in recordTrade function
+          const result = await buyWithUsdt(symbol, 50);
+          
+          // No need to manually update reference prices here as it's done in recordTrade
+          // Logging for clarity
+          console.log(`Auto-trading buy executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
+          
+          // Emit auto-trading event
+          binanceEvents.emit('auto_trading_executed', { 
+            symbol, 
+            action: 'buy', 
+            price: currentPrice,
+            amount: 50,
+            orderId: result.orderId
+          });
+        } catch (buyError) {
+          console.error(`Auto-trading buy execution failed for ${symbol}:`, buyError);
+          telegram.sendErrorNotification(`Auto-trading buy execution failed for ${symbol}: ${buyError.message}`);
+        }
       } else {
         console.log(`Auto-trading buy skipped for ${symbol}: Insufficient USDT balance`);
       }
@@ -914,17 +1118,35 @@ async function checkAutoTrading(symbol, currentPrice) {
     
     // Check if we should sell (price at or above fixed sell threshold and we have holdings)
     if (currentPrice >= thresholds.nextSellPrice && holdings.quantity > 0) {
-      console.log(`Auto-trading: Selling ${symbol} at $${currentPrice.toFixed(4)} (Sell threshold: $${thresholds.nextSellPrice.toFixed(4)})`);
+      console.log(`AUTO-TRADING TRIGGERED: Selling ${symbol} at $${currentPrice.toFixed(4)} (Sell threshold: $${thresholds.nextSellPrice.toFixed(4)})`);
       
-      // Execute sell - this will also update the reference prices in recordTrade function
-      await sellAll(symbol);
+      // Send telegram notification for auto-trading trigger
+      telegram.sendMessage(`🤖 Auto-trading SELL triggered for ${symbol} at $${currentPrice.toFixed(4)} (above threshold: $${thresholds.nextSellPrice.toFixed(4)})`);
       
-      // No need to manually update reference prices here as it's done in recordTrade
-      // Logging for clarity
-      console.log(`Auto-trading sell executed: ${symbol} at $${currentPrice.toFixed(4)}`);
+      try {
+        // Execute sell - this will also update the reference prices in recordTrade function
+        const result = await sellAll(symbol);
+        
+        // No need to manually update reference prices here as it's done in recordTrade
+        // Logging for clarity
+        console.log(`Auto-trading sell executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
+        
+        // Emit auto-trading event
+        binanceEvents.emit('auto_trading_executed', { 
+          symbol, 
+          action: 'sell', 
+          price: currentPrice,
+          quantity: holdings.quantity,
+          orderId: result.orderId
+        });
+      } catch (sellError) {
+        console.error(`Auto-trading sell execution failed for ${symbol}:`, sellError);
+        telegram.sendErrorNotification(`Auto-trading sell execution failed for ${symbol}: ${sellError.message}`);
+      }
     }
   } catch (error) {
     console.error(`Error in auto-trading check for ${symbol}:`, error);
+    // Don't disable auto-trading on errors, just log them
   }
 }
 
@@ -932,30 +1154,70 @@ async function checkAutoTrading(symbol, currentPrice) {
  * Enable auto-trading
  * @param {boolean} enabled - Whether auto-trading should be enabled
  */
-function setAutoTrading(enabled) {
-  // Only allow enabling if WebSocket is connected
-  if (enabled && !state.isConnected) {
-    throw new Error('Cannot enable auto-trading: WebSocket connection is down');
+async function setAutoTrading(enabled) {
+  try {
+    console.log(`Attempting to ${enabled ? 'enable' : 'disable'} auto-trading...`);
+    
+    // Only allow enabling if WebSocket is connected and trading is enabled
+    if (enabled) {
+      if (!state.isConnected) {
+        console.error('Cannot enable auto-trading: WebSocket connection is down');
+        throw new Error('Cannot enable auto-trading: WebSocket connection is down');
+      }
+      
+      if (!state.tradingEnabled) {
+        console.error('Cannot enable auto-trading: Trading is currently disabled');
+        throw new Error('Cannot enable auto-trading: Trading is currently disabled');
+      }
+      
+      // Verify API is connected
+      if (!state.serviceStatus.apiConnected) {
+        console.error('Cannot enable auto-trading: API connection is down');
+        throw new Error('Cannot enable auto-trading: API connection is down');
+      }
+    }
+    
+    // Check if this is actually a change in state
+    const isStateChange = state.autoTradingEnabled !== enabled;
+    if (!isStateChange) {
+      console.log(`Auto-trading is already ${enabled ? 'enabled' : 'disabled'}, no change required`);
+    }
+    
+    // Update state
+    state.autoTradingEnabled = enabled;
+    console.log(`Auto-trading ${enabled ? 'enabled' : 'disabled'} successfully`);
+    
+    // Persist state to database
+    try {
+      await db.saveAppSettings({
+        'autoTradingEnabled': enabled,
+        'autoTradingLastUpdated': new Date().toISOString()
+      });
+      console.log(`Auto-trading state persisted to database: ${enabled}`);
+    } catch (error) {
+      console.error('Failed to persist auto-trading state to database:', error);
+      // Continue anyway - this is not critical
+    }
+    
+    // Notify via Telegram with different message formats based on enabled state
+    if (enabled) {
+      telegram.sendMessage(`✅ Auto-trading has been enabled. The bot will now automatically execute trades according to your strategy.`);
+    } else {
+      // Add more details for disablement - indicate whether it was manual or system-initiated
+      const disableReason = isStateChange ? 'manually' : 'already';
+      telegram.sendMessage(`🛑 Auto-trading has been ${disableReason} disabled. No automatic trades will be executed until re-enabled.`);
+    }
+    
+    // Emit auto-trading status change event
+    binanceEvents.emit('auto_trading_status', { enabled: enabled });
+    
+    return true;
+  } catch (error) {
+    console.error(`Failed to ${enabled ? 'enable' : 'disable'} auto-trading:`, error.message);
+    // Make sure to emit the event with the actual current state, not the requested state
+    binanceEvents.emit('auto_trading_status', { enabled: state.autoTradingEnabled, error: error.message });
+    throw error;
   }
-  
-  // Check if this is actually a change in state
-  const isStateChange = state.autoTradingEnabled !== enabled;
-  
-  // Update state
-  state.autoTradingEnabled = enabled;
-  console.log(`Auto-trading ${enabled ? 'enabled' : 'disabled'}`);
-  
-  // Notify via Telegram with different message formats based on enabled state
-  if (enabled) {
-    telegram.sendMessage(`✅ Auto-trading has been enabled. The bot will now automatically execute trades according to your strategy.`);
-  } else {
-    // Add more details for disablement - indicate whether it was manual or system-initiated
-    const disableReason = isStateChange ? 'manually' : 'already';
-    telegram.sendMessage(`🛑 Auto-trading has been ${disableReason} disabled. No automatic trades will be executed until re-enabled.`);
-  }
-  
-  // Emit auto-trading status change event
-  binanceEvents.emit('auto_trading_status', { enabled: enabled });
 }
 
 /**
@@ -1028,8 +1290,16 @@ function onAutoTradingStatusChange(handler) {
  * @param {number} price - The current price
  */
 function notifyPriceUpdate(symbol, price) {
-  // Check auto-trading
-  checkAutoTrading(symbol, price);
+  // Explicitly check if auto-trading is enabled before calling checkAutoTrading
+  if (state.autoTradingEnabled) {
+    console.log(`Auto-trading is enabled, checking conditions for ${symbol} at ${price.toFixed(4)}`);
+    // Use setTimeout to ensure price updates aren't blocked by auto-trading checks
+    setTimeout(() => {
+      checkAutoTrading(symbol, price).catch(err => {
+        console.error(`Error in checkAutoTrading for ${symbol}:`, err);
+      });
+    }, 0);
+  }
   
   // Emit the event to all listeners
   binanceEvents.emit('price_update', { symbol, price });
@@ -1199,6 +1469,7 @@ module.exports = {
   buyWithUsdt,
   sellAll,
   setAutoTrading,
+  checkAutoTrading, // Expose the checkAutoTrading function
   onPriceUpdate,
   onOrderUpdate,
   onConnectionChange,
@@ -1206,5 +1477,9 @@ module.exports = {
   getSupportedSymbols: () => [...state.supportedSymbols],
   getCurrentPrice: (symbol) => state.lastPrices.get(symbol) || 0,
   getHealthStatus,
-  close
+  fetchHistoricalTrades,
+  importHistoricalTrades,
+  close,
+  // Export the events emitter for other modules to use
+  events: binanceEvents
 };

@@ -13,6 +13,9 @@ const binance = require('./js/binance');
 const db = require('./js/dbconns');
 const telegram = require('./js/telegram');
 
+// Get the binance event emitter
+const binanceEvents = binance.events;
+
 // Load environment variables
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
@@ -148,6 +151,21 @@ async function startServer() {
           console.error('Error during initial account balance update:', balanceError);
           // Continue anyway - this is not critical for startup
         }
+        
+        // Import historical trades if needed
+        try {
+          console.log('Checking and importing historical trades...');
+          const importStats = await binance.importHistoricalTrades();
+          if (importStats.totalImported > 0) {
+            console.log(`Successfully imported ${importStats.totalImported} historical trades for ${importStats.symbolsProcessed} symbols`);
+            telegram.sendMessage(`Imported ${importStats.totalImported} historical trades for ${importStats.symbolsProcessed} symbols`);
+          } else {
+            console.log('No new historical trades to import');
+          }
+        } catch (importError) {
+          console.error('Error importing historical trades:', importError);
+          // Continue anyway - this is not critical for startup
+        }
       }
     } catch (binanceError) {
       console.error('Binance initialization error:', binanceError);
@@ -201,6 +219,69 @@ function setupBinanceHandlers() {
     // Broadcast auto-trading status to all connected clients
     io.emit('auto-trading-status', statusData);
   });
+  
+  // Handle auto-trading execution events
+  binanceEvents.on('auto_trading_executed', (tradeData) => {
+    console.log('Auto-trading executed:', tradeData);
+    // Broadcast auto-trading execution to all connected clients
+    io.emit('auto-trading-executed', tradeData);
+    
+    // Force update account balances after auto-trade
+    setTimeout(async () => {
+      try {
+        await binance.updateAccountBalances();
+        console.log('Account balances updated after auto-trading execution');
+      } catch (error) {
+        console.error('Error updating account balances after auto-trade:', error);
+      }
+    }, 2000); // Small delay to ensure order processing
+  });
+  
+  // Handle auto-trading check events
+  binanceEvents.on('auto_trading_check', (checkData) => {
+    // Forward the auto-trading check event to the frontend
+    io.emit('auto-trading-check', checkData);
+  });
+}
+
+/**
+ * Perform an immediate check of auto-trading conditions for all supported symbols
+ * This is called when auto-trading is enabled to immediately check for trading opportunities
+ */
+async function performImmediateAutoTradingCheck() {
+  try {
+    console.log('Performing immediate auto-trading check for all supported symbols...');
+    
+    // Get all supported symbols
+    const supportedSymbols = binance.getSupportedSymbols();
+    
+    // Check each symbol
+    for (const symbol of supportedSymbols) {
+      try {
+        // Get current price from binance
+        const currentPrice = binance.getCurrentPrice(symbol);
+        if (!currentPrice) {
+          console.log(`No price data available for ${symbol}, skipping auto-trading check`);
+          continue;
+        }
+        
+        console.log(`Checking auto-trading conditions for ${symbol} at current price $${currentPrice.toFixed(4)}`);
+        
+        // Emit event to inform frontend that auto-trading check is happening
+        io.emit('auto-trading-check', { symbol, price: currentPrice });
+        
+        // Call checkAutoTrading directly to check if we should execute a trade
+        await binance.checkAutoTrading(symbol, currentPrice);
+      } catch (symbolError) {
+        console.error(`Error checking auto-trading for ${symbol}:`, symbolError);
+        // Continue with next symbol
+      }
+    }
+    
+    console.log('Immediate auto-trading check completed');
+  } catch (error) {
+    console.error('Error performing immediate auto-trading check:', error);
+  }
 }
 
 /**
@@ -380,10 +461,38 @@ function setupSocketIO() {
     });
     
     // Client requests to enable/disable auto-trading
-    socket.on('set-auto-trading', (data) => {
+    socket.on('set-auto-trading', async (data) => {
       if (data && typeof data.enabled === 'boolean') {
-        binance.setAutoTrading(data.enabled);
-        io.emit('auto-trading-status', { enabled: data.enabled });
+        try {
+          // Attempt to set auto-trading state
+          await binance.setAutoTrading(data.enabled);
+          
+          // If we get here, it was successful
+          console.log(`Auto-trading ${data.enabled ? 'enabled' : 'disabled'} successfully via socket request`);
+          
+          // If enabling auto-trading, immediately check all supported symbols to see if any trades should be executed
+          if (data.enabled) {
+            performImmediateAutoTradingCheck();
+          }
+          
+          // Send detailed status response
+          const healthStatus = binance.getHealthStatus(); 
+          io.emit('auto-trading-status', { 
+            enabled: data.enabled,
+            success: true,
+            wsConnected: healthStatus.wsStatus,
+            apiConnected: healthStatus.apiStatus,
+            tradingEnabled: healthStatus.tradingEnabled
+          });
+        } catch (error) {
+          // If there was an error, notify with details
+          console.error(`Failed to ${data.enabled ? 'enable' : 'disable'} auto-trading:`, error.message);
+          socket.emit('auto-trading-status', { 
+            enabled: binance.getHealthStatus().autoTradingEnabled, // Current state
+            success: false,
+            error: error.message
+          });
+        }
       }
     });
     
@@ -474,13 +583,16 @@ async function getUpdateDataForSymbol(symbol) {
  * @param {Object} socket - The socket.io client
  */
 function sendSystemStatus(socket) {
+  // Get actual auto-trading status from binance module
+  const healthStatus = binance.getHealthStatus();
+
   const statusData = {
     serverTime: new Date().toISOString(),
     uptime: Math.floor((new Date() - appState.serverStartTime) / 1000),
     dbConnected: appState.isDbConnected,
     binanceConnected: appState.isBinanceConnected,
     activeClients: appState.clients.size,
-    autoTradingEnabled: false // This should be updated based on actual state
+    autoTradingEnabled: healthStatus.autoTradingEnabled // Use actual auto-trading state
   };
   
   socket.emit('system-status', statusData);
@@ -510,8 +622,24 @@ function setupApiRoutes() {
 /**
  * Graceful shutdown handler
  */
-function shutdown() {
+async function shutdown() {
   console.log('Server shutting down...');
+  
+  // Save state before shutdown
+  try {
+    // Persist auto-trading state before disabling
+    const autoTradingWasEnabled = binance.getHealthStatus().autoTradingEnabled;
+    
+    if (autoTradingWasEnabled) {
+      console.log('Auto-trading was enabled, persisting state before shutdown');
+      await db.saveAppSettings({
+        'autoTradingEnabled': autoTradingWasEnabled,
+        'shutdownTime': new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    console.error('Error saving app state during shutdown:', error);
+  }
   
   // Close Socket.IO connections
   io.close();
@@ -526,7 +654,7 @@ function shutdown() {
   telegram.stop();
   
   // Send shutdown notification
-  telegram.sendMessage('Server shutting down').finally(() => {
+  telegram.sendMessage('Server shutting down cleanly. Auto-trading state has been persisted and will be restored on next startup.').finally(() => {
     console.log('Shutdown complete');
     process.exit(0);
   });

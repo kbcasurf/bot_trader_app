@@ -163,6 +163,21 @@ footer {
   color: var(--error-color);
 }
 
+/* Activity indicator for auto-trading checks */
+.activity-indicator {
+  display: inline-block;
+  margin-left: 6px;
+  animation: pulse 1s infinite;
+  color: var(--primary-color);
+  font-size: 0.9rem;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.3; }
+  100% { opacity: 1; }
+}
+
 /* USDT Balance Container */
 .usdt-balance-container {
   background-color: var(--card-bg);

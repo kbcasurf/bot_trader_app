@@ -128,6 +128,42 @@ function initializeSocketConnection() {
   
   dashboardState.socket.on('auto-trading-status', (data) => {
     updateAutoTradingStatus(data.enabled);
+    
+    // Display error message if auto-trading failed to enable/disable
+    if (data.error) {
+      showNotification(`Auto-trading error: ${data.error}`, 'error');
+    } else if (data.success) {
+      showNotification(`Auto-trading ${data.enabled ? 'enabled' : 'disabled'} successfully`, 'success');
+    }
+  });
+  
+  // Listen for auto-trading execution events
+  dashboardState.socket.on('auto-trading-executed', (data) => {
+    const { symbol, action, price } = data;
+    const formattedPrice = parseFloat(price).toFixed(2);
+    
+    // Show notification for auto-trading execution
+    showNotification(`Auto-trading ${action.toUpperCase()} executed for ${symbol} at $${formattedPrice}`, 'success');
+    
+    // Show activity indicator briefly
+    showAutoTradingActivity();
+    
+    // Request updated data with a short delay
+    setTimeout(() => {
+      requestAccountInfo();
+      
+      // Request data for all symbols to update UI
+      const symbols = Cards.CARD_CONFIG.SUPPORTED_CRYPTOS.map(crypto => 
+        `${crypto.symbol.toUpperCase()}USDT`
+      );
+      dashboardState.socket.emit('batch-get-data', { symbols });
+    }, 2000);
+  });
+  
+  // Custom event for auto-trading activity/checks
+  dashboardState.socket.on('auto-trading-check', () => {
+    // Show brief indicator that auto-trading check is occurring
+    showAutoTradingActivity();
   });
 }
 
@@ -191,6 +227,7 @@ function setupWebSocketMonitor() {
         <span class="status-label">Auto-Trading:</span>
         <span class="status-indicator" id="auto-trading-status">Disabled</span>
         <button id="toggle-auto-trading" class="small-button">Enable</button>
+        <span id="auto-trading-activity" class="activity-indicator" style="display: none;">⚡</span>
       </div>
     </div>
   `;
@@ -260,6 +297,23 @@ function updateAutoTradingStatus(enabled) {
   }
   
   dashboardState.serverStatus.autoTradingEnabled = enabled;
+}
+
+/**
+ * Show auto-trading activity indicator briefly
+ * Used to indicate when auto-trading checks or executions are happening
+ */
+function showAutoTradingActivity() {
+  const activityIndicator = document.getElementById('auto-trading-activity');
+  if (activityIndicator) {
+    // Show the indicator
+    activityIndicator.style.display = 'inline';
+    
+    // Hide after a short delay
+    setTimeout(() => {
+      activityIndicator.style.display = 'none';
+    }, 2000); // Show for 2 seconds
+  }
 }
 
 /**
