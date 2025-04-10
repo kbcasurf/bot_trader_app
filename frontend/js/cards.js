@@ -62,6 +62,41 @@ function initialize(socket) {
   socket.on('crypto-data-update', (data) => {
     updateCardData(data.symbol, data);
   });
+  
+  // HIGH PRIORITY: Register for direct threshold updates
+  // This is a fast update path for critical threshold changes after trades
+  socket.on('threshold-update', (data) => {
+    console.log(`[FAST THRESHOLD UPDATE] Received for ${data.symbol}:`, data);
+    const symbol = data.symbol;
+    const card = cardState.cards.get(symbol);
+    
+    if (!card) return;
+    
+    // Update next buy price
+    const nextBuyElement = card.querySelector(`#${symbol}-next-buy`);
+    if (nextBuyElement && data.nextBuyPrice !== undefined) {
+      nextBuyElement.textContent = `$${data.nextBuyPrice.toFixed(4)}`;
+      console.log(`Fast-updated next buy price for ${symbol} to $${data.nextBuyPrice.toFixed(4)}`);
+    }
+    
+    // Update next sell price
+    const nextSellElement = card.querySelector(`#${symbol}-next-sell`);
+    if (nextSellElement && data.nextSellPrice !== undefined) {
+      nextSellElement.textContent = data.nextSellPrice > 0
+        ? `$${data.nextSellPrice.toFixed(4)}`
+        : 'N/A';
+      console.log(`Fast-updated next sell price for ${symbol} to ${data.nextSellPrice > 0 ? '$' + data.nextSellPrice.toFixed(4) : 'N/A'}`);
+    }
+    
+    // Store the updated thresholds in the card's data
+    if (!cardState.data.has(symbol)) {
+      cardState.data.set(symbol, {});
+    }
+    
+    const symbolData = cardState.data.get(symbol);
+    symbolData.nextBuyPrice = data.nextBuyPrice;
+    symbolData.nextSellPrice = data.nextSellPrice;
+  });
 }
 
 /**
