@@ -563,10 +563,22 @@ async function getReferencePrice(symbol) {
  * @param {Object} priceData - The price data to update
  * @returns {Promise<boolean>} Success status
  */
+/**
+ * Update reference prices for a cryptocurrency
+ * @param {string} symbol - The cryptocurrency symbol
+ * @param {Object} priceData - The price data to update
+ * @param {boolean} priceData.forceUpdate - Optional flag to force update using higher priority
+ * @returns {Promise<boolean>} Success status
+ */
 async function updateReferencePrice(symbol, priceData) {
   try {
     if (!symbol) {
       throw new Error('No symbol provided');
+    }
+    
+    // If this is a forced update for critical trade operations, log it
+    if (priceData.forceUpdate) {
+      console.log(`[CRITICAL] Forcing reference price update for ${symbol} to prevent duplicate trades`);
     }
     
     const fields = [];
@@ -598,6 +610,9 @@ async function updateReferencePrice(symbol, priceData) {
       values.push(priceData.nextSellThreshold);
     }
     
+    // Always update the timestamp to ensure the query always modifies the row
+    fields.push('updated_at = NOW()');
+    
     // If no fields to update, return success
     if (fields.length === 0) {
       return true;
@@ -606,17 +621,84 @@ async function updateReferencePrice(symbol, priceData) {
     // Add symbol to values
     values.push(symbol);
     
-    // Build and execute the update query
-    const sql = `
-      UPDATE reference_prices
-      SET ${fields.join(', ')}
-      WHERE symbol = ?
-    `;
+    // Get a dedicated connection for this critical operation
+    const conn = await getConnection();
     
-    await query(sql, values);
-    
-    console.log(`Reference price updated for ${symbol}`);
-    return true;
+    try {
+      // Begin transaction for consistency
+      await conn.beginTransaction();
+      
+      // Build and execute the update query
+      const sql = `
+        UPDATE reference_prices
+        SET ${fields.join(', ')}
+        WHERE symbol = ?
+      `;
+      
+      const result = await conn.query({
+        sql,
+        values
+      });
+      
+      // Verify the update was successful
+      if (result.affectedRows === 0) {
+        // If no rows were affected, the symbol might not exist, so create it
+        console.log(`No existing reference price record for ${symbol}, creating new record`);
+        
+        // Create an insert query with default values
+        const insertSql = `
+          INSERT INTO reference_prices 
+          (symbol, initial_purchase_price, last_purchase_price, last_sell_price, 
+           next_buy_threshold, next_sell_threshold)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `;
+        
+        const insertValues = [
+          symbol,
+          priceData.initialPurchasePrice !== undefined ? priceData.initialPurchasePrice : 0,
+          priceData.lastPurchasePrice !== undefined ? priceData.lastPurchasePrice : 0,
+          priceData.lastSellPrice !== undefined ? priceData.lastSellPrice : 0,
+          priceData.nextBuyThreshold !== undefined ? priceData.nextBuyThreshold : 0,
+          priceData.nextSellThreshold !== undefined ? priceData.nextSellThreshold : 0
+        ];
+        
+        await conn.query({
+          sql: insertSql,
+          values: insertValues
+        });
+      }
+      
+      // Extra verification step - read back the values to ensure they were correctly saved
+      const verifySql = `
+        SELECT symbol, next_buy_threshold, next_sell_threshold
+        FROM reference_prices
+        WHERE symbol = ?
+      `;
+      
+      const verifyResult = await conn.query({
+        sql: verifySql,
+        values: [symbol]
+      });
+      
+      if (verifyResult.length > 0) {
+        const saved = verifyResult[0];
+        console.log(`Verified thresholds for ${symbol}: Buy=${saved.next_buy_threshold}, Sell=${saved.next_sell_threshold}`);
+      }
+      
+      // Commit the transaction
+      await conn.commit();
+      
+      console.log(`Reference price updated for ${symbol}`);
+      return true;
+    } catch (error) {
+      // Rollback transaction on error
+      await conn.rollback();
+      console.error(`Database error updating reference prices for ${symbol}:`, error);
+      throw error;
+    } finally {
+      // Always release the connection
+      conn.release();
+    }
   } catch (error) {
     console.error(`Error updating reference price for ${symbol}:`, error);
     throw error;

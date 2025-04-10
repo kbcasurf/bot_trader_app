@@ -226,15 +226,65 @@ function setupBinanceHandlers() {
     // Broadcast auto-trading execution to all connected clients
     io.emit('auto-trading-executed', tradeData);
     
-    // Force update account balances after auto-trade
+    // CRITICAL: Force immediate update for the traded symbol's threshold data
+    try {
+      const tradedSymbol = tradeData.symbol;
+      // Immediately send fresh threshold data to all clients
+      if (tradeData.newThresholds) {
+        console.log(`[FAST UPDATE] Broadcasting new thresholds for ${tradedSymbol} to all clients:`, tradeData.newThresholds);
+        // Send a direct threshold update to all clients
+        io.emit('threshold-update', {
+          symbol: tradedSymbol,
+          nextBuyPrice: tradeData.newThresholds.nextBuyPrice,
+          nextSellPrice: tradeData.newThresholds.nextSellPrice
+        });
+      }
+    } catch (fastUpdateError) {
+      console.error('Error during fast threshold update:', fastUpdateError);
+    }
+    
+    // Force update account balances and send complete fresh data after auto-trade
     setTimeout(async () => {
       try {
+        // Update account balances
         await binance.updateAccountBalances();
         console.log('Account balances updated after auto-trading execution');
+        
+        // HIGH PRIORITY: Update data for the traded symbol first with highest urgency
+        const tradedSymbol = tradeData.symbol;
+        try {
+          console.log(`[PRIORITY UPDATE] Getting fresh data for ${tradedSymbol} after trade`);
+          const tradedSymbolData = await getUpdateDataForSymbol(tradedSymbol);
+          io.emit('crypto-data-update', tradedSymbolData);
+          
+          // Log what was sent to the frontend
+          console.log(`Sent updated thresholds to frontend for ${tradedSymbol}: Buy=${tradedSymbolData.nextBuyPrice}, Sell=${tradedSymbolData.nextSellPrice}`);
+        } catch (error) {
+          console.error(`Error getting priority update for ${tradedSymbol}:`, error);
+        }
+        
+        // Then update the rest of the symbols
+        const symbols = binance.getSupportedSymbols()
+          .filter(s => s !== tradedSymbol) // Skip the symbol we just updated
+          .map(symbol => `${symbol}USDT`);
+        
+        for (const fullSymbol of symbols) {
+          const symbol = fullSymbol.replace('USDT', '');
+          
+          try {
+            // Get updated data specifically for this symbol
+            const updatedData = await getUpdateDataForSymbol(symbol);
+            
+            // Broadcast the fresh data to all clients
+            io.emit('crypto-data-update', updatedData);
+          } catch (symbolError) {
+            console.error(`Error getting updated data for ${symbol}:`, symbolError);
+          }
+        }
       } catch (error) {
         console.error('Error updating account balances after auto-trade:', error);
       }
-    }, 2000); // Small delay to ensure order processing
+    }, 1000); // Reduced delay to ensure faster updates
   });
   
   // Handle auto-trading check events
@@ -274,8 +324,9 @@ async function performImmediateAutoTradingCheck() {
         // Call checkAutoTrading directly to check if we should execute a trade
         await binance.checkAutoTrading(symbol, currentPrice);
         
-        // Add a delay between each symbol's check to prevent API rate limits and simultaneous operations
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Add a LONGER delay between each symbol's check to prevent API rate limits and simultaneous operations
+        // Increased from 3 seconds to 10 seconds to ensure each operation completes fully
+        await new Promise(resolve => setTimeout(resolve, 10000));
         
       } catch (symbolError) {
         console.error(`Error checking auto-trading for ${symbol}:`, symbolError);
