@@ -247,6 +247,7 @@ function setupBinanceHandlers() {
 /**
  * Perform an immediate check of auto-trading conditions for all supported symbols
  * This is called when auto-trading is enabled to immediately check for trading opportunities
+ * Uses a rate-limited approach to avoid multiple checks at the same time
  */
 async function performImmediateAutoTradingCheck() {
   try {
@@ -255,7 +256,7 @@ async function performImmediateAutoTradingCheck() {
     // Get all supported symbols
     const supportedSymbols = binance.getSupportedSymbols();
     
-    // Check each symbol
+    // Process symbols with a delay between each to prevent overwhelming the system
     for (const symbol of supportedSymbols) {
       try {
         // Get current price from binance
@@ -272,6 +273,10 @@ async function performImmediateAutoTradingCheck() {
         
         // Call checkAutoTrading directly to check if we should execute a trade
         await binance.checkAutoTrading(symbol, currentPrice);
+        
+        // Add a delay between each symbol's check to prevent API rate limits and simultaneous operations
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
       } catch (symbolError) {
         console.error(`Error checking auto-trading for ${symbol}:`, symbolError);
         // Continue with next symbol

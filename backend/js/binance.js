@@ -26,6 +26,11 @@ const BINANCE_RECV_WINDOW = parseInt(process.env.BINANCE_RECV_WINDOW || '5000');
 class BinanceEvents extends EventEmitter {}
 const binanceEvents = new BinanceEvents();
 
+// Trading locks and throttling
+const tradingLocks = new Map();          // Map of symbol -> lock status
+const lastAutoTradingCheck = new Map();  // Map of symbol -> timestamp of last check
+const AUTO_TRADING_CHECK_INTERVAL = 10000; // 10 seconds between checks for each symbol
+
 // Module state
 const state = {
   websocket: null,          // WebSocket connection
@@ -1032,6 +1037,13 @@ function formatQuantity(symbol, quantity, currentPrice) {
   return quantity.toFixed(precision);
 }
 
+// Trading locks to prevent multiple orders for the same symbol
+const tradingLocks = new Map();
+
+// Throttle for price updates to limit auto-trading checks
+const lastAutoTradingCheck = new Map();
+const AUTO_TRADING_CHECK_INTERVAL = 10000; // Only check each symbol every 10 seconds
+
 /**
  * Check if auto-trading should execute
  * This is called when price updates are received
@@ -1073,11 +1085,9 @@ async function checkAutoTrading(symbol, currentPrice) {
     // Get current holdings
     const holdings = await db.getCurrentHoldings(symbol);
     
-    // Log price comparison for debugging - increase frequency to help diagnose issues
-    if (Math.random() < 0.1) { // Log ~10% of checks
-      console.log(`Auto-trading check for ${symbol}: Current Price = $${currentPrice.toFixed(4)}, ` + 
-                  `Next Buy = $${thresholds.nextBuyPrice.toFixed(4)}, Next Sell = $${thresholds.nextSellPrice.toFixed(4)}`);
-    }
+    // Log price comparison for debugging
+    console.log(`Auto-trading check for ${symbol}: Current Price = $${currentPrice.toFixed(4)}, ` + 
+                `Next Buy = $${thresholds.nextBuyPrice.toFixed(4)}, Next Sell = $${thresholds.nextSellPrice.toFixed(4)}`);
     
     // Check if we should buy (price at or below fixed buy threshold)
     if (currentPrice <= thresholds.nextBuyPrice) {
@@ -1095,7 +1105,21 @@ async function checkAutoTrading(symbol, currentPrice) {
           // Execute buy - this will also update the reference prices in recordTrade function
           const result = await buyWithUsdt(symbol, 50);
           
-          // No need to manually update reference prices here as it's done in recordTrade
+          // Manually update thresholds immediately to prevent multiple orders
+          // Set next buy threshold to 5% below current price
+          // Set next sell threshold to 5% above the initial purchase price
+          const newBuyThreshold = currentPrice * 0.95;
+          // For buy orders, we should calculate the sell threshold as 5% above purchase price
+          const newSellThreshold = currentPrice * 1.05;
+          
+          await db.updateReferencePrice(symbol, {
+            nextBuyThreshold: newBuyThreshold,
+            initialPurchasePrice: currentPrice, // This buy becomes our new reference
+            nextSellThreshold: newSellThreshold
+          });
+          
+          console.log(`Updated thresholds for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (5% below current price), Next Sell = $${newSellThreshold.toFixed(4)} (5% above buy price)`);
+          
           // Logging for clarity
           console.log(`Auto-trading buy executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
           
@@ -1117,7 +1141,7 @@ async function checkAutoTrading(symbol, currentPrice) {
     }
     
     // Check if we should sell (price at or above fixed sell threshold and we have holdings)
-    if (currentPrice >= thresholds.nextSellPrice && holdings.quantity > 0) {
+    else if (currentPrice >= thresholds.nextSellPrice && holdings.quantity > 0) {
       console.log(`AUTO-TRADING TRIGGERED: Selling ${symbol} at $${currentPrice.toFixed(4)} (Sell threshold: $${thresholds.nextSellPrice.toFixed(4)})`);
       
       // Send telegram notification for auto-trading trigger
@@ -1127,7 +1151,17 @@ async function checkAutoTrading(symbol, currentPrice) {
         // Execute sell - this will also update the reference prices in recordTrade function
         const result = await sellAll(symbol);
         
-        // No need to manually update reference prices here as it's done in recordTrade
+        // Manually update thresholds immediately to prevent issues
+        // Set next buy threshold to 5% below current price
+        // Set next sell threshold to null/0 since we no longer have any holdings
+        const newBuyThreshold = currentPrice * 0.95;
+        await db.updateReferencePrice(symbol, {
+          nextBuyThreshold: newBuyThreshold,
+          nextSellThreshold: 0  // Set to 0 to indicate N/A since we have no holdings
+        });
+        
+        console.log(`Updated thresholds for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (5% below sell price), Next Sell = N/A (no holdings)`);
+        
         // Logging for clarity
         console.log(`Auto-trading sell executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
         
@@ -1292,13 +1326,36 @@ function onAutoTradingStatusChange(handler) {
 function notifyPriceUpdate(symbol, price) {
   // Explicitly check if auto-trading is enabled before calling checkAutoTrading
   if (state.autoTradingEnabled) {
-    console.log(`Auto-trading is enabled, checking conditions for ${symbol} at ${price.toFixed(4)}`);
-    // Use setTimeout to ensure price updates aren't blocked by auto-trading checks
-    setTimeout(() => {
-      checkAutoTrading(symbol, price).catch(err => {
-        console.error(`Error in checkAutoTrading for ${symbol}:`, err);
-      });
-    }, 0);
+    const now = Date.now();
+    const lastCheck = lastAutoTradingCheck.get(symbol) || 0;
+    const lockKey = `${symbol}_trading_lock`;
+    
+    // Only check auto-trading if:
+    // 1. Enough time has passed since last check (throttling)
+    // 2. No trading operation is already in progress for this symbol (locking)
+    if ((now - lastCheck >= AUTO_TRADING_CHECK_INTERVAL) && !tradingLocks.get(lockKey)) {
+      console.log(`Auto-trading is enabled, checking conditions for ${symbol} at ${price.toFixed(4)}`);
+      lastAutoTradingCheck.set(symbol, now);
+      
+      // Set lock before starting the check
+      tradingLocks.set(lockKey, true);
+      
+      // Use setTimeout to ensure price updates aren't blocked by auto-trading checks
+      setTimeout(() => {
+        checkAutoTrading(symbol, price)
+          .catch(err => {
+            console.error(`Error in checkAutoTrading for ${symbol}:`, err);
+          })
+          .finally(() => {
+            // Release lock after check completes with a delay
+            // to ensure database updates are complete
+            setTimeout(() => {
+              tradingLocks.delete(lockKey);
+              console.log(`Released trading lock for ${symbol}`);
+            }, 5000); // 5 second cooldown before allowing another check
+          });
+      }, 0);
+    }
   }
   
   // Emit the event to all listeners
@@ -1399,29 +1456,19 @@ async function updateAccountBalances() {
 }
 
 /**
- * Schedule regular balance updates
- * @param {number} intervalMs - Interval in milliseconds (default: 5 minutes)
+ * Schedule regular balance updates - REMOVED
+ * Account balances will only be updated at startup and after transactions
  */
 let balanceUpdateInterval = null;
 
-function scheduleBalanceUpdates(intervalMs = 300000) {
-  // Clear any existing interval
+function scheduleBalanceUpdates() {
+  // Clear any existing interval if it exists
   if (balanceUpdateInterval) {
     clearInterval(balanceUpdateInterval);
+    balanceUpdateInterval = null;
   }
   
-  // Set up new interval
-  balanceUpdateInterval = setInterval(async () => {
-    if (state.isConnected && state.serviceStatus.apiConnected) {
-      try {
-        await updateAccountBalances();
-      } catch (error) {
-        console.error('Scheduled balance update failed:', error);
-      }
-    }
-  }, intervalMs);
-  
-  console.log(`Scheduled account balance updates every ${intervalMs/1000} seconds`);
+  console.log('Account balances will only be updated at startup and after transactions');
 }
 
 /**
