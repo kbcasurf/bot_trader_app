@@ -1037,12 +1037,10 @@ function formatQuantity(symbol, quantity, currentPrice) {
   return quantity.toFixed(precision);
 }
 
-// Trading locks to prevent multiple orders for the same symbol
-const tradingLocks = new Map();
-
-// Throttle for price updates to limit auto-trading checks
-const lastAutoTradingCheck = new Map();
-const AUTO_TRADING_CHECK_INTERVAL = 10000; // Only check each symbol every 10 seconds
+// No need to redefine variables as they're already defined on lines 30-32
+// - tradingLocks (line 30)
+// - lastAutoTradingCheck (line 31)
+// - AUTO_TRADING_CHECK_INTERVAL (line 32)
 
 /**
  * Check if auto-trading should execute
