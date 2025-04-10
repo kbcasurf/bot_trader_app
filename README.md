@@ -27,7 +27,7 @@ This trading bot monitors price movements from Binance Price Stream WebSocket an
 ### Configuration
 
 1. Clone this repository
-2. Create a `.env` file in the root directory with the following variables:
+2. Create a `.env` file in the root directory by copying from the provided `.env.example`:
 ```
 # Database Configuration
 DB_USER=trading_bot_user
@@ -35,15 +35,36 @@ DB_PASSWORD=your_secure_password
 DB_NAME=crypto_trading_bot
 MYSQL_ROOT_PASSWORD=your_secure_root_password
 
+# Additional Configuration
+PORT=3000
+DB_CONNECTION_LIMIT=10
+DB_CONNECT_TIMEOUT=20000
+API_TIMEOUT_MS=10000
+WS_RECONNECT_DELAY=2000
+WS_MAX_RECONNECT_DELAY=60000
+WS_HEARTBEAT_TIMEOUT=30000
+
 # Binance API Configuration
 BINANCE_API_KEY=your_binance_api_key
 BINANCE_API_SECRET=your_binance_api_secret
-BINANCE_API_URL=https://api.binance.com
-BINANCE_WEBSOCKET_URL=wss://stream.binance.com:9443
+# Testnet (default)
+BINANCE_API_URL=https://testnet.binance.vision
+BINANCE_WEBSOCKET_URL=wss://testnet.binance.vision
 
 # Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
+
+# External Access Configuration
+EXTERNAL_HOST=VPS_IP_ADDRESS
+VITE_BACKEND_URL=http://VPS_IP_ADDRESS:3000
+
+# WebSocket connection settings
+SOCKET_TRANSPORTS=websocket,polling
+SOCKET_UPGRADE=true
+
+# Use BAKE for building the Docker image
+COMPOSE_BAKE=true
 ```
 
 ### Running the Application Locally
