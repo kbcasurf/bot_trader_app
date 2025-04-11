@@ -13,8 +13,7 @@ This trading bot monitors price movements from Binance Price Stream WebSocket an
 - Telegram notifications for trade events
 - User-friendly dashboard for configuration and monitoring
 - Containerized architecture using Docker
-- Infrastructure-as-Code with Terraform for OCI Free Tier deployment
-- Comprehensive security pipeline with SonarQube, Checkov, and OWASP ZAP
+
 
 ## Setup Instructions
 
@@ -82,8 +81,7 @@ docker-compose down
 
 ### Accessing the Dashboard
 
-Open your browser and navigate to `http://localhost:8080`
-
+Open your browser and navigate to `http://localhost'
 ## Cloud Deployment
 
 The project includes Terraform configurations to deploy the application on Oracle Cloud Infrastructure (OCI) Free Tier.
@@ -106,8 +104,7 @@ The bot implements a simple but effective "buy the dip, sell the rise" strategy:
 - Database: MariaDB
 - Containerization: Docker
 - APIs: Binance API, Telegram Bot API
-- Infrastructure: Terraform, Oracle Cloud Infrastructure
-- Security: SonarQube (SAST), Checkov (IaC), OWASP ZAP (DAST)
+
 
 ## Development
 
@@ -126,16 +123,6 @@ cd backend
 npm install
 npm run dev
 ```
-
-## Security Pipeline
-
-This project uses GitHub Actions for continuous integration and security scanning:
-
-- **SonarQube**: Static Application Security Testing (SAST)
-- **Checkov**: Infrastructure-as-Code security scanning for Terraform
-- **OWASP ZAP**: Dynamic Application Security Testing (DAST)
-
-See the [GitHub Workflows](./.github/workflows/code-analysis.yml) for implementation details.
 
 ## License
 
