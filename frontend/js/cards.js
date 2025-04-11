@@ -82,10 +82,13 @@ function initialize(socket) {
     // Update next sell price
     const nextSellElement = card.querySelector(`#${symbol}-next-sell`);
     if (nextSellElement && data.nextSellPrice !== undefined) {
-      nextSellElement.textContent = data.nextSellPrice > 0
-        ? `$${data.nextSellPrice.toFixed(4)}`
-        : 'N/A';
-      console.log(`Fast-updated next sell price for ${symbol} to ${data.nextSellPrice > 0 ? '$' + data.nextSellPrice.toFixed(4) : 'N/A'}`);
+      // If nextSellPrice is 0 or null, display "N/A"
+      const nextSellDisplay = (!data.nextSellPrice || data.nextSellPrice <= 0) 
+        ? 'N/A' 
+        : `$${data.nextSellPrice.toFixed(4)}`;
+      
+      nextSellElement.textContent = nextSellDisplay;
+      console.log(`Fast-updated next sell price for ${symbol} to ${nextSellDisplay}`);
     }
     
     // Store the updated thresholds in the card's data
@@ -363,14 +366,19 @@ function updateCardData(symbol, data) {
   const nextBuyElement = card.querySelector(`#${symbol}-next-buy`);
   if (nextBuyElement && data.nextBuyPrice !== undefined) {
     nextBuyElement.textContent = `$${data.nextBuyPrice.toFixed(4)}`;
+    console.log(`Updated next buy price for ${symbol} to $${data.nextBuyPrice.toFixed(4)}`);
   }
   
   // Update next sell price
   const nextSellElement = card.querySelector(`#${symbol}-next-sell`);
   if (nextSellElement && data.nextSellPrice !== undefined) {
-    nextSellElement.textContent = data.nextSellPrice > 0
-      ? `$${data.nextSellPrice.toFixed(4)}`
-      : 'N/A';
+    // If nextSellPrice is 0 or null, display "N/A"
+    const nextSellDisplay = (!data.nextSellPrice || data.nextSellPrice <= 0) 
+      ? 'N/A' 
+      : `$${data.nextSellPrice.toFixed(4)}`;
+    
+    nextSellElement.textContent = nextSellDisplay;
+    console.log(`Updated next sell price for ${symbol} to ${nextSellDisplay}`);
   }
   
   // Update profit/loss indicator

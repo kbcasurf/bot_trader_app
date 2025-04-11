@@ -12,9 +12,13 @@ const path = require('path');
 const binance = require('./js/binance');
 const db = require('./js/dbconns');
 const telegram = require('./js/telegram');
+const EventEmitter = require('events');
 
 // Get the binance event emitter
 const binanceEvents = binance.events;
+
+// Create global event emitter for app-wide events
+global.events = new EventEmitter();
 
 // Load environment variables
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
@@ -344,6 +348,17 @@ async function performImmediateAutoTradingCheck() {
  * Set up Socket.IO connection and event handlers
  */
 function setupSocketIO() {
+  // Listen for reference price updates and broadcast to clients
+  global.events.on('reference_price_updated', (data) => {
+    console.log(`[EVENT] Reference price updated for ${data.symbol}:`, data);
+    // Send immediate update to all clients about the threshold change
+    io.emit('threshold-update', {
+      symbol: data.symbol,
+      nextBuyPrice: data.nextBuyPrice,
+      nextSellPrice: data.nextSellPrice
+    });
+  });
+
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
     appState.clients.add(socket.id);

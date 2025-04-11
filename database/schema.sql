@@ -46,11 +46,9 @@ CREATE TABLE IF NOT EXISTS holdings (
 CREATE TABLE IF NOT EXISTS reference_prices (
     id INT AUTO_INCREMENT PRIMARY KEY,
     symbol VARCHAR(20) NOT NULL UNIQUE,
-    initial_purchase_price DECIMAL(18, 8) NOT NULL DEFAULT 0,
-    last_purchase_price DECIMAL(18, 8) NOT NULL DEFAULT 0,
-    last_sell_price DECIMAL(18, 8) NOT NULL DEFAULT 0,
-    next_buy_threshold DECIMAL(18, 8) NOT NULL DEFAULT 0,
-    next_sell_threshold DECIMAL(18, 8) NOT NULL DEFAULT 0,
+    last_transaction_price DECIMAL(18, 8) NOT NULL DEFAULT 0,
+    next_buy_price DECIMAL(18, 8) NOT NULL DEFAULT 0,
+    next_sell_price DECIMAL(18, 8) NOT NULL DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_symbol (symbol)
 );
@@ -90,14 +88,14 @@ ON DUPLICATE KEY UPDATE
     additional_purchase_amount = VALUES(additional_purchase_amount);
 
 -- Insert default records for supported trading pairs in reference_prices
-INSERT INTO reference_prices (symbol, initial_purchase_price, last_purchase_price, last_sell_price, next_buy_threshold, next_sell_threshold)
+INSERT INTO reference_prices (symbol, last_transaction_price, next_buy_price, next_sell_price)
 VALUES 
-    ('BTCUSDT', 0, 0, 0, 0, 0),
-    ('SOLUSDT', 0, 0, 0, 0, 0),
-    ('XRPUSDT', 0, 0, 0, 0, 0),
-    ('PENDLEUSDT', 0, 0, 0, 0, 0),
-    ('DOGEUSDT', 0, 0, 0, 0, 0),
-    ('NEARUSDT', 0, 0, 0, 0, 0)
+    ('BTC', 0, 0, 0),
+    ('SOL', 0, 0, 0),
+    ('XRP', 0, 0, 0),
+    ('PENDLE', 0, 0, 0),
+    ('DOGE', 0, 0, 0),
+    ('NEAR', 0, 0, 0)
 ON DUPLICATE KEY UPDATE 
     updated_at = CURRENT_TIMESTAMP;
 
