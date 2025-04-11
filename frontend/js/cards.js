@@ -462,9 +462,9 @@ function updateTransactionHistory(symbol, history) {
       li.className = `history-item ${action.toLowerCase()}`;
       
       li.innerHTML = `
-        <span class="transaction-type">${action.toUpperCase()}</span>
-        <span class="transaction-amount">${parseFloat(quantity).toFixed(4)} ${symbol}</span>
-        <span class="transaction-price">$${parseFloat(price).toFixed(4)}</span>
+        <span class="transaction-type">${action.toUpperCase()}</span>&nbsp;
+        <span class="transaction-amount">${parseFloat(quantity).toFixed(4)} ${symbol}</span>&nbsp;
+        <span class="transaction-price">$${parseFloat(price).toFixed(4)}</span>&nbsp;
         <span class="transaction-time">${formattedDate} ${formattedTime}</span>
       `;
       

@@ -128,7 +128,7 @@ async function sendTradeNotification(tradeInfo) {
   const { symbol, action, quantity, price, usdt } = tradeInfo;
   
   // Format the message
-  const emoji = action.toLowerCase() === 'buy' ? '=� BUY' : '=4 SELL';
+  const emoji = action.toLowerCase() === 'buy' ? '🟢 BUY' : '🔴 SELL';
   const message = `
 <b>${emoji}: ${symbol}</b>
 

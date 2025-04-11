@@ -467,9 +467,10 @@ button:disabled {
 .history-item {
   display: flex;
   justify-content: space-between;
+  column-gap: 8px;
   padding: 8px;
   border-bottom: 1px solid var(--border-color);
-  font-size: 0.9rem;
+  font-size: 0.7rem;
 }
 
 .history-item:last-child {

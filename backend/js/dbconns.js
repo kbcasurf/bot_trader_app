@@ -231,10 +231,12 @@ async function recordTrade(tradeData) {
   const { symbol, action, quantity, price, usdt_amount, isManualSellAll } = tradeData;
   
   try {
-    // Start a transaction
+    // Start a transaction with a higher isolation level to prevent interference
     const conn = await getConnection();
     
     try {
+      // Use SERIALIZABLE to ensure transaction isolation
+      await conn.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
       await conn.beginTransaction();
       
       // Insert trade record
@@ -253,6 +255,7 @@ async function recordTrade(tradeData) {
         SELECT symbol, last_transaction_price
         FROM reference_prices
         WHERE symbol = ?
+        FOR UPDATE
       `;
       
       const refResult = await conn.query({
@@ -286,7 +289,7 @@ async function recordTrade(tradeData) {
         console.log(`BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (1% above purchase price)`);
       } 
       else if (action === 'sell') {
-        // For manual "Sell All" operations, set next sell price to null or 0
+        // ONLY for manual "Sell All" operations, set next_sell_price to 0
         if (isManualSellAll === true) {
           nextSellPrice = 0;
           updateFields.push('next_sell_price = ?');
@@ -294,84 +297,99 @@ async function recordTrade(tradeData) {
           console.log(`MANUAL SELL ALL: Setting next sell price for ${symbol} to 0 (null value)`);
         }
         // For automated or partial sells that didn't come from "Sell All" button,
-        // calculate next sell price based on last transaction price
-        else if (refResult.length > 0) {
-          const lastPrice = parseFloat(refResult[0].last_transaction_price);
-          if (lastPrice > 0) {
-            nextSellPrice = lastPrice * 1.01;
-            updateFields.push('next_sell_price = ?');
-            updateValues.push(nextSellPrice);
-            console.log(`AUTO SELL: Setting next sell price for ${symbol} at ${nextSellPrice} (based on last transaction price)`);
-          }
+        // calculate next sell price based on the current transaction price
+        else {
+          // Set next sell price to 1% above the current transaction price
+          nextSellPrice = price * 1.01;
+          updateFields.push('next_sell_price = ?');
+          updateValues.push(nextSellPrice);
+          console.log(`AUTO/PARTIAL SELL: Setting next sell price for ${symbol} at ${nextSellPrice} (based on current transaction price)`);
         }
       }
       
-      // If we have fields to update
-      if (updateFields.length > 0) {
-        // Add symbol to values
-        updateValues.push(symbol);
-        
-        // Update reference prices
+      // Check if the record exists first
+      const checkRefSql = `
+        SELECT COUNT(*) as count
+        FROM reference_prices
+        WHERE symbol = ?
+      `;
+      
+      const checkResult = await conn.query({
+        sql: checkRefSql,
+        values: [symbol]
+      });
+      
+      if (checkResult[0].count > 0) {
+        // Update existing record
         const updateRefSql = `
           UPDATE reference_prices
-          SET ${updateFields.join(', ')}
+          SET last_transaction_price = ?,
+              next_buy_price = ?,
+              next_sell_price = ?
           WHERE symbol = ?
         `;
         
-        // Insert if not exists
-        const upsertRefSql = `
-          INSERT INTO reference_prices 
+        await conn.query({
+          sql: updateRefSql,
+          values: [price, nextBuyPrice, nextSellPrice, symbol]
+        });
+      } else {
+        // Create new record with appropriate values
+        const insertRefSql = `
+          INSERT INTO reference_prices
           (symbol, last_transaction_price, next_buy_price, next_sell_price)
           VALUES (?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE ${updateFields.join(', ')}
         `;
         
-        const upsertValues = [
-          symbol, 
-          price, 
-          nextBuyPrice,
-          nextSellPrice,
-          ...updateValues
-        ];
+        await conn.query({
+          sql: insertRefSql,
+          values: [symbol, price, nextBuyPrice, nextSellPrice]
+        });
+      }
+      
+      // Verify the update was successful before committing
+      const verifySql = `
+        SELECT symbol, last_transaction_price, next_buy_price, next_sell_price
+        FROM reference_prices
+        WHERE symbol = ?
+      `;
+      
+      const verifyResult = await conn.query({
+        sql: verifySql,
+        values: [symbol]
+      });
+      
+      // Verify the values match what we expect
+      if (verifyResult.length === 0) {
+        throw new Error(`Failed to verify reference price update for ${symbol}`);
+      }
+      
+      const savedValues = verifyResult[0];
+      const savedNextBuyPrice = parseFloat(savedValues.next_buy_price);
+      const savedNextSellPrice = parseFloat(savedValues.next_sell_price);
+      
+      // Validate that the values match what we intended to set
+      if (Math.abs(savedNextBuyPrice - nextBuyPrice) > 0.0001 || 
+          (action === 'buy' && Math.abs(savedNextSellPrice - nextSellPrice) > 0.0001)) {
+        console.error(`Verification failed! Expected buy=${nextBuyPrice}, sell=${nextSellPrice} but got buy=${savedNextBuyPrice}, sell=${savedNextSellPrice}`);
         
-        // Check if the record exists first
-        const checkRefSql = `
-          SELECT COUNT(*) as count
-          FROM reference_prices
-          WHERE symbol = ?
-        `;
+        // Attempt to fix the values with a direct update
+        await conn.query({
+          sql: `UPDATE reference_prices SET next_buy_price = ?, next_sell_price = ? WHERE symbol = ?`,
+          values: [nextBuyPrice, nextSellPrice, symbol]
+        });
         
-        const checkResult = await conn.query({
-          sql: checkRefSql,
+        // Re-verify after the fix
+        const reVerifyResult = await conn.query({
+          sql: verifySql,
           values: [symbol]
         });
         
-        if (checkResult[0].count > 0) {
-          // Update existing record
-          await conn.query({
-            sql: updateRefSql,
-            values: updateValues
-          });
-        } else {
-          // Create new record with appropriate values
-          const insertValues = [
-            symbol,
-            price,
-            nextBuyPrice,
-            nextSellPrice
-          ];
-          
-          const insertRefSql = `
-            INSERT INTO reference_prices
-            (symbol, last_transaction_price, next_buy_price, next_sell_price)
-            VALUES (?, ?, ?, ?)
-          `;
-          
-          await conn.query({
-            sql: insertRefSql,
-            values: insertValues
-          });
+        if (reVerifyResult.length > 0) {
+          console.log(`Verified prices for ${symbol}: Buy=${reVerifyResult[0].next_buy_price}, Sell=${reVerifyResult[0].next_sell_price}`);
         }
+      } else {
+        console.log(`Verified prices for ${symbol}: Buy=${savedNextBuyPrice}, Sell=${savedNextSellPrice}`);
       }
       
       // Commit the transaction
@@ -380,7 +398,7 @@ async function recordTrade(tradeData) {
       console.log(`Trade record inserted: ${symbol} ${action} at ${price}`);
       console.log(`Reference prices updated for ${symbol}: last_transaction_price=${price}, next_buy_price=${nextBuyPrice}, next_sell_price=${nextSellPrice}`);
       
-      // Emit event to notify threshold update
+      // Emit event to notify threshold update - ONLY after successful verification
       const thresholdData = {
         symbol,
         lastTransactionPrice: price,
@@ -393,7 +411,11 @@ async function recordTrade(tradeData) {
         global.events.emit('reference_price_updated', thresholdData);
       }
       
-      return result.insertId;
+      // Return both the insert ID and the threshold data for downstream use
+      return {
+        insertId: result.insertId,
+        thresholds: thresholdData
+      };
     } catch (txError) {
       // Rollback on error
       await conn.rollback();
@@ -694,7 +716,7 @@ async function calculateTradingThresholds(symbol, currentPrice) {
     
     // Default values for nextBuyPrice and nextSellPrice
     let nextBuyPrice = 0;
-    let nextSellPrice = 0;
+    let nextSellPrice = refPrices.nextSellPrice; // Preserve existing sell price if it exists
     
     // If we have a last transaction price, use it to calculate fixed next buy price
     if (refPrices.lastTransactionPrice > 0) {
@@ -704,24 +726,36 @@ async function calculateTradingThresholds(symbol, currentPrice) {
       nextBuyPrice = currentPrice * 0.99;
     }
     
-    // Calculate next sell price based on holdings
-    if (holdings.quantity > 0) {
+    // Calculate next sell price based on holdings ONLY if it's not already explicitly set to 0
+    // A zero nextSellPrice is a valid state after a "sell all" operation and we should preserve it
+    if (holdings.quantity > 0 && nextSellPrice !== 0) {
       if (refPrices.lastTransactionPrice > 0) {
         nextSellPrice = refPrices.lastTransactionPrice * 1.01; // Fixed at 1% above last transaction price
       } else {
         // Fallback to average buy price if no transaction price but we have holdings
         nextSellPrice = holdings.averageBuyPrice * 1.01;
       }
-    } else {
-      // No sell threshold if no holdings
+    } else if (holdings.quantity <= 0 && nextSellPrice !== 0) {
+      // No sell threshold if no holdings, but only change it if it's not already 0
+      // This preserves the explicit 0 value set by "sell all" operations
       nextSellPrice = 0;
     }
     
-    // Update reference price values in the database
-    await updateReferencePrice(symbol, {
-      nextBuyPrice: nextBuyPrice,
-      nextSellPrice: nextSellPrice
-    });
+    // Log values for debugging
+    console.log(`[calculateTradingThresholds] For ${symbol}: Current nextSellPrice=${refPrices.nextSellPrice}, holdings=${holdings.quantity}, calculated nextSellPrice=${nextSellPrice}`);
+    
+    // Update reference price values in the database, but only update nextSellPrice
+    // if it's different from what's already in the database to avoid unnecessary overwrites
+    const updateData = {
+      nextBuyPrice: nextBuyPrice
+    };
+    
+    // Only include nextSellPrice in update if it changed
+    if (nextSellPrice !== refPrices.nextSellPrice) {
+      updateData.nextSellPrice = nextSellPrice;
+    }
+    
+    await updateReferencePrice(symbol, updateData);
     
     // Calculate profit/loss percentage
     const profitLossPercentage = holdings.averageBuyPrice > 0 

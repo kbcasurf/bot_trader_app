@@ -355,7 +355,8 @@ function setupSocketIO() {
     io.emit('threshold-update', {
       symbol: data.symbol,
       nextBuyPrice: data.nextBuyPrice,
-      nextSellPrice: data.nextSellPrice
+      nextSellPrice: data.nextSellPrice,
+      lastTransactionPrice: data.lastTransactionPrice
     });
   });
 
@@ -429,23 +430,38 @@ function setupSocketIO() {
           // Get holdings
           const holdings = await db.getCurrentHoldings(symbol);
           
-          // Calculate thresholds
-          const thresholds = await db.calculateTradingThresholds(
-            symbol, 
-            parseFloat(priceData.price)
-          );
+          // First, get the exact reference prices straight from the database
+          // This is critical to ensure we're using the actual stored values, not recalculated ones
+          const refPrices = await db.getReferencePrice(symbol);
+          console.log(`[BATCH DATA] Direct DB reference prices for ${symbol}: Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice}, Holdings=${holdings.quantity}, LastTxPrice=${refPrices.lastTransactionPrice}`);
+          
+          // Calculate profit/loss percentage
+          const currentPrice = parseFloat(priceData.price);
+          const profitLossPercentage = holdings.averageBuyPrice > 0 
+            ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100
+            : 0;
           
           // Get the balance from the database (prefer this over calculated holdings)
           const databaseBalance = accountBalances[symbol] || 0;
           
-          // Combine data
+          // Use the nextSellPrice value exactly as it is in the database
+          // We don't want to "fix" a zero value, as it's an intentional state after "sell all" operations
+          const nextSellPrice = refPrices.nextSellPrice;
+          
+          // Just log zero sell prices for debugging
+          if (refPrices.nextSellPrice === 0) {
+            console.log(`[INFO] Symbol ${symbol} has nextSellPrice=0, keeping as-is per requirements`);
+          }
+          
+          // Combine data - using the DIRECT reference prices from the database
           results[symbol] = {
             price: parseFloat(priceData.price),
             history: tradingHistory,
             holdings: parseFloat(databaseBalance).toFixed(8), // Always use database balance which is now synced with Binance, but ensure we have decimal precision
-            nextBuyPrice: thresholds.nextBuyPrice,
-            nextSellPrice: thresholds.nextSellPrice,
-            profitLossPercentage: thresholds.profitLossPercentage
+            nextBuyPrice: refPrices.nextBuyPrice, // Use the actual stored database value
+            nextSellPrice: nextSellPrice, // Use the fixed sell price value if needed
+            profitLossPercentage: profitLossPercentage,
+            lastTransactionPrice: refPrices.lastTransactionPrice // Include last transaction price
           };
         }
         
@@ -485,11 +501,34 @@ function setupSocketIO() {
           console.error(`Error updating balances after purchase: ${balanceError.message}`);
         }
         
-        // Send updated data with a delay to ensure all systems are synced
+        // Send updated data with a longer delay to ensure all systems are properly synced
+        // and any transaction-based recalculations have completed
         setTimeout(async () => {
-          const updatedData = await getUpdateDataForSymbol(data.symbol);
-          socket.emit('crypto-data-update', updatedData);
-        }, 2000);  // Small delay to ensure Binance has processed the order
+          try {
+            // Ensure we have the most up-to-date reference prices by explicitly checking them
+            const refPrices = await db.getReferencePrice(data.symbol);
+            console.log(`[DATA REFRESH] For ${data.symbol}: Getting final data with latest thresholds - Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice}`);
+            
+            // Get updated data with our consistent thresholds
+            const updatedData = await getUpdateDataForSymbol(data.symbol);
+            
+            // Double-check the data before sending to client
+            if (updatedData.nextBuyPrice !== refPrices.nextBuyPrice || 
+                updatedData.nextSellPrice !== refPrices.nextSellPrice) {
+              console.warn(`[MISMATCH] Price inconsistency detected for ${data.symbol}: DB has Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice} but calculated values are Buy=${updatedData.nextBuyPrice}, Sell=${updatedData.nextSellPrice}. Using DB values.`);
+              
+              // Override with the actual DB values to ensure consistency
+              updatedData.nextBuyPrice = refPrices.nextBuyPrice;
+              updatedData.nextSellPrice = refPrices.nextSellPrice;
+            }
+            
+            // Send verified data to client
+            socket.emit('crypto-data-update', updatedData);
+            console.log(`[SENT] Final verified data for ${data.symbol} with thresholds: Buy=${updatedData.nextBuyPrice}, Sell=${updatedData.nextSellPrice}`);
+          } catch (err) {
+            console.error(`[ERROR] Failed to send final crypto update for ${data.symbol}:`, err);
+          }
+        }, 3000);  // Longer delay to ensure all DB updates are complete
         
       } catch (error) {
         console.error('Error buying cryptocurrency:', error);
@@ -519,11 +558,34 @@ function setupSocketIO() {
           console.error(`Error updating balances after sale: ${balanceError.message}`);
         }
         
-        // Send updated data with a delay to ensure all systems are synced
+        // Send updated data with a longer delay to ensure all systems are properly synced
+        // and any transaction-based recalculations have completed
         setTimeout(async () => {
-          const updatedData = await getUpdateDataForSymbol(data.symbol);
-          socket.emit('crypto-data-update', updatedData);
-        }, 2000);  // Small delay to ensure Binance has processed the order
+          try {
+            // Ensure we have the most up-to-date reference prices by explicitly checking them
+            const refPrices = await db.getReferencePrice(data.symbol);
+            console.log(`[DATA REFRESH] For ${data.symbol}: Getting final data with latest thresholds - Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice}`);
+            
+            // Get updated data with our consistent thresholds
+            const updatedData = await getUpdateDataForSymbol(data.symbol);
+            
+            // Double-check the data before sending to client
+            if (updatedData.nextBuyPrice !== refPrices.nextBuyPrice || 
+                updatedData.nextSellPrice !== refPrices.nextSellPrice) {
+              console.warn(`[MISMATCH] Price inconsistency detected for ${data.symbol}: DB has Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice} but calculated values are Buy=${updatedData.nextBuyPrice}, Sell=${updatedData.nextSellPrice}. Using DB values.`);
+              
+              // Override with the actual DB values to ensure consistency
+              updatedData.nextBuyPrice = refPrices.nextBuyPrice;
+              updatedData.nextSellPrice = refPrices.nextSellPrice;
+            }
+            
+            // Send verified data to client
+            socket.emit('crypto-data-update', updatedData);
+            console.log(`[SENT] Final verified data for ${data.symbol} with thresholds: Buy=${updatedData.nextBuyPrice}, Sell=${updatedData.nextSellPrice}`);
+          } catch (err) {
+            console.error(`[ERROR] Failed to send final crypto update for ${data.symbol}:`, err);
+          }
+        }, 3000);  // Longer delay to ensure all DB updates are complete
         
       } catch (error) {
         console.error('Error selling cryptocurrency:', error);
@@ -624,24 +686,44 @@ async function getUpdateDataForSymbol(symbol) {
     // Get account balances from database (now guaranteed to be fresh from Binance)
     const accountBalances = await db.getAccountBalances();
     
-    // Calculate thresholds
-    const thresholds = await db.calculateTradingThresholds(
-      symbol, 
-      parseFloat(priceData.price)
-    );
+    // First, get the exact reference prices straight from the database
+    // This is critical to ensure we're using the actual stored values, not recalculated ones
+    const refPrices = await db.getReferencePrice(symbol);
+    
+    // For profit/loss calculation, get holdings and other data
+    const holdings = await db.getCurrentHoldings(symbol);
+    
+    // Log with holdings information
+    console.log(`[GET_UPDATE_DATA] Direct DB reference prices for ${symbol}: Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice}, Holdings=${holdings.quantity}, LastTxPrice=${refPrices.lastTransactionPrice}`);
+    
+    // Calculate profit/loss percentage
+    const currentPrice = parseFloat(priceData.price);
+    const profitLossPercentage = holdings.averageBuyPrice > 0 
+      ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100
+      : 0;
+    
+    // Use the nextSellPrice value exactly as it is in the database
+    // We don't want to "fix" a zero value, as it's an intentional state after "sell all" operations
+    const nextSellPrice = refPrices.nextSellPrice;
+    
+    // Just log zero sell prices for debugging
+    if (refPrices.nextSellPrice === 0) {
+      console.log(`[INFO] Symbol ${symbol} has nextSellPrice=0, keeping as-is per requirements`);
+    }
     
     // Get the balance from the database (will be the same as Binance's balance)
     const databaseBalance = (accountBalances && accountBalances[symbol]) || 0;
     
-    // Combine data
+    // Combine data - using the DIRECT reference prices from the database instead of recalculated ones
     return {
       symbol,
       price: parseFloat(priceData.price),
       history: tradingHistory,
       holdings: parseFloat(databaseBalance).toFixed(8), // Always use the database balance which is now synced with Binance, with proper decimal precision
-      nextBuyPrice: thresholds.nextBuyPrice,
-      nextSellPrice: thresholds.nextSellPrice,
-      profitLossPercentage: thresholds.profitLossPercentage
+      nextBuyPrice: refPrices.nextBuyPrice, // Use the actual stored database value
+      nextSellPrice: nextSellPrice, // Use the fixed sell price value if needed
+      profitLossPercentage: profitLossPercentage,
+      lastTransactionPrice: refPrices.lastTransactionPrice // Include last transaction price
     };
   } catch (error) {
     console.error(`Error getting updated data for ${symbol}:`, error);
