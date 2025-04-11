@@ -864,13 +864,23 @@ async function placeMarketOrder(orderData) {
     
     // Step 5: Only after verification, record trade in database
     const baseCurrency = symbol.replace('USDT', '');
-    await db.recordTrade({
+    // Add a flag to identify if this is a manual sell all operation
+    const isManualSellAll = side.toLowerCase() === 'sell' && 
+                          orderData.isManualSellAll === true;
+    
+    // Record the trade and get the result data that includes price thresholds
+    const tradeResult = await db.recordTrade({
       symbol: baseCurrency,
       action: side.toLowerCase(),
       quantity: parseFloat(quantity),
       price: price,
-      usdt_amount: usdt
+      usdt_amount: usdt,
+      isManualSellAll: isManualSellAll
     });
+    
+    // Verify price thresholds were updated
+    const thresholdVerification = await db.getReferencePrice(baseCurrency);
+    console.log(`[VERIFICATION] After trade for ${baseCurrency}: lastTransactionPrice=${thresholdVerification.lastTransactionPrice}, nextBuyPrice=${thresholdVerification.nextBuyPrice}, nextSellPrice=${thresholdVerification.nextSellPrice}`);
     
     // Step 6: Update account balances in database after trade
     try {
@@ -969,12 +979,15 @@ async function sellAll(symbol) {
     const quantity = parseFloat(asset.free);
     const formattedQuantity = formatQuantity(symbol, quantity, currentPrice);
     
-    // Place the order
-    return await placeMarketOrder({
+    // Place the order with a flag to indicate this is a manual sell all operation
+    const result = await placeMarketOrder({
       symbol: `${symbol}USDT`,
       side: 'SELL',
-      quantity: formattedQuantity
+      quantity: formattedQuantity,
+      isManualSellAll: true  // Add flag to identify manual sell all operation
     });
+    
+    return result;
   } catch (error) {
     console.error(`Error selling all ${symbol}:`, error);
     throw error;
@@ -1042,6 +1055,13 @@ function formatQuantity(symbol, quantity, currentPrice) {
 // - lastAutoTradingCheck (line 31)
 // - AUTO_TRADING_CHECK_INTERVAL (line 32)
 
+// Map to track active trading operations for each symbol to prevent duplicate orders
+const activeTradeExecutions = new Map();
+// Map to track symbols that have been recently traded to prevent duplicate orders
+const recentlyTraded = new Map();
+// Cooldown period (in ms) during which a symbol cannot be traded again after a trade
+const TRADE_COOLDOWN = 180000; // 180 seconds (3 minutes) to ensure thresholds are properly synchronized
+
 /**
  * Check if auto-trading should execute
  * This is called when price updates are received
@@ -1069,16 +1089,54 @@ async function checkAutoTrading(symbol, currentPrice) {
     return;
   }
   
+  // Check if there's already an active trading operation for this symbol
+  if (activeTradeExecutions.get(symbol)) {
+    console.log(`[DUPLICATE PREVENTION] Auto-trading check skipped: There's already an active trade execution for ${symbol}`);
+    return;
+  }
+  
+  // Check if this symbol was recently traded (within the cooldown period)
+  const lastTradeTime = recentlyTraded.get(symbol);
+  if (lastTradeTime) {
+    const timeElapsed = Date.now() - lastTradeTime;
+    const remainingCooldown = TRADE_COOLDOWN - timeElapsed;
+    
+    if (timeElapsed < TRADE_COOLDOWN) {
+      console.log(`[COOLDOWN PREVENTION] Auto-trading check skipped: ${symbol} was traded in the last ${Math.round(timeElapsed/1000)} seconds. ${Math.round(remainingCooldown/1000)} seconds of cooldown remaining.`);
+      return;
+    } else {
+      console.log(`[COOLDOWN EXPIRED] ${symbol} cooldown period has ended. Auto-trading checks now active.`);
+      // Clear the symbol from recently traded map since cooldown expired
+      recentlyTraded.delete(symbol);
+    }
+  }
+  
   try {
+    // Set the active trade execution flag BEFORE any checks to prevent race conditions
+    activeTradeExecutions.set(symbol, true);
+    
     // Add more detailed log to track auto-trading executions
     console.log(`Performing auto-trading check for ${symbol} at price $${currentPrice.toFixed(4)}`);
     
     // Emit event for auto-trading check
     binanceEvents.emit('auto_trading_check', { symbol, price: currentPrice });
     
-    // Get reference prices and thresholds from database
+    // Get FRESH reference prices and thresholds directly from database
+    // This is critical to avoid stale threshold values
+    console.log(`[AUTO-TRADE CHECK] Getting fresh thresholds for ${symbol} at ${currentPrice}`);
+    
+    // Force database to provide the most up-to-date values by adding a small delay
+    // This helps ensure we don't read cached/stale values
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     const refPrices = await db.getReferencePrice(symbol);
+    console.log(`[DB REFERENCE] For ${symbol}: Last transaction price=${refPrices.lastTransactionPrice}`);
+    
     const thresholds = await db.calculateTradingThresholds(symbol, currentPrice);
+    console.log(`[PRICES] For ${symbol}: Buy at ${thresholds.nextBuyPrice}, Sell at ${thresholds.nextSellPrice}`);
+    
+    // Double check thresholds are properly updated
+    console.log(`[PRICE CHECK] For ${symbol}: nextBuyPrice=${thresholds.nextBuyPrice.toFixed(4)}, nextSellPrice=${thresholds.nextSellPrice.toFixed(4)}`);
     
     // Get current holdings
     const holdings = await db.getCurrentHoldings(symbol);
@@ -1094,40 +1152,89 @@ async function checkAutoTrading(symbol, currentPrice) {
       const usdtBalance = accountInfo.balances.find(b => b.asset === 'USDT');
       
       if (usdtBalance && parseFloat(usdtBalance.free) >= 50) {
-        console.log(`AUTO-TRADING TRIGGERED: Buying ${symbol} at $${currentPrice.toFixed(4)} (Buy threshold: $${thresholds.nextBuyPrice.toFixed(4)})`);
+        console.log(`AUTO-TRADING TRIGGERED: Buying ${symbol} at $${currentPrice.toFixed(4)} (Buy price: $${thresholds.nextBuyPrice.toFixed(4)})`);
         
         // Send telegram notification for auto-trading trigger
-        telegram.sendMessage(`🤖 Auto-trading BUY triggered for ${symbol} at $${currentPrice.toFixed(4)} (below threshold: $${thresholds.nextBuyPrice.toFixed(4)})`);
+        telegram.sendMessage(`🤖 Auto-trading BUY triggered for ${symbol} at $${currentPrice.toFixed(4)} (below buy price: $${thresholds.nextBuyPrice.toFixed(4)})`);
         
         try {
-          // Execute buy - this will also update the reference prices in recordTrade function
+          console.log(`[AUTO-TRADE] Executing BUY for ${symbol} at ${currentPrice}`);
+          // Execute buy - this will update the reference prices in recordTrade function
           const result = await buyWithUsdt(symbol, 50);
           
-          // Manually update thresholds immediately to prevent multiple orders
-          // Set next buy threshold to 5% below current price
-          // Set next sell threshold to 5% above the initial purchase price
-          const newBuyThreshold = currentPrice * 0.95;
-          // For buy orders, we should calculate the sell threshold as 5% above purchase price
-          const newSellThreshold = currentPrice * 1.05;
+          // After successful trade, update lastAutoTradingCheck to enforce a cooldown period 
+          // that's longer than usual to ensure thresholds propagate properly
+          lastAutoTradingCheck.set(symbol, Date.now());
           
-          await db.updateReferencePrice(symbol, {
-            nextBuyThreshold: newBuyThreshold,
-            initialPurchasePrice: currentPrice, // This buy becomes our new reference
-            nextSellThreshold: newSellThreshold
-          });
+          // For a BUY operation, calculate new thresholds
+          // Calculate new buy threshold (1% below current price)
+          const newBuyThreshold = currentPrice * 0.99;
+          // Calculate new sell threshold (1% above current buy price)
+          const newSellThreshold = currentPrice * 1.01;
           
-          console.log(`Updated thresholds for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (5% below current price), Next Sell = $${newSellThreshold.toFixed(4)} (5% above buy price)`);
+          // Force recalculation of thresholds to ensure consistency
+          const updatedThresholds = await db.calculateTradingThresholds(symbol, currentPrice);
           
-          // Logging for clarity
+          // Log updated thresholds to confirm changes
+          console.log(`[UPDATED PRICES] For ${symbol}: nextBuyPrice=${updatedThresholds.nextBuyPrice.toFixed(4)}, nextSellPrice=${updatedThresholds.nextSellPrice.toFixed(4)}`);
+          
+          // Check if thresholds were updated correctly
+          if (Math.abs(updatedThresholds.nextBuyPrice - newBuyThreshold) > 0.0001 || 
+              Math.abs(updatedThresholds.nextSellPrice - newSellThreshold) > 0.0001) {
+            console.error(`[CRITICAL] Threshold update failed for ${symbol}! Expected: Buy=${newBuyThreshold}, Sell=${newSellThreshold}, Got: Buy=${updatedThresholds.nextBuyPrice}, Sell=${updatedThresholds.nextSellPrice}`);
+            
+            // Try one more time to force threshold update
+            await db.updateReferencePrice(symbol, {
+              nextBuyPrice: newBuyThreshold,
+              lastTransactionPrice: currentPrice,
+              nextSellPrice: newSellThreshold,
+              forceUpdate: true  // Add a flag to indicate this is an emergency update
+            });
+            
+            // Verify again after the force update
+            const finalVerification = await db.getReferencePrice(symbol);
+            console.log(`[FINAL VERIFICATION] ${symbol} reference prices after force update: Buy=${finalVerification.nextBuyPrice}, Sell=${finalVerification.nextSellPrice}`);
+            
+            // Manually emit an event to ensure all listeners are updated
+            binanceEvents.emit('reference_price_updated', {
+              symbol: symbol,
+              lastTransactionPrice: currentPrice,
+              nextBuyPrice: newBuyThreshold,
+              nextSellPrice: newSellThreshold
+            });
+          }
+          
+          // Standard logging
+          console.log(`Updated prices for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (1% below current price), Next Sell = $${newSellThreshold.toFixed(4)} (1% above buy price)`);
           console.log(`Auto-trading buy executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
           
-          // Emit auto-trading event
+          // Mark this symbol as recently traded to prevent duplicate trades
+          // Use current time plus a buffer to ensure cooldown is enforced longer
+          recentlyTraded.set(symbol, Date.now());
+          
+          // Log that we've marked this symbol as recently traded
+          console.log(`[COOLDOWN ACTIVATED] ${symbol} marked as recently traded. No trades for ${TRADE_COOLDOWN/1000} seconds`);
+          
+          // Emit auto-trading event with threshold info
           binanceEvents.emit('auto_trading_executed', { 
             symbol, 
             action: 'buy', 
             price: currentPrice,
             amount: 50,
-            orderId: result.orderId
+            orderId: result.orderId,
+            newThresholds: {
+              nextBuyPrice: newBuyThreshold,
+              nextSellPrice: newSellThreshold
+            }
+          });
+          
+          // Ensure database values are consistent by doing a final force update
+          console.log(`[VERIFICATION] Ensuring database values for ${symbol} are consistent after BUY operation`);
+          await db.updateReferencePrice(symbol, {
+            nextBuyPrice: newBuyThreshold,
+            nextSellPrice: newSellThreshold,
+            lastTransactionPrice: currentPrice,
+            forceUpdate: true
           });
         } catch (buyError) {
           console.error(`Auto-trading buy execution failed for ${symbol}:`, buyError);
@@ -1138,47 +1245,119 @@ async function checkAutoTrading(symbol, currentPrice) {
       }
     }
     
-    // Check if we should sell (price at or above fixed sell threshold and we have holdings)
+    // Check if we should sell (price at or above fixed sell price and we have holdings)
     else if (currentPrice >= thresholds.nextSellPrice && holdings.quantity > 0) {
-      console.log(`AUTO-TRADING TRIGGERED: Selling ${symbol} at $${currentPrice.toFixed(4)} (Sell threshold: $${thresholds.nextSellPrice.toFixed(4)})`);
+      console.log(`AUTO-TRADING TRIGGERED: Selling ${symbol} at $${currentPrice.toFixed(4)} (Sell price: $${thresholds.nextSellPrice.toFixed(4)})`);
       
       // Send telegram notification for auto-trading trigger
-      telegram.sendMessage(`🤖 Auto-trading SELL triggered for ${symbol} at $${currentPrice.toFixed(4)} (above threshold: $${thresholds.nextSellPrice.toFixed(4)})`);
+      telegram.sendMessage(`🤖 Auto-trading SELL triggered for ${symbol} at $${currentPrice.toFixed(4)} (above sell price: $${thresholds.nextSellPrice.toFixed(4)})`);
       
       try {
-        // Execute sell - this will also update the reference prices in recordTrade function
+        console.log(`[AUTO-TRADE] Executing SELL for ${symbol} at ${currentPrice}`);
+        // Execute sell - this will update the reference prices in recordTrade function
         const result = await sellAll(symbol);
         
-        // Manually update thresholds immediately to prevent issues
-        // Set next buy threshold to 5% below current price
-        // Set next sell threshold to null/0 since we no longer have any holdings
-        const newBuyThreshold = currentPrice * 0.95;
-        await db.updateReferencePrice(symbol, {
-          nextBuyThreshold: newBuyThreshold,
-          nextSellThreshold: 0  // Set to 0 to indicate N/A since we have no holdings
-        });
+        // After successful trade, update lastAutoTradingCheck to enforce a cooldown period
+        // that's longer than usual to ensure thresholds propagate properly
+        lastAutoTradingCheck.set(symbol, Date.now());
         
-        console.log(`Updated thresholds for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (5% below sell price), Next Sell = N/A (no holdings)`);
+        // For a SELL operation, calculate new thresholds
+        // For sell operations, set buy threshold to 1% below current sell price
+        const newBuyThreshold = currentPrice * 0.99;
+        // For auto-sell operations, set next sell price to 1% above the current price
+        // (not zero, since this is not a manual "Sell All" operation)
+        const newSellThreshold = currentPrice * 1.01;
         
-        // Logging for clarity
+        // For sell operations initiated by auto-trading, let recordTrade handle threshold updates normally
+        
+        // Force recalculation of thresholds to ensure consistency
+        const updatedThresholds = await db.calculateTradingThresholds(symbol, currentPrice);
+        
+        // Log updated thresholds to confirm changes
+        console.log(`[UPDATED PRICES] For ${symbol}: nextBuyPrice=${updatedThresholds.nextBuyPrice.toFixed(4)}, nextSellPrice=${updatedThresholds.nextSellPrice.toFixed(4)}`);
+        
+        // Check if thresholds were updated correctly
+        if (Math.abs(updatedThresholds.nextBuyPrice - newBuyThreshold) > 0.0001 || 
+            Math.abs(updatedThresholds.nextSellPrice - newSellThreshold) > 0.0001) {
+          console.error(`[CRITICAL] Threshold update failed for ${symbol}! Expected: Buy=${newBuyThreshold}, Sell=${newSellThreshold}, Got: Buy=${updatedThresholds.nextBuyPrice}, Sell=${updatedThresholds.nextSellPrice}`);
+          
+          // Try one more time to force threshold update
+          await db.updateReferencePrice(symbol, {
+            nextBuyPrice: newBuyThreshold,
+            nextSellPrice: newSellThreshold,
+            lastTransactionPrice: currentPrice,
+            forceUpdate: true  // Add a flag to indicate this is an emergency update
+          });
+          
+          // Verify again after the force update
+          const finalVerification = await db.getReferencePrice(symbol);
+          console.log(`[FINAL VERIFICATION] ${symbol} reference prices after force update: Buy=${finalVerification.nextBuyPrice}, Sell=${finalVerification.nextSellPrice}`);
+          
+          // Manually emit an event to ensure all listeners are updated
+          binanceEvents.emit('reference_price_updated', {
+            symbol: symbol,
+            lastTransactionPrice: currentPrice,
+            nextBuyPrice: newBuyThreshold,
+            nextSellPrice: newSellThreshold
+          });
+        }
+        
+        // Standard logging
+        console.log(`Updated prices for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (1% below sell price), Next Sell = $${newSellThreshold.toFixed(4)} (1% above sell price)`);
         console.log(`Auto-trading sell executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
         
-        // Emit auto-trading event
+        // Mark this symbol as recently traded to prevent duplicate trades
+        recentlyTraded.set(symbol, Date.now());
+        
+        // Log that we've marked this symbol as recently traded
+        console.log(`[COOLDOWN ACTIVATED] ${symbol} marked as recently traded. No trades for ${TRADE_COOLDOWN/1000} seconds`);
+        
+        // Emit auto-trading event with threshold info
         binanceEvents.emit('auto_trading_executed', { 
           symbol, 
           action: 'sell', 
           price: currentPrice,
           quantity: holdings.quantity,
-          orderId: result.orderId
+          orderId: result.orderId,
+          newThresholds: {
+            nextBuyPrice: newBuyThreshold,
+            nextSellPrice: newSellThreshold
+          }
+        });
+        
+        // Ensure database values are consistent by doing a final force update
+        console.log(`[VERIFICATION] Ensuring database values for ${symbol} are consistent after SELL operation`);
+        await db.updateReferencePrice(symbol, {
+          nextBuyPrice: newBuyThreshold,
+          nextSellPrice: newSellThreshold,
+          lastTransactionPrice: currentPrice,
+          forceUpdate: true
         });
       } catch (sellError) {
         console.error(`Auto-trading sell execution failed for ${symbol}:`, sellError);
         telegram.sendErrorNotification(`Auto-trading sell execution failed for ${symbol}: ${sellError.message}`);
       }
+    } else {
+      // No trade required
+      console.log(`No auto-trading action required for ${symbol} at price $${currentPrice.toFixed(4)}`);
     }
   } catch (error) {
     console.error(`Error in auto-trading check for ${symbol}:`, error);
     // Don't disable auto-trading on errors, just log them
+  } finally {
+    // ALWAYS clear the active trade execution flag, regardless of outcome
+    activeTradeExecutions.delete(symbol);
+    console.log(`Released active trade execution lock for ${symbol}`);
+    
+    // Log if the symbol is in cooldown period
+    const lastTradeTime = recentlyTraded.get(symbol);
+    if (lastTradeTime) {
+      const timeElapsed = Date.now() - lastTradeTime;
+      const remainingTime = Math.max(0, TRADE_COOLDOWN - timeElapsed);
+      if (remainingTime > 0) {
+        console.log(`Symbol ${symbol} in trade cooldown: ${Math.ceil(remainingTime/1000)}s remaining before next trade`);
+      }
+    }
   }
 }
 
@@ -1269,6 +1448,22 @@ function onPriceUpdate(handler) {
 }
 
 /**
+ * Register a handler for reference price updates
+ * @param {Function} handler - The handler function(priceData)
+ */
+function onReferencePriceUpdate(handler) {
+  if (typeof handler === 'function') {
+    binanceEvents.on('reference_price_updated', (priceData) => {
+      try {
+        handler(priceData);
+      } catch (error) {
+        console.error('Error in reference price update handler:', error);
+      }
+    });
+  }
+}
+
+/**
  * Register a handler for order updates
  * @param {Function} handler - The handler function(orderData)
  */
@@ -1331,7 +1526,11 @@ function notifyPriceUpdate(symbol, price) {
     // Only check auto-trading if:
     // 1. Enough time has passed since last check (throttling)
     // 2. No trading operation is already in progress for this symbol (locking)
-    if ((now - lastCheck >= AUTO_TRADING_CHECK_INTERVAL) && !tradingLocks.get(lockKey)) {
+    // 3. No active trade execution is in progress for this symbol
+    if ((now - lastCheck >= AUTO_TRADING_CHECK_INTERVAL) && 
+        !tradingLocks.get(lockKey) && 
+        !activeTradeExecutions.get(symbol)) {
+      
       console.log(`Auto-trading is enabled, checking conditions for ${symbol} at ${price.toFixed(4)}`);
       lastAutoTradingCheck.set(symbol, now);
       
@@ -1356,8 +1555,27 @@ function notifyPriceUpdate(symbol, price) {
     }
   }
   
-  // Emit the event to all listeners
+  // Emit the price update event to all listeners
   binanceEvents.emit('price_update', { symbol, price });
+  
+  // Also regularly refresh reference prices to ensure UI and trading systems have current data
+  // Do this asynchronously to avoid blocking
+  setTimeout(async () => {
+    try {
+      const refPrices = await db.getReferencePrice(symbol);
+      if (refPrices) {
+        binanceEvents.emit('reference_price_updated', {
+          symbol: symbol,
+          lastTransactionPrice: refPrices.lastTransactionPrice, 
+          nextBuyPrice: refPrices.nextBuyPrice,
+          nextSellPrice: refPrices.nextSellPrice
+        });
+      }
+    } catch (error) {
+      // Just log the error and continue - this is a background operation
+      console.error(`Error getting reference prices for ${symbol}:`, error);
+    }
+  }, 0);
 }
 
 /**
@@ -1519,6 +1737,7 @@ module.exports = {
   onOrderUpdate,
   onConnectionChange,
   onAutoTradingStatusChange,
+  onReferencePriceUpdate, // Add the reference price update handler
   getSupportedSymbols: () => [...state.supportedSymbols],
   getCurrentPrice: (symbol) => state.lastPrices.get(symbol) || 0,
   getHealthStatus,
