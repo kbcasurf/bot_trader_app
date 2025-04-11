@@ -1,7 +1,0 @@
-tenancy_ocid     = "ocid1.tenancy.oc1..exampleocid"
-compartment_ocid = "ocid1.compartment.oc1..exampleocid"
-user_ocid        = "ocid1.user.oc1..exampleocid"
-fingerprint      = "xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx"
-private_key_path = "/path/to/oci_api_key.pem"
-region           = "us-phoenix-1"
-ssh_public_key   = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ..."

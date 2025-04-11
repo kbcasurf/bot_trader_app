@@ -108,22 +108,6 @@ services:
     networks:
       - bot-network
 
-  # phpmyadmin:
-  #     image: phpmyadmin/phpmyadmin
-  #     container_name: phpmyadmin
-  #     restart: unless-stopped
-  #     ports:
-  #       - "8080:80"
-  #     environment:
-  #       - PMA_HOST=database
-  #       - PMA_USER=${DB_USER:-trading_bot_user}
-  #       - PMA_PASSWORD=${DB_PASSWORD:-mariadb_secret}
-  #     depends_on:
-  #       database:
-  #         condition: service_healthy
-  #     networks:
-  #       - bot-network
-
 volumes:
   db-data:
     driver: local
