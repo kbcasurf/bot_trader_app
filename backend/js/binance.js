@@ -18,9 +18,9 @@ dotenv.config({ path: require('path').resolve(__dirname, '../../.env') });
 // Binance API configuration
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET;
-const BINANCE_API_URL = process.env.BINANCE_API_URL || 'https://testnet.binance.vision'; 
-const BINANCE_WS_URL = process.env.BINANCE_WEBSOCKET_URL || 'wss://testnet.binance.vision';
-const BINANCE_RECV_WINDOW = parseInt(process.env.BINANCE_RECV_WINDOW || '5000');
+const BINANCE_API_URL = process.env.BINANCE_API_URL; 
+const BINANCE_WS_URL = process.env.BINANCE_WEBSOCKET_URL;
+const BINANCE_RECV_WINDOW = parseInt(process.env.BINANCE_RECV_WINDOW);
 
 // Create a custom event emitter for price updates
 class BinanceEvents extends EventEmitter {}
