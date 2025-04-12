@@ -6,21 +6,21 @@ const mariadb = require('mariadb');
 const dotenv = require('dotenv');
 
 // Load environment variables
-dotenv.config({ path: require('path').resolve(__dirname, '../../.env') });
+dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 
 // Database connection configuration with better defaults and connection handling
 const dbConfig = {
-  host: process.env.DB_HOST || 'database',
-  port: parseInt(process.env.DB_PORT || '3306'),
-  user: process.env.DB_USER || 'trading_bot_user',
-  password: process.env.DB_PASSWORD || 'mariadb_secret',
-  database: process.env.DB_NAME || 'crypto_trading_bot',
+  host: process.env.DB_HOST,
+  port: parseInt(process.env.DB_PORT),
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
   connectionLimit: 10,
   acquireTimeout: 30000,     // Longer timeout for acquiring connections (30s)
   connectTimeout: 20000,     // Longer connection timeout (20s)
   idleTimeout: 60000,        // How long connections can remain idle (60s)
   maxIdle: 5,                // Max idle connections to keep in pool
-  trace: process.env.NODE_ENV !== 'production', // Stack trace for debugging in non-production
+  trace: process.env.NODE_ENV, // Stack trace for debugging in non-production
   multipleStatements: false, // Security: disable multiple statements
   dateStrings: true,         // Return dates as strings for consistency
   resetAfterUse: true,       // Reset connection state after use

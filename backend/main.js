@@ -21,7 +21,7 @@ const binanceEvents = binance.events;
 global.events = new EventEmitter();
 
 // Load environment variables
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, './.env') });
 
 // Log environment information - only for debugging
 console.log('====== ENVIRONMENT DEBUG INFO ======');

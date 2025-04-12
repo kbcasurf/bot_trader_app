@@ -1,20 +1,18 @@
 services:
-  # Frontend service
   frontend:
     build: 
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - VITE_BACKEND_URL=${EXTERNAL_HOST:+http://${EXTERNAL_HOST}:3000}
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL}
     container_name: frontend
     restart: unless-stopped
     ports:
-      - "80:80"  # Use standard port mapping for simplicity
+      - "80:80"
     environment:
       - NODE_ENV=production
-      - VITE_BACKEND_URL=${EXTERNAL_HOST:+http://${EXTERNAL_HOST}:3000}
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL}
     volumes:
-      # Only mount the images directory for easier updates
       - ./frontend/images:/usr/share/nginx/html/images:ro
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
@@ -29,7 +27,6 @@ services:
       - bot-network
 
 
-  # Backend service
   backend:
     build: 
       context: ./backend
@@ -37,22 +34,12 @@ services:
     container_name: backend
     restart: unless-stopped
     ports:
-      - "3000:3000"  # Use standard port mapping for simplicity
+      - "3000:3000"
     networks:
       - bot-network
     volumes:
       - ./.env:/app/.env:ro
     environment:
-      - NODE_ENV=production
-      - DB_HOST=database
-      - EXTERNAL_HOST=${EXTERNAL_HOST}
-      - DB_USER=${DB_USER:-trading_bot_user}
-      - DB_PASSWORD=${DB_PASSWORD:-mariadb_secret}
-      - DB_NAME=${DB_NAME:-crypto_trading_bot}
-      - BINANCE_API_KEY=${BINANCE_API_KEY:-your_binance_api_key}
-      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-your_binance_api_secret}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-your_telegram_bot_token}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-your_telegram_chat_id}
       # Add connection configuration
       - DB_CONNECTION_LIMIT=10
       - DB_CONNECT_TIMEOUT=20000
@@ -88,19 +75,22 @@ services:
       --max-heap-table-size=32M
       --net-read-timeout=30
       --net-write-timeout=60
-    environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpassword}
-      - MYSQL_USER=${DB_USER:-trading_bot_user}
-      - MYSQL_PASSWORD=${DB_PASSWORD:-mariadb_secret}
-      - MYSQL_DATABASE=${DB_NAME:-crypto_trading_bot}
     ports:
       - "3306:3306"
     volumes:
       - db-data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - ./.env:/app/.env:ro
+    environment:
+    # Change it for your own use credentials
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
     healthcheck:
-      test: mysqladmin ping -h database -u ${DB_USER:-trading_bot_user} -p${DB_PASSWORD:-mariadb_secret}
+      # Change it for your own use credentials
+      test: mysqladmin ping -h database -u trading_bot_user -pmariadb_secret
       interval: 30s
       timeout: 10s
       retries: 3
@@ -116,8 +106,8 @@ services:
   #       - "8080:80"
   #     environment:
   #       - PMA_HOST=database
-  #       - PMA_USER=${DB_USER:-trading_bot_user}
-  #       - PMA_PASSWORD=${DB_PASSWORD:-mariadb_secret}
+  #       - PMA_USER=${DB_USER}
+  #       - PMA_PASSWORD=${DB_PASSWORD}
   #     depends_on:
   #       database:
   #         condition: service_healthy

@@ -13,7 +13,7 @@ const db = require('./dbconns');
 const telegram = require('./telegram');
 
 // Load environment variables
-dotenv.config({ path: require('path').resolve(__dirname, '../../.env') });
+dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 
 // Binance API configuration
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
