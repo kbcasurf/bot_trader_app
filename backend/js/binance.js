@@ -1159,18 +1159,23 @@ async function checkAutoTrading(symbol, currentPrice) {
         
         try {
           console.log(`[AUTO-TRADE] Executing BUY for ${symbol} at ${currentPrice}`);
+          // Get investment amount from environment or default to 50 USDT
+          const investmentAmount = parseFloat(process.env.TRADING_DEFAULT_INVESTMENT || 50);
           // Execute buy - this will update the reference prices in recordTrade function
-          const result = await buyWithUsdt(symbol, 50);
+          const result = await buyWithUsdt(symbol, investmentAmount);
           
           // After successful trade, update lastAutoTradingCheck to enforce a cooldown period 
           // that's longer than usual to ensure thresholds propagate properly
           lastAutoTradingCheck.set(symbol, Date.now());
           
           // For a BUY operation, calculate new thresholds
-          // Calculate new buy threshold (1% below current price)
-          const newBuyThreshold = currentPrice * 0.99;
-          // Calculate new sell threshold (1% above current buy price)
-          const newSellThreshold = currentPrice * 1.01;
+          // Get threshold percentages from environment variables or default to 1%
+          const buyThresholdPercentage = parseFloat(process.env.TRADING_BUY_THRESHOLD || 0.01);
+          const sellThresholdPercentage = parseFloat(process.env.TRADING_SELL_THRESHOLD || 0.01);
+          // Calculate new buy threshold (configured % below current price)
+          const newBuyThreshold = currentPrice * (1 - buyThresholdPercentage);
+          // Calculate new sell threshold (configured % above current buy price)
+          const newSellThreshold = currentPrice * (1 + sellThresholdPercentage);
           
           // Force recalculation of thresholds to ensure consistency
           const updatedThresholds = await db.calculateTradingThresholds(symbol, currentPrice);
@@ -1205,7 +1210,7 @@ async function checkAutoTrading(symbol, currentPrice) {
           }
           
           // Standard logging
-          console.log(`Updated prices for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (1% below current price), Next Sell = $${newSellThreshold.toFixed(4)} (1% above buy price)`);
+          console.log(`Updated prices for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (${(buyThresholdPercentage * 100).toFixed(2)}% below current price), Next Sell = $${newSellThreshold.toFixed(4)} (${(sellThresholdPercentage * 100).toFixed(2)}% above buy price)`);
           console.log(`Auto-trading buy executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
           
           // Mark this symbol as recently traded to prevent duplicate trades
@@ -1262,11 +1267,14 @@ async function checkAutoTrading(symbol, currentPrice) {
         lastAutoTradingCheck.set(symbol, Date.now());
         
         // For a SELL operation, calculate new thresholds
-        // For sell operations, set buy threshold to 1% below current sell price
-        const newBuyThreshold = currentPrice * 0.99;
-        // For auto-sell operations, set next sell price to 1% above the current price
+        // Get threshold percentages from environment variables or default to 1%
+        const buyThresholdPercentage = parseFloat(process.env.TRADING_BUY_THRESHOLD || 0.01);
+        const sellThresholdPercentage = parseFloat(process.env.TRADING_SELL_THRESHOLD || 0.01);
+        // For sell operations, set buy threshold to configured % below current sell price
+        const newBuyThreshold = currentPrice * (1 - buyThresholdPercentage);
+        // For auto-sell operations, set next sell price to configured % above the current price
         // (not zero, since this is not a manual "Sell All" operation)
-        const newSellThreshold = currentPrice * 1.01;
+        const newSellThreshold = currentPrice * (1 + sellThresholdPercentage);
         
         // For sell operations initiated by auto-trading, let recordTrade handle threshold updates normally
         

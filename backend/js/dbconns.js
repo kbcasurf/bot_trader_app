@@ -718,22 +718,28 @@ async function calculateTradingThresholds(symbol, currentPrice) {
     let nextBuyPrice = 0;
     let nextSellPrice = refPrices.nextSellPrice; // Preserve existing sell price if it exists
     
+    // Get threshold percentages from environment variables or default to 1%
+    const buyThresholdPercentage = parseFloat(process.env.TRADING_BUY_THRESHOLD || 0.01);
+    
     // If we have a last transaction price, use it to calculate fixed next buy price
     if (refPrices.lastTransactionPrice > 0) {
-      nextBuyPrice = refPrices.lastTransactionPrice * 0.99; // Fixed at 1% below last transaction price
+      nextBuyPrice = refPrices.lastTransactionPrice * (1 - buyThresholdPercentage); // Configurable % below last transaction price
     } else {
       // If no transaction price available, use current price
-      nextBuyPrice = currentPrice * 0.99;
+      nextBuyPrice = currentPrice * (1 - buyThresholdPercentage);
     }
     
     // Calculate next sell price based on holdings ONLY if it's not already explicitly set to 0
     // A zero nextSellPrice is a valid state after a "sell all" operation and we should preserve it
+    // Get sell threshold percentage from environment variable or default to 1%
+    const sellThresholdPercentage = parseFloat(process.env.TRADING_SELL_THRESHOLD || 0.01);
+    
     if (holdings.quantity > 0 && nextSellPrice !== 0) {
       if (refPrices.lastTransactionPrice > 0) {
-        nextSellPrice = refPrices.lastTransactionPrice * 1.01; // Fixed at 1% above last transaction price
+        nextSellPrice = refPrices.lastTransactionPrice * (1 + sellThresholdPercentage); // Configurable % above last transaction price
       } else {
         // Fallback to average buy price if no transaction price but we have holdings
-        nextSellPrice = holdings.averageBuyPrice * 1.01;
+        nextSellPrice = holdings.averageBuyPrice * (1 + sellThresholdPercentage);
       }
     } else if (holdings.quantity <= 0 && nextSellPrice !== 0) {
       // No sell threshold if no holdings, but only change it if it's not already 0

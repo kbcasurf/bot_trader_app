@@ -1,4 +1,36 @@
 services:
+  # Traefik reverse proxy with auto-configuration
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-data:/etc/traefik/acme
+    command:
+      # API and dashboard config
+      - "--api.insecure=false"
+      - "--api.dashboard=true"
+      # Docker provider configuration
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      # Entrypoints configuration
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      # Let's Encrypt configuration
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@example.com}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      # Logging
+      - "--log.level=INFO"
+    networks:
+      - bot-network
+
   # Frontend service
   frontend:
     build: 
@@ -8,8 +40,9 @@ services:
         - VITE_BACKEND_URL=${EXTERNAL_HOST:+http://${EXTERNAL_HOST}:3000}
     container_name: frontend
     restart: unless-stopped
-    ports:
-      - "80:80"  # Use standard port mapping for simplicity
+    # Remove port mapping as Traefik will handle this
+    # ports:
+    #   - "80:80"
     environment:
       - NODE_ENV=production
       - VITE_BACKEND_URL=${EXTERNAL_HOST:+http://${EXTERNAL_HOST}:3000}
@@ -27,6 +60,12 @@ services:
         condition: service_healthy
     networks:
       - bot-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${EXTERNAL_HOST}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
 
 
   # Backend service
@@ -36,8 +75,8 @@ services:
       dockerfile: Dockerfile
     container_name: backend
     restart: unless-stopped
-    ports:
-      - "3000:3000"  # Use standard port mapping for simplicity
+    expose:
+      - "3000"  # Expose to internal network only, Traefik will handle external access
     networks:
       - bot-network
     volumes:
@@ -61,6 +100,10 @@ services:
       - WS_RECONNECT_DELAY=2000
       - WS_MAX_RECONNECT_DELAY=60000
       - WS_HEARTBEAT_TIMEOUT=30000
+      # Trading configuration
+      - TRADING_BUY_THRESHOLD=${TRADING_BUY_THRESHOLD:-0.01}
+      - TRADING_SELL_THRESHOLD=${TRADING_SELL_THRESHOLD:-0.01}
+      - TRADING_DEFAULT_INVESTMENT=${TRADING_DEFAULT_INVESTMENT:-50}
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
       interval: 30s
@@ -70,6 +113,20 @@ services:
     depends_on:
       database:
         condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`${EXTERNAL_HOST}`) && (PathPrefix(`/api/`) || PathPrefix(`/socket.io/`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.backend.loadbalancer.server.port=3000"
+      # Special websocket configuration
+      - "traefik.http.routers.backend-ws.rule=Host(`${EXTERNAL_HOST}`) && PathPrefix(`/socket.io/`)"
+      - "traefik.http.routers.backend-ws.entrypoints=websecure"
+      - "traefik.http.routers.backend-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.services.backend-ws.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.backend-ws.headers.customrequestheaders.Connection=upgrade"
+      - "traefik.http.middlewares.backend-ws.headers.customrequestheaders.Upgrade=websocket"
+      - "traefik.http.routers.backend-ws.middlewares=backend-ws"
         
 
   # Database service
@@ -112,8 +169,8 @@ services:
      image: phpmyadmin/phpmyadmin
      container_name: phpmyadmin
      restart: unless-stopped
-     ports:
-       - "8080:80"
+     expose:
+       - "80"
      environment:
        - PMA_HOST=database
        - PMA_USER=${DB_USER:-trading_bot_user}
@@ -123,9 +180,17 @@ services:
          condition: service_healthy
      networks:
        - bot-network
+     labels:
+       - "traefik.enable=true"
+       - "traefik.http.routers.phpmyadmin.rule=Host(`admin.${EXTERNAL_HOST}`)"
+       - "traefik.http.routers.phpmyadmin.entrypoints=websecure"
+       - "traefik.http.routers.phpmyadmin.tls.certresolver=letsencrypt"
+       - "traefik.http.services.phpmyadmin.loadbalancer.server.port=80"
 
 volumes:
   db-data:
+    driver: local
+  traefik-data:
     driver: local
 
 networks:

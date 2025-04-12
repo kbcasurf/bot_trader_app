@@ -64,6 +64,13 @@ SOCKET_UPGRADE=true
 
 # Use BAKE for building the Docker image
 COMPOSE_BAKE=true
+
+# Trading Configuration
+# Percentage thresholds for buy/sell (decimal format: 0.01 = 1%)
+TRADING_BUY_THRESHOLD=0.01
+TRADING_SELL_THRESHOLD=0.01
+# Default investment amount for auto-trading operations (in USDT)
+TRADING_DEFAULT_INVESTMENT=50
 ```
 
 ### Running the Application Locally
@@ -81,21 +88,47 @@ docker-compose down
 
 ### Accessing the Dashboard
 
-Open your browser and navigate to `http://localhost'
-## Cloud Deployment
+Open your browser and navigate to `http://localhost`
 
-The project includes Terraform configurations to deploy the application on Oracle Cloud Infrastructure (OCI) Free Tier.
+## Cloud Deployment with SSL
 
-See the [Infrastructure README](./infrastructure/README.md) for detailed setup instructions.
+The project includes Traefik as a reverse proxy to handle HTTPS with automatic Let's Encrypt certificate management.
+
+### VPS Deployment with Let's Encrypt
+
+1. Clone the repository to your VPS
+2. Create a `.env` file with proper configuration, especially:
+   ```
+   EXTERNAL_HOST=your-domain.com
+   VITE_BACKEND_URL=https://your-domain.com
+   ACME_EMAIL=your-email@example.com
+   ```
+3. Make sure your domain name (configured in `EXTERNAL_HOST`) points to your VPS IP address
+4. Launch the application:
+   ```bash
+   docker-compose up -d
+   ```
+
+Traefik will automatically:
+- Obtain and renew Let's Encrypt certificates for your domain
+- Redirect HTTP traffic to HTTPS
+- Route requests to the appropriate services
+
+The dashboard will be available at `https://your-domain.com` and PHPMyAdmin at `https://admin.your-domain.com`
 
 ## Trading Strategy
 
 The bot implements a simple but effective "buy the dip, sell the rise" strategy:
 
-1. Initial purchase is made when the user clicks "First Purchase"
-2. The bot sells when price increases by 5% from the initial purchase
-3. The bot buys more when price drops by 5% from the last purchase
+1. Initial purchase is made when the user clicks "Buy" button
+2. The bot sells when price increases by the configured percentage (default 1%) from the last transaction price
+3. The bot buys more when price drops by the configured percentage (default 1%) from the last transaction price
 4. The cycle continues until the user manually stops it or uses the "Sell All" button
+
+The buy/sell thresholds and default investment amount can be customized in the .env file using these variables:
+- `TRADING_BUY_THRESHOLD`: Percentage drop required to trigger a buy (default: 0.01 or 1%)
+- `TRADING_SELL_THRESHOLD`: Percentage rise required to trigger a sell (default: 0.01 or 1%)
+- `TRADING_DEFAULT_INVESTMENT`: Default USDT amount for automatic buy operations (default: 50 USDT)
 
 ## Technology Stack
 
