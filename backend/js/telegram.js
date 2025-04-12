@@ -11,6 +11,8 @@ dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 // Telegram bot configuration
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_TIMEOUT = 10000; // Timeout in ms (10 seconds)
+const TELEGRAM_MAX_RETRIES = 3; // Maximum number of retry attempts
 
 // Initialize bot only if token is available
 let bot = null;
@@ -34,12 +36,23 @@ function initialize() {
       return false;
     }
 
-    // Create bot instance
-    bot = new Telegraf(TELEGRAM_BOT_TOKEN);
+    // Create bot instance with additional config
+    bot = new Telegraf(TELEGRAM_BOT_TOKEN, {
+      telegram: {
+        // Add API request configuration to help with connection issues
+        apiRoot: 'https://api.telegram.org',
+        timeout: TELEGRAM_TIMEOUT
+      }
+    });
     
-    // Set up basic error handling
+    // Set up more robust error handling
     bot.catch((err, ctx) => {
       console.error('Telegram bot error:', err);
+      
+      // For connection-related errors, log more details
+      if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ESOCKETTIMEDOUT') {
+        console.error(`Telegram connection error (${err.code}): This may be temporary, will retry on next attempt`);
+      }
     });
     
     // Check if we have a chat ID immediately to set isConfigured
@@ -100,9 +113,37 @@ async function sendMessage(message) {
       return false;
     }
 
-    // Send the message
-    await bot.telegram.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'HTML' });
-    return true;
+    // Send the message with retry mechanism for connection errors
+    let retries = 0;
+    const retryDelay = 2000; // 2 seconds between retries
+    
+    while (retries < TELEGRAM_MAX_RETRIES) {
+      try {
+        // Create a promise that can be timed out
+        const sendPromise = bot.telegram.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'HTML' });
+        
+        // Create a timeout promise
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Telegram API timeout')), TELEGRAM_TIMEOUT);
+        });
+        
+        // Race the send request against the timeout
+        await Promise.race([sendPromise, timeoutPromise]);
+        console.log(`Telegram message sent successfully after ${retries > 0 ? retries + ' retries' : 'first attempt'}`);
+        return true;
+      } catch (err) {
+        // Connection error (ECONNRESET) or timeout
+        if ((err.code === 'ECONNRESET' || err.message === 'Telegram API timeout') && retries < TELEGRAM_MAX_RETRIES - 1) {
+          retries++;
+          console.log(`Telegram error: ${err.message}, retrying (${retries}/${TELEGRAM_MAX_RETRIES})...`);
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        } else {
+          // Other error or max retries reached, re-throw
+          throw err;
+        }
+      }
+    }
   } catch (error) {
     console.error('Error sending Telegram message:', error);
     return false;
