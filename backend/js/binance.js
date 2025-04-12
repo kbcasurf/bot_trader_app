@@ -22,6 +22,11 @@ const BINANCE_API_URL = process.env.BINANCE_API_URL;
 const BINANCE_WS_URL = process.env.BINANCE_WEBSOCKET_URL;
 const BINANCE_RECV_WINDOW = parseInt(process.env.BINANCE_RECV_WINDOW);
 
+// Trading configuration
+const BUY_THRESHOLD_PERCENT = parseFloat(process.env.BUY_THRESHOLD_PERCENT || 0.01);  // Default to 1% if not set
+const SELL_THRESHOLD_PERCENT = parseFloat(process.env.SELL_THRESHOLD_PERCENT || 0.01); // Default to 1% if not set
+const AUTO_TRADE_INVESTMENT_AMOUNT = parseFloat(process.env.AUTO_TRADE_INVESTMENT_AMOUNT || 50); // Default to $50 if not set
+
 // Create a custom event emitter for price updates
 class BinanceEvents extends EventEmitter {}
 const binanceEvents = new BinanceEvents();
@@ -1151,7 +1156,7 @@ async function checkAutoTrading(symbol, currentPrice) {
       const accountInfo = await getAccountInfo();
       const usdtBalance = accountInfo.balances.find(b => b.asset === 'USDT');
       
-      if (usdtBalance && parseFloat(usdtBalance.free) >= 50) {
+      if (usdtBalance && parseFloat(usdtBalance.free) >= AUTO_TRADE_INVESTMENT_AMOUNT) {
         console.log(`AUTO-TRADING TRIGGERED: Buying ${symbol} at $${currentPrice.toFixed(4)} (Buy price: $${thresholds.nextBuyPrice.toFixed(4)})`);
         
         // Send telegram notification for auto-trading trigger
@@ -1160,17 +1165,17 @@ async function checkAutoTrading(symbol, currentPrice) {
         try {
           console.log(`[AUTO-TRADE] Executing BUY for ${symbol} at ${currentPrice}`);
           // Execute buy - this will update the reference prices in recordTrade function
-          const result = await buyWithUsdt(symbol, 50);
+          const result = await buyWithUsdt(symbol, AUTO_TRADE_INVESTMENT_AMOUNT);
           
           // After successful trade, update lastAutoTradingCheck to enforce a cooldown period 
           // that's longer than usual to ensure thresholds propagate properly
           lastAutoTradingCheck.set(symbol, Date.now());
           
           // For a BUY operation, calculate new thresholds
-          // Calculate new buy threshold (1% below current price)
-          const newBuyThreshold = currentPrice * 0.99;
-          // Calculate new sell threshold (1% above current buy price)
-          const newSellThreshold = currentPrice * 1.01;
+          // Calculate new buy threshold based on environment variable
+          const newBuyThreshold = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
+          // Calculate new sell threshold based on environment variable
+          const newSellThreshold = currentPrice * (1 + SELL_THRESHOLD_PERCENT);
           
           // Force recalculation of thresholds to ensure consistency
           const updatedThresholds = await db.calculateTradingThresholds(symbol, currentPrice);
@@ -1220,7 +1225,7 @@ async function checkAutoTrading(symbol, currentPrice) {
             symbol, 
             action: 'buy', 
             price: currentPrice,
-            amount: 50,
+            amount: AUTO_TRADE_INVESTMENT_AMOUNT,
             orderId: result.orderId,
             newThresholds: {
               nextBuyPrice: newBuyThreshold,
@@ -1262,11 +1267,11 @@ async function checkAutoTrading(symbol, currentPrice) {
         lastAutoTradingCheck.set(symbol, Date.now());
         
         // For a SELL operation, calculate new thresholds
-        // For sell operations, set buy threshold to 1% below current sell price
-        const newBuyThreshold = currentPrice * 0.99;
-        // For auto-sell operations, set next sell price to 1% above the current price
+        // For sell operations, set buy threshold based on environment variable
+        const newBuyThreshold = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
+        // For auto-sell operations, set next sell price based on environment variable
         // (not zero, since this is not a manual "Sell All" operation)
-        const newSellThreshold = currentPrice * 1.01;
+        const newSellThreshold = currentPrice * (1 + SELL_THRESHOLD_PERCENT);
         
         // For sell operations initiated by auto-trading, let recordTrade handle threshold updates normally
         

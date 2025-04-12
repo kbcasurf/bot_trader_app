@@ -8,6 +8,10 @@ const dotenv = require('dotenv');
 // Load environment variables
 dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 
+// Trading configuration
+const BUY_THRESHOLD_PERCENT = parseFloat(process.env.BUY_THRESHOLD_PERCENT || 0.01);  // Default to 1% if not set
+const SELL_THRESHOLD_PERCENT = parseFloat(process.env.SELL_THRESHOLD_PERCENT || 0.01); // Default to 1% if not set
+
 // Database connection configuration with better defaults and connection handling
 const dbConfig = {
   host: process.env.DB_HOST,
@@ -275,18 +279,18 @@ async function recordTrade(tradeData) {
       let nextBuyPrice = 0;
       let nextSellPrice = 0;
       
-      // Calculate next buy price (1% below current transaction price)
-      nextBuyPrice = price * 0.99;
+      // Calculate next buy price based on environment variable
+      nextBuyPrice = price * (1 - BUY_THRESHOLD_PERCENT);
       updateFields.push('next_buy_price = ?');
       updateValues.push(nextBuyPrice);
       
       // Handle next sell price based on action type
       if (action === 'buy') {
-        // For buys, set next sell price to 1% above purchase price
-        nextSellPrice = price * 1.01;
+        // For buys, set next sell price based on environment variable
+        nextSellPrice = price * (1 + SELL_THRESHOLD_PERCENT);
         updateFields.push('next_sell_price = ?');
         updateValues.push(nextSellPrice);
-        console.log(`BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (1% above purchase price)`);
+        console.log(`BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above purchase price)`);
       } 
       else if (action === 'sell') {
         // ONLY for manual "Sell All" operations, set next_sell_price to 0
@@ -299,11 +303,11 @@ async function recordTrade(tradeData) {
         // For automated or partial sells that didn't come from "Sell All" button,
         // calculate next sell price based on the current transaction price
         else {
-          // Set next sell price to 1% above the current transaction price
-          nextSellPrice = price * 1.01;
+          // Set next sell price based on environment variable
+          nextSellPrice = price * (1 + SELL_THRESHOLD_PERCENT);
           updateFields.push('next_sell_price = ?');
           updateValues.push(nextSellPrice);
-          console.log(`AUTO/PARTIAL SELL: Setting next sell price for ${symbol} at ${nextSellPrice} (based on current transaction price)`);
+          console.log(`AUTO/PARTIAL SELL: Setting next sell price for ${symbol} at ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above current transaction price)`);
         }
       }
       
@@ -718,22 +722,22 @@ async function calculateTradingThresholds(symbol, currentPrice) {
     let nextBuyPrice = 0;
     let nextSellPrice = refPrices.nextSellPrice; // Preserve existing sell price if it exists
     
-    // If we have a last transaction price, use it to calculate fixed next buy price
+    // If we have a last transaction price, use it to calculate next buy price
     if (refPrices.lastTransactionPrice > 0) {
-      nextBuyPrice = refPrices.lastTransactionPrice * 0.99; // Fixed at 1% below last transaction price
+      nextBuyPrice = refPrices.lastTransactionPrice * (1 - BUY_THRESHOLD_PERCENT); // Based on environment variable
     } else {
       // If no transaction price available, use current price
-      nextBuyPrice = currentPrice * 0.99;
+      nextBuyPrice = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
     }
     
     // Calculate next sell price based on holdings ONLY if it's not already explicitly set to 0
     // A zero nextSellPrice is a valid state after a "sell all" operation and we should preserve it
     if (holdings.quantity > 0 && nextSellPrice !== 0) {
       if (refPrices.lastTransactionPrice > 0) {
-        nextSellPrice = refPrices.lastTransactionPrice * 1.01; // Fixed at 1% above last transaction price
+        nextSellPrice = refPrices.lastTransactionPrice * (1 + SELL_THRESHOLD_PERCENT); // Based on environment variable
       } else {
         // Fallback to average buy price if no transaction price but we have holdings
-        nextSellPrice = holdings.averageBuyPrice * 1.01;
+        nextSellPrice = holdings.averageBuyPrice * (1 + SELL_THRESHOLD_PERCENT);
       }
     } else if (holdings.quantity <= 0 && nextSellPrice !== 0) {
       // We should only reset nextSellPrice to 0 if we're performing a manual "sell all" operation
