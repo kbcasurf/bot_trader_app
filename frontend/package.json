@@ -11,7 +11,7 @@
     "socket.io-client": "^4.7.2"
   },
   "devDependencies": {
-    "vite": "4.5.1",
+    "vite": "4.5.13",
     "terser": "^5.19.2"
   }
 }
