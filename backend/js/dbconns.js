@@ -736,9 +736,16 @@ async function calculateTradingThresholds(symbol, currentPrice) {
         nextSellPrice = holdings.averageBuyPrice * 1.01;
       }
     } else if (holdings.quantity <= 0 && nextSellPrice !== 0) {
-      // No sell threshold if no holdings, but only change it if it's not already 0
-      // This preserves the explicit 0 value set by "sell all" operations
-      nextSellPrice = 0;
+      // We should only reset nextSellPrice to 0 if we're performing a manual "sell all" operation
+      // For coins where we have negative holdings (after a purchase), we should keep the existing sell price
+      // Let's check if the holdings are exactly 0 (sold all) or negative (purchased)
+      if (holdings.quantity === 0) {
+        // If exactly zero holdings, we can set nextSellPrice to 0
+        nextSellPrice = 0;
+      } else {
+        // If negative holdings (after purchase), preserve the existing sell price
+        console.log(`Preserving sell price ${nextSellPrice} for ${symbol} with negative holdings ${holdings.quantity}`);
+      }
     }
     
     // Log values for debugging
