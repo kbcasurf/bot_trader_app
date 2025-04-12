@@ -27,8 +27,8 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 console.log('====== ENVIRONMENT DEBUG INFO ======');
 console.log(`API URL: ${process.env.BINANCE_API_URL}`);
 console.log(`WebSocket URL: ${process.env.BINANCE_WEBSOCKET_URL}`);
-console.log(`External Host: ${process.env.EXTERNAL_HOST || 'Not set'}`);
-console.log(`Backend URL: ${process.env.VITE_BACKEND_URL || 'Not set'}`);
+console.log(`External Host: ${process.env.EXTERNAL_HOST}`);
+console.log(`Backend URL: ${process.env.VITE_BACKEND_URL}`);
 console.log(`Using testnet environment: ${process.env.BINANCE_API_URL?.includes('testnet') ? 'YES' : 'NO'}`);
 console.log('===================================');
 
