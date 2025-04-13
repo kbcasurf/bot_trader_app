@@ -151,6 +151,52 @@ async function startServer() {
         try {
           console.log('Performing initial account balance update...');
           await binance.updateAccountBalances();
+          
+          // After updating balances, initialize reference prices for symbols with holdings
+          // Requirement 1.2: If the user already has holdings, set first_transaction_price and last_transaction_price
+          console.log('Initializing reference prices for existing holdings...');
+          const accountBalances = await db.getAccountBalances();
+          const supportedSymbols = binance.getSupportedSymbols();
+          
+          for (const symbol of supportedSymbols) {
+            const balance = accountBalances[symbol] || 0;
+            
+            // If the user has a balance for this symbol
+            if (balance > 0) {
+              console.log(`Found holdings for ${symbol}, initializing reference prices...`);
+              
+              try {
+                // Get current price from Binance
+                const currentPrice = binance.getCurrentPrice(symbol);
+                if (!currentPrice) continue;
+                
+                // Get current reference prices
+                const refPrices = await db.getReferencePrice(symbol);
+                
+                // If first_transaction_price is not set (0), set it to current price
+                if (!refPrices.first_transaction_price || refPrices.first_transaction_price <= 0) {
+                  console.log(`Setting first_transaction_price for ${symbol} to ${currentPrice}`);
+                  
+                  // Calculate thresholds according to requirements
+                  const nextSellPrice = currentPrice * (1 + parseFloat(process.env.SELL_THRESHOLD_PERCENT || 0.01));
+                  const nextBuyPrice = currentPrice * (1 - parseFloat(process.env.BUY_THRESHOLD_PERCENT || 0.01));
+                  
+                  // Update reference prices
+                  await db.updateReferencePrice(symbol, {
+                    first_transaction_price: currentPrice,
+                    last_transaction_price: currentPrice,
+                    nextSellPrice: nextSellPrice,
+                    nextBuyPrice: nextBuyPrice
+                  });
+                  
+                  console.log(`Initialized reference prices for ${symbol}: first_transaction_price=${currentPrice}, last_transaction_price=${currentPrice}, nextBuyPrice=${nextBuyPrice}, nextSellPrice=${nextSellPrice}`);
+                }
+              } catch (priceError) {
+                console.error(`Error initializing reference prices for ${symbol}:`, priceError);
+                // Continue with next symbol
+              }
+            }
+          }
         } catch (balanceError) {
           console.error('Error during initial account balance update:', balanceError);
           // Continue anyway - this is not critical for startup

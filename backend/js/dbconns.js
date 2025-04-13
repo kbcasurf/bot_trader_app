@@ -256,7 +256,7 @@ async function recordTrade(tradeData) {
       
       // Get current reference prices
       const refPricesSql = `
-        SELECT symbol, last_transaction_price
+        SELECT symbol, first_transaction_price, last_transaction_price
         FROM reference_prices
         WHERE symbol = ?
         FOR UPDATE
@@ -279,36 +279,48 @@ async function recordTrade(tradeData) {
       let nextBuyPrice = 0;
       let nextSellPrice = 0;
       
-      // Calculate next buy price based on environment variable
-      nextBuyPrice = price * (1 - BUY_THRESHOLD_PERCENT);
-      updateFields.push('next_buy_price = ?');
-      updateValues.push(nextBuyPrice);
-      
-      // Handle next sell price based on action type
+      // Handle different scenarios based on action type
       if (action === 'buy') {
-        // For buys, set next sell price based on environment variable
-        nextSellPrice = price * (1 + SELL_THRESHOLD_PERCENT);
+        // If this is a buy operation
+        
+        // Get the current first_transaction_price from the result
+        const currentFirstPrice = refResult.length > 0 ? parseFloat(refResult[0].first_transaction_price) : 0;
+        
+        // If first_transaction_price is 0 (user never purchased this crypto before),
+        // set it to the current price on first buy
+        if (currentFirstPrice <= 0) {
+          updateFields.push('first_transaction_price = ?');
+          updateValues.push(price);
+          console.log(`FIRST BUY: Setting first transaction price for ${symbol} to ${price}`);
+        }
+        
+        // Calculate next buy price based on environment variable and last_transaction_price
+        nextBuyPrice = price * (1 - BUY_THRESHOLD_PERCENT);
+        updateFields.push('next_buy_price = ?');
+        updateValues.push(nextBuyPrice);
+        
+        // Calculate next sell price based on environment variable and first_transaction_price
+        // Use current first_transaction_price from DB or the price we're about to set
+        const firstPrice = currentFirstPrice > 0 ? currentFirstPrice : price;
+        nextSellPrice = firstPrice * (1 + SELL_THRESHOLD_PERCENT);
         updateFields.push('next_sell_price = ?');
         updateValues.push(nextSellPrice);
-        console.log(`BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above purchase price)`);
+        console.log(`BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above first transaction price: ${firstPrice})`);
       } 
       else if (action === 'sell') {
-        // ONLY for manual "Sell All" operations, set next_sell_price to 0
-        if (isManualSellAll === true) {
-          nextSellPrice = 0;
-          updateFields.push('next_sell_price = ?');
-          updateValues.push(nextSellPrice);
-          console.log(`MANUAL SELL ALL: Setting next sell price for ${symbol} to 0 (null value)`);
-        }
-        // For automated or partial sells that didn't come from "Sell All" button,
-        // calculate next sell price based on the current transaction price
-        else {
-          // Set next sell price based on environment variable
-          nextSellPrice = price * (1 + SELL_THRESHOLD_PERCENT);
-          updateFields.push('next_sell_price = ?');
-          updateValues.push(nextSellPrice);
-          console.log(`AUTO/PARTIAL SELL: Setting next sell price for ${symbol} at ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above current transaction price)`);
-        }
+        // If this is a sell operation - ALL sell operations behave the same way
+        // Whether manual "Sell All" or automated sell, we treat them identically
+        
+        // Calculate next buy price based on environment variable and last_transaction_price
+        nextBuyPrice = price * (1 - BUY_THRESHOLD_PERCENT);
+        updateFields.push('next_buy_price = ?');
+        updateValues.push(nextBuyPrice);
+        
+        // For ALL sell operations, set next_sell_price to 0 as per requirements
+        nextSellPrice = 0;
+        updateFields.push('next_sell_price = ?');
+        updateValues.push(nextSellPrice);
+        console.log(`SELL OPERATION: Setting next sell price for ${symbol} to 0 (null value) as per requirements`);
       }
       
       // Check if the record exists first
@@ -325,29 +337,39 @@ async function recordTrade(tradeData) {
       
       if (checkResult[0].count > 0) {
         // Update existing record
+        // Build dynamic SQL update statement
+        const setClause = updateFields.join(', ');
         const updateRefSql = `
           UPDATE reference_prices
-          SET last_transaction_price = ?,
-              next_buy_price = ?,
-              next_sell_price = ?
+          SET ${setClause}
           WHERE symbol = ?
         `;
         
+        // Add symbol to the values array
+        updateValues.push(symbol);
+        
         await conn.query({
           sql: updateRefSql,
-          values: [price, nextBuyPrice, nextSellPrice, symbol]
+          values: updateValues
         });
       } else {
         // Create new record with appropriate values
         const insertRefSql = `
           INSERT INTO reference_prices
-          (symbol, last_transaction_price, next_buy_price, next_sell_price)
-          VALUES (?, ?, ?, ?)
+          (symbol, first_transaction_price, last_transaction_price, next_buy_price, next_sell_price)
+          VALUES (?, ?, ?, ?, ?)
         `;
+        
+        // Determine first_transaction_price
+        let firstTransactionPrice = 0; // Default value
+        if (action === 'buy') {
+          // If this is the first buy, set first_transaction_price to current price
+          firstTransactionPrice = price;
+        }
         
         await conn.query({
           sql: insertRefSql,
-          values: [symbol, price, nextBuyPrice, nextSellPrice]
+          values: [symbol, firstTransactionPrice, price, nextBuyPrice, nextSellPrice]
         });
       }
       
@@ -466,30 +488,44 @@ async function getTradingHistory(symbol, limit = 10) {
  */
 async function getCurrentHoldings(symbol) {
   try {
-    // Get all buy transactions
+    // Get current balance from account_balances table
+    const balanceSql = `
+      SELECT balance
+      FROM account_balances
+      WHERE symbol = ?
+    `;
+    
+    // Get all buy transactions for average price calculation
     const buySql = `
       SELECT SUM(quantity) as total_bought, SUM(usdt_amount) as total_spent
       FROM trades
       WHERE symbol = ? AND action = 'buy'
     `;
     
-    // Get all sell transactions
+    // Get all sell transactions for profit calculation
     const sellSql = `
       SELECT SUM(quantity) as total_sold, SUM(usdt_amount) as total_received
       FROM trades
       WHERE symbol = ? AND action = 'sell'
     `;
     
-    const buyResult = await query(buySql, [symbol]);
-    const sellResult = await query(sellSql, [symbol]);
+    // Run all three queries
+    const [balanceResult, buyResult, sellResult] = await Promise.all([
+      query(balanceSql, [symbol]),
+      query(buySql, [symbol]),
+      query(sellSql, [symbol])
+    ]);
     
+    // Get current balance from database - this is the source of truth
+    const currentQuantity = balanceResult.length > 0 ? parseFloat(balanceResult[0].balance) || 0 : 0;
+    
+    // Get trading data for calculations
     const totalBought = buyResult[0].total_bought || 0;
     const totalSpent = buyResult[0].total_spent || 0;
     const totalSold = sellResult[0].total_sold || 0;
     const totalReceived = sellResult[0].total_received || 0;
     
-    // Calculate current holdings
-    const currentQuantity = totalBought - totalSold;
+    // Calculate average buy price (useful for profit calculation)
     const averageBuyPrice = totalBought > 0 ? totalSpent / totalBought : 0;
     
     return {
@@ -514,7 +550,7 @@ async function getCurrentHoldings(symbol) {
 async function getReferencePrice(symbol) {
   try {
     const sql = `
-      SELECT symbol, last_transaction_price, 
+      SELECT symbol, first_transaction_price, last_transaction_price, 
              next_buy_price, next_sell_price, updated_at
       FROM reference_prices
       WHERE symbol = ?
@@ -526,8 +562,8 @@ async function getReferencePrice(symbol) {
       // If no reference prices exist, create a new entry with ON DUPLICATE KEY UPDATE
       const insertSql = `
         INSERT INTO reference_prices 
-        (symbol, last_transaction_price, next_buy_price, next_sell_price)
-        VALUES (?, 0, 0, 0)
+        (symbol, first_transaction_price, last_transaction_price, next_buy_price, next_sell_price)
+        VALUES (?, 0, 0, 0, 0)
         ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP
       `;
       
@@ -539,6 +575,7 @@ async function getReferencePrice(symbol) {
       if (result.length > 0) {
         return {
           symbol,
+          firstTransactionPrice: parseFloat(result[0].first_transaction_price),
           lastTransactionPrice: parseFloat(result[0].last_transaction_price),
           nextBuyPrice: parseFloat(result[0].next_buy_price),
           nextSellPrice: parseFloat(result[0].next_sell_price),
@@ -549,6 +586,7 @@ async function getReferencePrice(symbol) {
       // If still no results (unlikely), return default values
       return {
         symbol,
+        firstTransactionPrice: 0,
         lastTransactionPrice: 0,
         nextBuyPrice: 0,
         nextSellPrice: 0
@@ -558,6 +596,7 @@ async function getReferencePrice(symbol) {
     // Return the reference prices
     return {
       symbol,
+      firstTransactionPrice: parseFloat(result[0].first_transaction_price),
       lastTransactionPrice: parseFloat(result[0].last_transaction_price),
       nextBuyPrice: parseFloat(result[0].next_buy_price),
       nextSellPrice: parseFloat(result[0].next_sell_price),
@@ -597,6 +636,11 @@ async function updateReferencePrice(symbol, priceData) {
     const values = [];
     
     // Build the update fields dynamically
+    if (priceData.firstTransactionPrice !== undefined) {
+      fields.push('first_transaction_price = ?');
+      values.push(priceData.firstTransactionPrice);
+    }
+    
     if (priceData.lastTransactionPrice !== undefined) {
       fields.push('last_transaction_price = ?');
       values.push(priceData.lastTransactionPrice);
@@ -650,12 +694,13 @@ async function updateReferencePrice(symbol, priceData) {
         // Create an insert query with default values
         const insertSql = `
           INSERT INTO reference_prices 
-          (symbol, last_transaction_price, next_buy_price, next_sell_price)
-          VALUES (?, ?, ?, ?)
+          (symbol, first_transaction_price, last_transaction_price, next_buy_price, next_sell_price)
+          VALUES (?, ?, ?, ?, ?)
         `;
         
         const insertValues = [
           symbol,
+          priceData.firstTransactionPrice !== undefined ? priceData.firstTransactionPrice : 0,
           priceData.lastTransactionPrice !== undefined ? priceData.lastTransactionPrice : 0,
           priceData.nextBuyPrice !== undefined ? priceData.nextBuyPrice : 0,
           priceData.nextSellPrice !== undefined ? priceData.nextSellPrice : 0
@@ -669,7 +714,7 @@ async function updateReferencePrice(symbol, priceData) {
       
       // Extra verification step - read back the values to ensure they were correctly saved
       const verifySql = `
-        SELECT symbol, next_buy_price, next_sell_price
+        SELECT symbol, first_transaction_price, last_transaction_price, next_buy_price, next_sell_price
         FROM reference_prices
         WHERE symbol = ?
       `;
@@ -712,11 +757,15 @@ async function updateReferencePrice(symbol, priceData) {
  */
 async function calculateTradingThresholds(symbol, currentPrice) {
   try {
-    // Get current holdings
-    const holdings = await getCurrentHoldings(symbol);
+    // Get balances and holdings info in parallel
+    const [accountBalances, holdings, refPrices] = await Promise.all([
+      getAccountBalances(),
+      getCurrentHoldings(symbol),
+      getReferencePrice(symbol)
+    ]);
     
-    // Get reference prices from database
-    const refPrices = await getReferencePrice(symbol);
+    // Get current balance from account_balances (source of truth)
+    const currentBalance = accountBalances[symbol] || 0;
     
     // Default values for nextBuyPrice and nextSellPrice
     let nextBuyPrice = 0;
@@ -730,30 +779,36 @@ async function calculateTradingThresholds(symbol, currentPrice) {
       nextBuyPrice = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
     }
     
-    // Calculate next sell price based on holdings ONLY if it's not already explicitly set to 0
-    // A zero nextSellPrice is a valid state after a "sell all" operation and we should preserve it
-    if (holdings.quantity > 0 && nextSellPrice !== 0) {
-      if (refPrices.lastTransactionPrice > 0) {
-        nextSellPrice = refPrices.lastTransactionPrice * (1 + SELL_THRESHOLD_PERCENT); // Based on environment variable
+    // Handle next sell price calculation according to new requirements
+    if (currentBalance > 0) {
+      // If user has holdings and nextSellPrice is 0 or not set, calculate it
+      if (nextSellPrice === 0) {
+        // According to requirement 1.2, calculate nextSellPrice using first_transaction_price
+        if (refPrices.firstTransactionPrice > 0) {
+          // Primary approach: Use first_transaction_price as the base
+          nextSellPrice = refPrices.firstTransactionPrice * (1 + SELL_THRESHOLD_PERCENT);
+          console.log(`[THRESHOLD] Setting sell price for ${symbol} based on first_transaction_price: ${refPrices.firstTransactionPrice} -> ${nextSellPrice}`);
+        } else if (refPrices.lastTransactionPrice > 0) {
+          // Fallback approach: If no first_transaction_price, use last_transaction_price
+          nextSellPrice = refPrices.lastTransactionPrice * (1 + SELL_THRESHOLD_PERCENT);
+          console.log(`[THRESHOLD] Setting sell price for ${symbol} based on last_transaction_price: ${refPrices.lastTransactionPrice} -> ${nextSellPrice}`);
+        } else {
+          // Second fallback: Use average buy price if we have historical trades
+          nextSellPrice = holdings.averageBuyPrice * (1 + SELL_THRESHOLD_PERCENT);
+          console.log(`[THRESHOLD] Setting sell price for ${symbol} based on averageBuyPrice: ${holdings.averageBuyPrice} -> ${nextSellPrice}`);
+        }
       } else {
-        // Fallback to average buy price if no transaction price but we have holdings
-        nextSellPrice = holdings.averageBuyPrice * (1 + SELL_THRESHOLD_PERCENT);
+        // Preserve existing sell price if it's already set and we have holdings
+        console.log(`[THRESHOLD] Preserving existing sell price for ${symbol}: ${nextSellPrice}`);
       }
-    } else if (holdings.quantity <= 0 && nextSellPrice !== 0) {
-      // We should only reset nextSellPrice to 0 if we're performing a manual "sell all" operation
-      // For coins where we have negative holdings (after a purchase), we should keep the existing sell price
-      // Let's check if the holdings are exactly 0 (sold all) or negative (purchased)
-      if (holdings.quantity === 0) {
-        // If exactly zero holdings, we can set nextSellPrice to 0
-        nextSellPrice = 0;
-      } else {
-        // If negative holdings (after purchase), preserve the existing sell price
-        console.log(`Preserving sell price ${nextSellPrice} for ${symbol} with negative holdings ${holdings.quantity}`);
-      }
+    } else {
+      // If balance is 0 or negative, set nextSellPrice to 0 as per requirement 2.2
+      nextSellPrice = 0;
+      console.log(`[THRESHOLD] Setting sell price to 0 for ${symbol} (no holdings)`);
     }
     
     // Log values for debugging
-    console.log(`[calculateTradingThresholds] For ${symbol}: Current nextSellPrice=${refPrices.nextSellPrice}, holdings=${holdings.quantity}, calculated nextSellPrice=${nextSellPrice}`);
+    console.log(`[calculateTradingThresholds] For ${symbol}: Current nextSellPrice=${refPrices.nextSellPrice}, balance=${currentBalance}, calculated nextSellPrice=${nextSellPrice}`);
     
     // Update reference price values in the database, but only update nextSellPrice
     // if it's different from what's already in the database to avoid unnecessary overwrites
@@ -777,7 +832,7 @@ async function calculateTradingThresholds(symbol, currentPrice) {
       symbol,
       nextBuyPrice,
       nextSellPrice,
-      holdingsQuantity: holdings.quantity,
+      holdingsQuantity: currentBalance, // Use account_balances as source of truth
       profitLossPercentage,
       // Include reference prices for debugging
       lastTransactionPrice: refPrices.lastTransactionPrice
@@ -794,9 +849,14 @@ async function calculateTradingThresholds(symbol, currentPrice) {
  */
 async function getAllTradingSymbols() {
   try {
+    // Get symbols from account_balances and trades together
     const sql = `
       SELECT DISTINCT symbol
-      FROM trades
+      FROM (
+        SELECT symbol FROM trades
+        UNION
+        SELECT symbol FROM account_balances
+      ) as combined_symbols
     `;
     
     const result = await query(sql);
@@ -817,19 +877,9 @@ async function updateAccountBalances(balances) {
     throw new Error('No balance data provided');
   }
 
-  // First check if the account_balances table exists, create it if not
   try {
-    const checkTableSql = `
-      CREATE TABLE IF NOT EXISTS account_balances (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        symbol VARCHAR(20) NOT NULL UNIQUE,
-        balance DECIMAL(18, 8) NOT NULL DEFAULT 0,
-        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_symbol (symbol)
-      )
-    `;
-    
-    await query(checkTableSql);
+    // Use the table definition from schema.sql - no need to check if it exists
+    // as the table is now part of our core schema
     
     // Insert or update balances for each symbol
     for (const [symbol, balance] of Object.entries(balances)) {
@@ -858,19 +908,6 @@ async function updateAccountBalances(balances) {
  */
 async function getAccountBalances() {
   try {
-    // Check if the table exists first
-    const checkTableSql = `
-      CREATE TABLE IF NOT EXISTS account_balances (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        symbol VARCHAR(20) NOT NULL UNIQUE,
-        balance DECIMAL(18, 8) NOT NULL DEFAULT 0,
-        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_symbol (symbol)
-      )
-    `;
-    
-    await query(checkTableSql);
-    
     // Get all balances
     const sql = `
       SELECT symbol, balance

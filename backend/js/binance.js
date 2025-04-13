@@ -885,7 +885,7 @@ async function placeMarketOrder(orderData) {
     
     // Verify price thresholds were updated
     const thresholdVerification = await db.getReferencePrice(baseCurrency);
-    console.log(`[VERIFICATION] After trade for ${baseCurrency}: lastTransactionPrice=${thresholdVerification.lastTransactionPrice}, nextBuyPrice=${thresholdVerification.nextBuyPrice}, nextSellPrice=${thresholdVerification.nextSellPrice}`);
+    console.log(`[VERIFICATION] After trade for ${baseCurrency}: firstTransactionPrice=${thresholdVerification.firstTransactionPrice}, lastTransactionPrice=${thresholdVerification.lastTransactionPrice}, nextBuyPrice=${thresholdVerification.nextBuyPrice}, nextSellPrice=${thresholdVerification.nextSellPrice}`);
     
     // Step 6: Update account balances in database after trade
     try {
@@ -984,12 +984,12 @@ async function sellAll(symbol) {
     const quantity = parseFloat(asset.free);
     const formattedQuantity = formatQuantity(symbol, quantity, currentPrice);
     
-    // Place the order with a flag to indicate this is a manual sell all operation
+    // Place the order - we no longer need to differentiate between manual and auto sells
+    // as they are treated the same way in recordTrade
     const result = await placeMarketOrder({
       symbol: `${symbol}USDT`,
       side: 'SELL',
-      quantity: formattedQuantity,
-      isManualSellAll: true  // Add flag to identify manual sell all operation
+      quantity: formattedQuantity
     });
     
     return result;
@@ -1172,10 +1172,16 @@ async function checkAutoTrading(symbol, currentPrice) {
           lastAutoTradingCheck.set(symbol, Date.now());
           
           // For a BUY operation, calculate new thresholds
-          // Calculate new buy threshold based on environment variable
+          // Get the current first_transaction_price from the database
+          const refPrices = await db.getReferencePrice(symbol);
+          
+          // Calculate new buy threshold based on last_transaction_price (current price)
           const newBuyThreshold = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
-          // Calculate new sell threshold based on environment variable
-          const newSellThreshold = currentPrice * (1 + SELL_THRESHOLD_PERCENT);
+          
+          // Calculate new sell threshold based on first_transaction_price
+          // If first_transaction_price is 0, it will be set to the current price in recordTrade
+          const firstPrice = refPrices.firstTransactionPrice > 0 ? refPrices.firstTransactionPrice : currentPrice;
+          const newSellThreshold = firstPrice * (1 + SELL_THRESHOLD_PERCENT);
           
           // Force recalculation of thresholds to ensure consistency
           const updatedThresholds = await db.calculateTradingThresholds(symbol, currentPrice);
@@ -1260,18 +1266,18 @@ async function checkAutoTrading(symbol, currentPrice) {
       try {
         console.log(`[AUTO-TRADE] Executing SELL for ${symbol} at ${currentPrice}`);
         // Execute sell - this will update the reference prices in recordTrade function
+        // Note: All sell operations (manual or auto) now behave the same way
         const result = await sellAll(symbol);
         
         // After successful trade, update lastAutoTradingCheck to enforce a cooldown period
         // that's longer than usual to ensure thresholds propagate properly
         lastAutoTradingCheck.set(symbol, Date.now());
         
-        // For a SELL operation, calculate new thresholds
-        // For sell operations, set buy threshold based on environment variable
+        // For a SELL operation, calculate new thresholds according to requirements
+        // For sell operations, set buy threshold based on last_transaction_price (current price)
         const newBuyThreshold = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
-        // For auto-sell operations, set next sell price based on environment variable
-        // (not zero, since this is not a manual "Sell All" operation)
-        const newSellThreshold = currentPrice * (1 + SELL_THRESHOLD_PERCENT);
+        // For all sell operations, set next_sell_price to 0
+        const newSellThreshold = 0;
         
         // For sell operations initiated by auto-trading, let recordTrade handle threshold updates normally
         
