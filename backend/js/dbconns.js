@@ -225,7 +225,7 @@ async function query(sql, params = [], options = {}) {
  * @param {number} tradeData.quantity - The amount of cryptocurrency
  * @param {number} tradeData.price - The price at which the trade occurred
  * @param {number} tradeData.usdt_amount - The USDT value of the trade
- * @returns {Promise<Object>} The inserted record ID
+ * @returns {Promise<Object>} The inserted record ID and updated thresholds
  */
 async function recordTrade(tradeData) {
   if (!tradeData) {
@@ -243,15 +243,19 @@ async function recordTrade(tradeData) {
       await conn.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
       await conn.beginTransaction();
       
-      // Insert trade record
+      // Insert trade record with support for original Binance trade time and ID
       const sql = `
-        INSERT INTO trades (symbol, action, quantity, price, usdt_amount, created_at)
-        VALUES (?, ?, ?, ?, ?, NOW())
+        INSERT INTO trades (symbol, action, quantity, price, usdt_amount, trade_time, binance_trade_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `;
+      
+      // Use trade_time from tradeData if provided, otherwise use current time
+      const tradeTime = tradeData.trade_time ? new Date(tradeData.trade_time) : new Date();
+      const binanceTradeId = tradeData.binance_trade_id || null;
       
       const result = await conn.query({
         sql,
-        values: [symbol, action, quantity, price, usdt_amount]
+        values: [symbol, action, quantity, price, usdt_amount, tradeTime, binanceTradeId]
       });
       
       // Get current reference prices
@@ -281,46 +285,42 @@ async function recordTrade(tradeData) {
       
       // Handle different scenarios based on action type
       if (action === 'buy') {
-        // If this is a buy operation
+        // If this is a buy operation (For requirement 2.1)
         
-        // Get the current first_transaction_price from the result
-        const currentFirstPrice = refResult.length > 0 ? parseFloat(refResult[0].first_transaction_price) : 0;
+        // Set first_transaction_price to the current transaction price
+        // Per requirement 2.1: When Buy button is clicked, its price is added to DB as first_transaction_price
+        updateFields.push('first_transaction_price = ?');
+        updateValues.push(price);
+        console.log(`BUY: Setting first transaction price for ${symbol} to ${price}`);
         
-        // If first_transaction_price is 0 (user never purchased this crypto before),
-        // set it to the current price on first buy
-        if (currentFirstPrice <= 0) {
-          updateFields.push('first_transaction_price = ?');
-          updateValues.push(price);
-          console.log(`FIRST BUY: Setting first transaction price for ${symbol} to ${price}`);
-        }
-        
-        // Calculate next buy price based on environment variable and last_transaction_price
+        // Calculate next buy price based on last_transaction_price (current price)
+        // Per requirement 2.1: next_buy_price must use last_transaction_price as reference
         nextBuyPrice = price * (1 - BUY_THRESHOLD_PERCENT);
         updateFields.push('next_buy_price = ?');
         updateValues.push(nextBuyPrice);
+        console.log(`BUY: Setting next buy price for ${symbol} to ${nextBuyPrice} (${BUY_THRESHOLD_PERCENT * 100}% below last transaction price: ${price})`);
         
-        // Calculate next sell price based on environment variable and first_transaction_price
-        // Use current first_transaction_price from DB or the price we're about to set
-        const firstPrice = currentFirstPrice > 0 ? currentFirstPrice : price;
-        nextSellPrice = firstPrice * (1 + SELL_THRESHOLD_PERCENT);
+        // Calculate next sell price based on first_transaction_price
+        // Per requirement 2.1: next_sell_price must use first_transaction_price as reference
+        nextSellPrice = price * (1 + SELL_THRESHOLD_PERCENT);
         updateFields.push('next_sell_price = ?');
         updateValues.push(nextSellPrice);
-        console.log(`BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above first transaction price: ${firstPrice})`);
+        console.log(`BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above first transaction price: ${price})`);
       } 
       else if (action === 'sell') {
-        // If this is a sell operation - ALL sell operations behave the same way
-        // Whether manual "Sell All" or automated sell, we treat them identically
+        // If this is a sell operation (For requirement 2.2)
         
-        // Calculate next buy price based on environment variable and last_transaction_price
+        // Calculate next buy price based on current sell price (last_transaction_price)
         nextBuyPrice = price * (1 - BUY_THRESHOLD_PERCENT);
         updateFields.push('next_buy_price = ?');
         updateValues.push(nextBuyPrice);
         
-        // For ALL sell operations, set next_sell_price to 0 as per requirements
+        // For ALL sell operations, set next_sell_price to 0
+        // This implements requirement 2.2 and 3.3
         nextSellPrice = 0;
         updateFields.push('next_sell_price = ?');
         updateValues.push(nextSellPrice);
-        console.log(`SELL OPERATION: Setting next sell price for ${symbol} to 0 (null value) as per requirements`);
+        console.log(`SELL OPERATION: Setting next sell price for ${symbol} to 0`);
       }
       
       // Check if the record exists first
@@ -363,7 +363,7 @@ async function recordTrade(tradeData) {
         // Determine first_transaction_price
         let firstTransactionPrice = 0; // Default value
         if (action === 'buy') {
-          // If this is the first buy, set first_transaction_price to current price
+          // For ANY buy operation, set first_transaction_price to current price
           firstTransactionPrice = price;
         }
         
@@ -375,7 +375,7 @@ async function recordTrade(tradeData) {
       
       // Verify the update was successful before committing
       const verifySql = `
-        SELECT symbol, last_transaction_price, next_buy_price, next_sell_price
+        SELECT symbol, first_transaction_price, last_transaction_price, next_buy_price, next_sell_price
         FROM reference_prices
         WHERE symbol = ?
       `;
@@ -393,17 +393,26 @@ async function recordTrade(tradeData) {
       const savedValues = verifyResult[0];
       const savedNextBuyPrice = parseFloat(savedValues.next_buy_price);
       const savedNextSellPrice = parseFloat(savedValues.next_sell_price);
+      const savedFirstPrice = parseFloat(savedValues.first_transaction_price);
       
       // Validate that the values match what we intended to set
       if (Math.abs(savedNextBuyPrice - nextBuyPrice) > 0.0001 || 
-          (action === 'buy' && Math.abs(savedNextSellPrice - nextSellPrice) > 0.0001)) {
-        console.error(`Verification failed! Expected buy=${nextBuyPrice}, sell=${nextSellPrice} but got buy=${savedNextBuyPrice}, sell=${savedNextSellPrice}`);
+          Math.abs(savedNextSellPrice - nextSellPrice) > 0.0001 ||
+          (action === 'buy' && Math.abs(parseFloat(savedValues.first_transaction_price) - price) > 0.0001)) {
+        console.error(`Verification failed! Expected buy=${nextBuyPrice}, sell=${nextSellPrice}, first=${price} but got buy=${savedNextBuyPrice}, sell=${savedNextSellPrice}, first=${savedValues.first_transaction_price}`);
         
-        // Attempt to fix the values with a direct update
-        await conn.query({
-          sql: `UPDATE reference_prices SET next_buy_price = ?, next_sell_price = ? WHERE symbol = ?`,
-          values: [nextBuyPrice, nextSellPrice, symbol]
-        });
+        // Attempt to fix the values with a direct update - include first_transaction_price for buy operations
+        if (action === 'buy') {
+          await conn.query({
+            sql: `UPDATE reference_prices SET first_transaction_price = ?, next_buy_price = ?, next_sell_price = ? WHERE symbol = ?`,
+            values: [price, nextBuyPrice, nextSellPrice, symbol]
+          });
+        } else {
+          await conn.query({
+            sql: `UPDATE reference_prices SET next_buy_price = ?, next_sell_price = ? WHERE symbol = ?`,
+            values: [nextBuyPrice, nextSellPrice, symbol]
+          });
+        }
         
         // Re-verify after the fix
         const reVerifyResult = await conn.query({
@@ -412,21 +421,22 @@ async function recordTrade(tradeData) {
         });
         
         if (reVerifyResult.length > 0) {
-          console.log(`Verified prices for ${symbol}: Buy=${reVerifyResult[0].next_buy_price}, Sell=${reVerifyResult[0].next_sell_price}`);
+          console.log(`Verified prices for ${symbol}: First=${reVerifyResult[0].first_transaction_price}, Last=${reVerifyResult[0].last_transaction_price}, Buy=${reVerifyResult[0].next_buy_price}, Sell=${reVerifyResult[0].next_sell_price}`);
         }
       } else {
-        console.log(`Verified prices for ${symbol}: Buy=${savedNextBuyPrice}, Sell=${savedNextSellPrice}`);
+        console.log(`Verified prices for ${symbol}: First=${savedFirstPrice}, Last=${price}, Buy=${savedNextBuyPrice}, Sell=${savedNextSellPrice}`);
       }
       
       // Commit the transaction
       await conn.commit();
       
       console.log(`Trade record inserted: ${symbol} ${action} at ${price}`);
-      console.log(`Reference prices updated for ${symbol}: last_transaction_price=${price}, next_buy_price=${nextBuyPrice}, next_sell_price=${nextSellPrice}`);
+      console.log(`Reference prices updated for ${symbol}: first_transaction_price=${savedFirstPrice}, last_transaction_price=${price}, next_buy_price=${nextBuyPrice}, next_sell_price=${nextSellPrice}`);
       
       // Emit event to notify threshold update - ONLY after successful verification
       const thresholdData = {
         symbol,
+        firstTransactionPrice: savedFirstPrice,
         lastTransactionPrice: price,
         nextBuyPrice,
         nextSellPrice
@@ -466,10 +476,10 @@ async function recordTrade(tradeData) {
 async function getTradingHistory(symbol, limit = 10) {
   try {
     const sql = `
-      SELECT id, symbol, action, quantity, price, usdt_amount, created_at
+      SELECT id, symbol, action, quantity, price, usdt_amount, trade_time, binance_trade_id
       FROM trades
       WHERE symbol = ?
-      ORDER BY created_at DESC
+      ORDER BY trade_time DESC
       LIMIT ?
     `;
     
@@ -559,12 +569,20 @@ async function getReferencePrice(symbol) {
     const result = await query(sql, [symbol]);
     
     if (result.length === 0) {
-      // If no reference prices exist, create a new entry with ON DUPLICATE KEY UPDATE
+      // If no reference prices exist, create a new entry with explicit zero values
+      // This ensures we follow requirement 1.3 - set all values to 0 for new symbols
+      console.log(`Creating new reference price record for ${symbol} with all values set to 0`);
+      
       const insertSql = `
         INSERT INTO reference_prices 
         (symbol, first_transaction_price, last_transaction_price, next_buy_price, next_sell_price)
         VALUES (?, 0, 0, 0, 0)
-        ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP
+        ON DUPLICATE KEY UPDATE 
+          first_transaction_price = 0,
+          last_transaction_price = 0,
+          next_buy_price = 0,
+          next_sell_price = 0,
+          updated_at = CURRENT_TIMESTAMP
       `;
       
       await query(insertSql, [symbol]);
@@ -772,37 +790,30 @@ async function calculateTradingThresholds(symbol, currentPrice) {
     let nextSellPrice = refPrices.nextSellPrice; // Preserve existing sell price if it exists
     
     // If we have a last transaction price, use it to calculate next buy price
+    // This implements requirement 3.2 - buy order based on next_buy_price
     if (refPrices.lastTransactionPrice > 0) {
-      nextBuyPrice = refPrices.lastTransactionPrice * (1 - BUY_THRESHOLD_PERCENT); // Based on environment variable
+      nextBuyPrice = refPrices.lastTransactionPrice * (1 - BUY_THRESHOLD_PERCENT);
     } else {
       // If no transaction price available, use current price
       nextBuyPrice = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
     }
     
-    // Handle next sell price calculation according to new requirements
+    // Handle next sell price calculation according to requirements
     if (currentBalance > 0) {
-      // If user has holdings and nextSellPrice is 0 or not set, calculate it
-      if (nextSellPrice === 0) {
-        // According to requirement 1.2, calculate nextSellPrice using first_transaction_price
-        if (refPrices.firstTransactionPrice > 0) {
-          // Primary approach: Use first_transaction_price as the base
-          nextSellPrice = refPrices.firstTransactionPrice * (1 + SELL_THRESHOLD_PERCENT);
-          console.log(`[THRESHOLD] Setting sell price for ${symbol} based on first_transaction_price: ${refPrices.firstTransactionPrice} -> ${nextSellPrice}`);
-        } else if (refPrices.lastTransactionPrice > 0) {
-          // Fallback approach: If no first_transaction_price, use last_transaction_price
-          nextSellPrice = refPrices.lastTransactionPrice * (1 + SELL_THRESHOLD_PERCENT);
-          console.log(`[THRESHOLD] Setting sell price for ${symbol} based on last_transaction_price: ${refPrices.lastTransactionPrice} -> ${nextSellPrice}`);
-        } else {
-          // Second fallback: Use average buy price if we have historical trades
-          nextSellPrice = holdings.averageBuyPrice * (1 + SELL_THRESHOLD_PERCENT);
-          console.log(`[THRESHOLD] Setting sell price for ${symbol} based on averageBuyPrice: ${holdings.averageBuyPrice} -> ${nextSellPrice}`);
-        }
+      // Per requirement 2.1: Always calculate nextSellPrice using first_transaction_price
+      if (refPrices.firstTransactionPrice > 0) {
+        // ALWAYS use first_transaction_price as the base for nextSellPrice calculation
+        nextSellPrice = refPrices.firstTransactionPrice * (1 + SELL_THRESHOLD_PERCENT);
+        console.log(`[THRESHOLD] Setting sell price for ${symbol} based on first_transaction_price: ${refPrices.firstTransactionPrice} -> ${nextSellPrice}`);
       } else {
-        // Preserve existing sell price if it's already set and we have holdings
-        console.log(`[THRESHOLD] Preserving existing sell price for ${symbol}: ${nextSellPrice}`);
+        // If first_transaction_price is not set (which shouldn't happen with our fix), log an error
+        console.error(`[ERROR] Missing first_transaction_price for ${symbol} with holdings ${currentBalance}. Cannot calculate proper sell price.`);
+        // Set next_sell_price to 0 to prevent incorrect selling
+        nextSellPrice = 0;
       }
     } else {
-      // If balance is 0 or negative, set nextSellPrice to 0 as per requirement 2.2
+      // If balance is 0 or negative, set nextSellPrice to 0 as per requirements
+      // This implements the behavior after a sell operation
       nextSellPrice = 0;
       console.log(`[THRESHOLD] Setting sell price to 0 for ${symbol} (no holdings)`);
     }
@@ -1053,6 +1064,38 @@ async function getAppSettings(key = null) {
   }
 }
 
+/**
+ * Convert BigInt values to numbers for JSON serialization
+ * @param {any} data - The data to convert
+ * @returns {any} The converted data
+ */
+function convertBigIntToNumber(data) {
+  // Handle null/undefined
+  if (data == null) return data;
+  
+  // Handle BigInt directly
+  if (typeof data === 'bigint') return Number(data);
+  
+  // Handle arrays
+  if (Array.isArray(data)) {
+    return data.map(item => convertBigIntToNumber(item));
+  }
+  
+  // Handle objects (but not dates or other special objects)
+  if (typeof data === 'object' && !(data instanceof Date) && data.constructor === Object) {
+    const newObj = {};
+    for (const key in data) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        newObj[key] = convertBigIntToNumber(data[key]);
+      }
+    }
+    return newObj;
+  }
+  
+  // Return primitive values and other objects as is
+  return data;
+}
+
 // Export public API
 module.exports = {
   initialize,
@@ -1068,5 +1111,7 @@ module.exports = {
   updateReferencePrice,
   saveAppSettings,
   getAppSettings,
+  query,  // Export the query function for direct database access when needed
+  convertBigIntToNumber, // Export the BigInt converter
   close
 };

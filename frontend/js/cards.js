@@ -450,12 +450,17 @@ function updateTransactionHistory(symbol, history) {
     const recentHistory = history.slice(0, CARD_CONFIG.MAX_HISTORY_ITEMS);
     
     recentHistory.forEach(transaction => {
-      const { action, quantity, price, created_at } = transaction;
+      const { action, quantity, price, trade_time } = transaction;
       
-      // Format date
-      const date = new Date(created_at);
-      const formattedDate = date.toLocaleDateString();
-      const formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      // Format date with validation
+      let formattedDate = 'N/A';
+      let formattedTime = '';
+      
+      if (trade_time && !isNaN(new Date(trade_time).getTime())) {
+        const date = new Date(trade_time);
+        formattedDate = date.toLocaleDateString();
+        formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
       
       // Create list item
       const li = document.createElement('li');
