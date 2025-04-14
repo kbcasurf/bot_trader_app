@@ -22,6 +22,11 @@ const BINANCE_API_URL = process.env.BINANCE_API_URL;
 const BINANCE_WS_URL = process.env.BINANCE_WEBSOCKET_URL;
 const BINANCE_RECV_WINDOW = parseInt(process.env.BINANCE_RECV_WINDOW);
 
+// Trading configuration
+const BUY_THRESHOLD_PERCENT = parseFloat(process.env.BUY_THRESHOLD_PERCENT || 0.01);  // Default to 1% if not set
+const SELL_THRESHOLD_PERCENT = parseFloat(process.env.SELL_THRESHOLD_PERCENT || 0.01); // Default to 1% if not set
+const AUTO_TRADE_INVESTMENT_AMOUNT = parseFloat(process.env.AUTO_TRADE_INVESTMENT_AMOUNT || 50); // Default to $50 if not set
+
 // Create a custom event emitter for price updates
 class BinanceEvents extends EventEmitter {}
 const binanceEvents = new BinanceEvents();
@@ -149,17 +154,38 @@ async function importHistoricalTrades(force = false) {
         let importedCount = 0;
         for (const trade of trades) {
           // Transform Binance trade format to our database format
+          // Binance API returns trade time in milliseconds since epoch
+          const tradeTimestamp = new Date(parseInt(trade.time));
+          console.log(`Processing trade for ${baseSymbol}: ID=${trade.id}, Time=${tradeTimestamp.toISOString()}`);
+          
           const tradeData = {
             symbol: baseSymbol,
             action: trade.isBuyer ? 'buy' : 'sell',
             quantity: parseFloat(trade.qty),
             price: parseFloat(trade.price),
-            usdt_amount: parseFloat(trade.quoteQty)
+            usdt_amount: parseFloat(trade.quoteQty),
+            trade_time: tradeTimestamp,
+            binance_trade_id: trade.id
           };
           
-          // Record the trade in our database
-          await db.recordTrade(tradeData);
-          importedCount++;
+          try {
+            // Check if this trade ID already exists in our database to avoid duplicates
+            const existingTradeCheck = await db.query(
+              "SELECT id FROM trades WHERE binance_trade_id = ? LIMIT 1", 
+              [trade.id]
+            );
+            
+            if (existingTradeCheck.length === 0) {
+              // Record the trade in our database only if it doesn't already exist
+              await db.recordTrade(tradeData);
+              importedCount++;
+              console.log(`Saved Binance trade ID ${trade.id} for ${baseSymbol} from ${tradeTimestamp.toISOString()}`);
+            } else {
+              console.log(`Skipping duplicate trade ID ${trade.id} for ${baseSymbol}`);
+            }
+          } catch (tradeError) {
+            console.error(`Error processing trade ID ${trade.id} for ${baseSymbol}:`, tradeError);
+          }
         }
         
         console.log(`Imported ${importedCount} historical trades for ${baseSymbol}`);
@@ -255,6 +281,11 @@ async function initialize() {
       // Continue anyway - this is not critical
     }
     
+    // Note: The initial account balance update and reference price initialization
+    // will be performed by main.js directly after this function returns.
+    // This is done in the startServer() function to ensure proper sequencing
+    // and verification of this critical functionality.
+    
     // Notify via Telegram
     telegram.sendMessage(`Binance connection: API=${state.serviceStatus.apiConnected}, WebSocket=${state.isConnected}, Auto-Trading=${state.autoTradingEnabled}`);
     
@@ -300,11 +331,11 @@ async function initializeWebSocket() {
     
     console.log(`Connecting to Binance WebSocket (combined stream)...`);
     
-    // Create a new WebSocket connection
+    // Create a new WebSocket connection with optimized parameters
     const socket = new WebSocket(combinedStreamUrl, {
       perMessageDeflate: false, // Disable compression for better performance
-      handshakeTimeout: 10000,  // 10 second handshake timeout
-      timeout: 30000            // 30 second connection timeout
+      handshakeTimeout: 5000,   // Reduced from 10000 for faster connection
+      timeout: 15000            // Reduced from 30000 for faster connection
     });
     
     // Set connection state
@@ -318,7 +349,7 @@ async function initializeWebSocket() {
       const connectionTimeout = setTimeout(() => {
         reject(new Error('WebSocket connection timeout'));
         socket.terminate();
-      }, 20000); // 20 second connection timeout
+      }, 10000); // Reduced from 20000 for faster connection
       
       // Handle WebSocket connection open
       socket.on('open', () => {
@@ -443,10 +474,10 @@ function handleWebSocketMessage(data) {
           // Notify price update to listeners
           notifyPriceUpdate(symbol, price);
           
-          // Only log price updates once per 60 seconds per symbol (reduced frequency)
+          // Only log price updates once per 5 minutes per symbol (greatly reduced frequency)
           const now = Date.now();
           const lastLogTime = state.lastPriceLogTime[symbol] || 0;
-          if (now - lastLogTime >= 60000) { // 60 seconds in milliseconds
+          if (now - lastLogTime >= 300000) { // 5 minutes in milliseconds
             // Always show cryptocurrency prices with 4 decimal places for consistency
             console.log(`WebSocket price update for ${symbol}: $${price.toFixed(4)}`);
             state.lastPriceLogTime[symbol] = now;
@@ -649,7 +680,7 @@ async function getSymbolPrice(symbol) {
     
     return {
       symbol: symbol,
-      price: currentPrice.toString()
+      price: currentPrice.toString() // Already a string, no BigInt issues
     };
   }
   
@@ -868,6 +899,21 @@ async function placeMarketOrder(orderData) {
     const isManualSellAll = side.toLowerCase() === 'sell' && 
                           orderData.isManualSellAll === true;
     
+    // For manually executed trades, use the Binance fill data to get trade time and ID
+    // The trade_time will come from the Binance API response for new trades
+    let tradeTime = new Date();
+    let binanceTradeId = null;
+    
+    // Extract trade time and ID from the fill data if available
+    if (result.fills && result.fills.length > 0) {
+      // Use tradeId from the first fill as our Binance trade ID reference
+      binanceTradeId = result.fills[0].tradeId;
+      
+      // For manual trades, we use the current time since Binance doesn't return
+      // the exact trade time in the order response - this is different from 
+      // the historical trades endpoint which does include time
+    }
+    
     // Record the trade and get the result data that includes price thresholds
     const tradeResult = await db.recordTrade({
       symbol: baseCurrency,
@@ -875,12 +921,14 @@ async function placeMarketOrder(orderData) {
       quantity: parseFloat(quantity),
       price: price,
       usdt_amount: usdt,
-      isManualSellAll: isManualSellAll
+      isManualSellAll: isManualSellAll,
+      trade_time: tradeTime,
+      binance_trade_id: binanceTradeId
     });
     
     // Verify price thresholds were updated
     const thresholdVerification = await db.getReferencePrice(baseCurrency);
-    console.log(`[VERIFICATION] After trade for ${baseCurrency}: lastTransactionPrice=${thresholdVerification.lastTransactionPrice}, nextBuyPrice=${thresholdVerification.nextBuyPrice}, nextSellPrice=${thresholdVerification.nextSellPrice}`);
+    console.log(`[VERIFICATION] After trade for ${baseCurrency}: firstTransactionPrice=${thresholdVerification.firstTransactionPrice}, lastTransactionPrice=${thresholdVerification.lastTransactionPrice}, nextBuyPrice=${thresholdVerification.nextBuyPrice}, nextSellPrice=${thresholdVerification.nextSellPrice}`);
     
     // Step 6: Update account balances in database after trade
     try {
@@ -979,12 +1027,12 @@ async function sellAll(symbol) {
     const quantity = parseFloat(asset.free);
     const formattedQuantity = formatQuantity(symbol, quantity, currentPrice);
     
-    // Place the order with a flag to indicate this is a manual sell all operation
+    // Place the order - we no longer need to differentiate between manual and auto sells
+    // as they are treated the same way in recordTrade
     const result = await placeMarketOrder({
       symbol: `${symbol}USDT`,
       side: 'SELL',
-      quantity: formattedQuantity,
-      isManualSellAll: true  // Add flag to identify manual sell all operation
+      quantity: formattedQuantity
     });
     
     return result;
@@ -1091,7 +1139,7 @@ async function checkAutoTrading(symbol, currentPrice) {
   
   // Check if there's already an active trading operation for this symbol
   if (activeTradeExecutions.get(symbol)) {
-    console.log(`[DUPLICATE PREVENTION] Auto-trading check skipped: There's already an active trade execution for ${symbol}`);
+    // Removed log for duplicate prevention
     return;
   }
   
@@ -1102,10 +1150,10 @@ async function checkAutoTrading(symbol, currentPrice) {
     const remainingCooldown = TRADE_COOLDOWN - timeElapsed;
     
     if (timeElapsed < TRADE_COOLDOWN) {
-      console.log(`[COOLDOWN PREVENTION] Auto-trading check skipped: ${symbol} was traded in the last ${Math.round(timeElapsed/1000)} seconds. ${Math.round(remainingCooldown/1000)} seconds of cooldown remaining.`);
+      // Removed cooldown prevention log
       return;
     } else {
-      console.log(`[COOLDOWN EXPIRED] ${symbol} cooldown period has ended. Auto-trading checks now active.`);
+      // Removed cooldown expired log
       // Clear the symbol from recently traded map since cooldown expired
       recentlyTraded.delete(symbol);
     }
@@ -1115,101 +1163,75 @@ async function checkAutoTrading(symbol, currentPrice) {
     // Set the active trade execution flag BEFORE any checks to prevent race conditions
     activeTradeExecutions.set(symbol, true);
     
-    // Add more detailed log to track auto-trading executions
-    console.log(`Performing auto-trading check for ${symbol} at price $${currentPrice.toFixed(4)}`);
+    // Removed detailed execution log
     
     // Emit event for auto-trading check
     binanceEvents.emit('auto_trading_check', { symbol, price: currentPrice });
     
     // Get FRESH reference prices and thresholds directly from database
     // This is critical to avoid stale threshold values
-    console.log(`[AUTO-TRADE CHECK] Getting fresh thresholds for ${symbol} at ${currentPrice}`);
+    // Removed log about getting thresholds
     
     // Force database to provide the most up-to-date values by adding a small delay
     // This helps ensure we don't read cached/stale values
     await new Promise(resolve => setTimeout(resolve, 500));
     
     const refPrices = await db.getReferencePrice(symbol);
-    console.log(`[DB REFERENCE] For ${symbol}: Last transaction price=${refPrices.lastTransactionPrice}`);
-    
-    const thresholds = await db.calculateTradingThresholds(symbol, currentPrice);
-    console.log(`[PRICES] For ${symbol}: Buy at ${thresholds.nextBuyPrice}, Sell at ${thresholds.nextSellPrice}`);
-    
-    // Double check thresholds are properly updated
-    console.log(`[PRICE CHECK] For ${symbol}: nextBuyPrice=${thresholds.nextBuyPrice.toFixed(4)}, nextSellPrice=${thresholds.nextSellPrice.toFixed(4)}`);
+    // Removed DB reference log
     
     // Get current holdings
     const holdings = await db.getCurrentHoldings(symbol);
     
-    // Log price comparison for debugging
-    console.log(`Auto-trading check for ${symbol}: Current Price = $${currentPrice.toFixed(4)}, ` + 
-                `Next Buy = $${thresholds.nextBuyPrice.toFixed(4)}, Next Sell = $${thresholds.nextSellPrice.toFixed(4)}`);
+    // Removed price comparison log
     
-    // Check if we should buy (price at or below fixed buy threshold)
-    if (currentPrice <= thresholds.nextBuyPrice) {
+    // Check if we should buy (price at or below next_buy_price) - Requirement 3.2
+    if (currentPrice <= refPrices.nextBuyPrice && refPrices.nextBuyPrice > 0) {
       // Only buy if we have USDT available
       const accountInfo = await getAccountInfo();
       const usdtBalance = accountInfo.balances.find(b => b.asset === 'USDT');
       
-      if (usdtBalance && parseFloat(usdtBalance.free) >= 50) {
-        console.log(`AUTO-TRADING TRIGGERED: Buying ${symbol} at $${currentPrice.toFixed(4)} (Buy price: $${thresholds.nextBuyPrice.toFixed(4)})`);
+      if (usdtBalance && parseFloat(usdtBalance.free) >= AUTO_TRADE_INVESTMENT_AMOUNT) {
+        console.log(`AUTO-TRADING TRIGGERED: Buying ${symbol} at $${currentPrice.toFixed(4)} (Buy price: $${refPrices.nextBuyPrice.toFixed(4)})`);
         
         // Send telegram notification for auto-trading trigger
-        telegram.sendMessage(`🤖 Auto-trading BUY triggered for ${symbol} at $${currentPrice.toFixed(4)} (below buy price: $${thresholds.nextBuyPrice.toFixed(4)})`);
+        telegram.sendMessage(`🤖 Auto-trading BUY triggered for ${symbol} at $${currentPrice.toFixed(4)} (at/below buy price: $${refPrices.nextBuyPrice.toFixed(4)})`);
         
         try {
           console.log(`[AUTO-TRADE] Executing BUY for ${symbol} at ${currentPrice}`);
           // Execute buy - this will update the reference prices in recordTrade function
-          const result = await buyWithUsdt(symbol, 50);
+          const result = await buyWithUsdt(symbol, AUTO_TRADE_INVESTMENT_AMOUNT);
           
-          // After successful trade, update lastAutoTradingCheck to enforce a cooldown period 
-          // that's longer than usual to ensure thresholds propagate properly
+          // After successful trade, update lastAutoTradingCheck to enforce a cooldown period
           lastAutoTradingCheck.set(symbol, Date.now());
           
-          // For a BUY operation, calculate new thresholds
-          // Calculate new buy threshold (1% below current price)
-          const newBuyThreshold = currentPrice * 0.99;
-          // Calculate new sell threshold (1% above current buy price)
-          const newSellThreshold = currentPrice * 1.01;
+          // Per requirement 3.2: After buy order is confirmed, update last_transaction_price
+          // and calculate new next_buy_price using threshold percentage and last_transaction_price
+          const newBuyThreshold = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
           
-          // Force recalculation of thresholds to ensure consistency
-          const updatedThresholds = await db.calculateTradingThresholds(symbol, currentPrice);
+          // Calculate next sell price based on the first_transaction_price (which is the same as current price for a first buy)
+          // Per requirement 2.1: We need to calculate next_sell_price using first_transaction_price
+          const newSellThreshold = currentPrice * (1 + SELL_THRESHOLD_PERCENT);
           
-          // Log updated thresholds to confirm changes
-          console.log(`[UPDATED PRICES] For ${symbol}: nextBuyPrice=${updatedThresholds.nextBuyPrice.toFixed(4)}, nextSellPrice=${updatedThresholds.nextSellPrice.toFixed(4)}`);
+          console.log(`[UPDATED PRICES] For ${symbol}: nextBuyPrice=${newBuyThreshold.toFixed(4)}, nextSellPrice=${newSellThreshold.toFixed(4)}`);
           
-          // Check if thresholds were updated correctly
-          if (Math.abs(updatedThresholds.nextBuyPrice - newBuyThreshold) > 0.0001 || 
-              Math.abs(updatedThresholds.nextSellPrice - newSellThreshold) > 0.0001) {
-            console.error(`[CRITICAL] Threshold update failed for ${symbol}! Expected: Buy=${newBuyThreshold}, Sell=${newSellThreshold}, Got: Buy=${updatedThresholds.nextBuyPrice}, Sell=${updatedThresholds.nextSellPrice}`);
-            
-            // Try one more time to force threshold update
-            await db.updateReferencePrice(symbol, {
-              nextBuyPrice: newBuyThreshold,
-              lastTransactionPrice: currentPrice,
-              nextSellPrice: newSellThreshold,
-              forceUpdate: true  // Add a flag to indicate this is an emergency update
-            });
-            
-            // Verify again after the force update
-            const finalVerification = await db.getReferencePrice(symbol);
-            console.log(`[FINAL VERIFICATION] ${symbol} reference prices after force update: Buy=${finalVerification.nextBuyPrice}, Sell=${finalVerification.nextSellPrice}`);
-            
-            // Manually emit an event to ensure all listeners are updated
-            binanceEvents.emit('reference_price_updated', {
-              symbol: symbol,
-              lastTransactionPrice: currentPrice,
-              nextBuyPrice: newBuyThreshold,
-              nextSellPrice: newSellThreshold
-            });
-          }
+          // Ensure database values are consistent
+          // Per requirement 2.1: We need to set first_transaction_price as well
+          await db.updateReferencePrice(symbol, {
+            nextBuyPrice: newBuyThreshold,
+            nextSellPrice: newSellThreshold,
+            lastTransactionPrice: currentPrice,
+            firstTransactionPrice: currentPrice, // Always set first_transaction_price to current price for buys
+            forceUpdate: true
+          });
+          
+          // Verify updates
+          const finalVerification = await db.getReferencePrice(symbol);
+          console.log(`[FINAL VERIFICATION] ${symbol} reference prices after update: Buy=${finalVerification.nextBuyPrice}, Sell=${finalVerification.nextSellPrice}`);
           
           // Standard logging
-          console.log(`Updated prices for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (1% below current price), Next Sell = $${newSellThreshold.toFixed(4)} (1% above buy price)`);
           console.log(`Auto-trading buy executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
           
           // Mark this symbol as recently traded to prevent duplicate trades
-          // Use current time plus a buffer to ensure cooldown is enforced longer
           recentlyTraded.set(symbol, Date.now());
           
           // Log that we've marked this symbol as recently traded
@@ -1220,7 +1242,7 @@ async function checkAutoTrading(symbol, currentPrice) {
             symbol, 
             action: 'buy', 
             price: currentPrice,
-            amount: 50,
+            amount: AUTO_TRADE_INVESTMENT_AMOUNT,
             orderId: result.orderId,
             newThresholds: {
               nextBuyPrice: newBuyThreshold,
@@ -1228,13 +1250,13 @@ async function checkAutoTrading(symbol, currentPrice) {
             }
           });
           
-          // Ensure database values are consistent by doing a final force update
-          console.log(`[VERIFICATION] Ensuring database values for ${symbol} are consistent after BUY operation`);
-          await db.updateReferencePrice(symbol, {
-            nextBuyPrice: newBuyThreshold,
-            nextSellPrice: newSellThreshold,
+          // Notify UI of the updated thresholds
+          binanceEvents.emit('reference_price_updated', {
+            symbol: symbol,
+            firstTransactionPrice: currentPrice, // Include first_transaction_price
             lastTransactionPrice: currentPrice,
-            forceUpdate: true
+            nextBuyPrice: newBuyThreshold,
+            nextSellPrice: newSellThreshold
           });
         } catch (buyError) {
           console.error(`Auto-trading buy execution failed for ${symbol}:`, buyError);
@@ -1245,65 +1267,41 @@ async function checkAutoTrading(symbol, currentPrice) {
       }
     }
     
-    // Check if we should sell (price at or above fixed sell price and we have holdings)
-    else if (currentPrice >= thresholds.nextSellPrice && holdings.quantity > 0) {
-      console.log(`AUTO-TRADING TRIGGERED: Selling ${symbol} at $${currentPrice.toFixed(4)} (Sell price: $${thresholds.nextSellPrice.toFixed(4)})`);
+    // Check if we should sell (price at or above next_sell_price and we have holdings) - Requirement 3.3
+    else if (currentPrice >= refPrices.nextSellPrice && refPrices.nextSellPrice > 0 && holdings.quantity > 0) {
+      console.log(`AUTO-TRADING TRIGGERED: Selling ${symbol} at $${currentPrice.toFixed(4)} (Sell price: $${refPrices.nextSellPrice.toFixed(4)})`);
       
       // Send telegram notification for auto-trading trigger
-      telegram.sendMessage(`🤖 Auto-trading SELL triggered for ${symbol} at $${currentPrice.toFixed(4)} (above sell price: $${thresholds.nextSellPrice.toFixed(4)})`);
+      telegram.sendMessage(`🤖 Auto-trading SELL triggered for ${symbol} at $${currentPrice.toFixed(4)} (at/above sell price: $${refPrices.nextSellPrice.toFixed(4)})`);
       
       try {
         console.log(`[AUTO-TRADE] Executing SELL for ${symbol} at ${currentPrice}`);
         // Execute sell - this will update the reference prices in recordTrade function
+        // Per requirement 3.3: The sell order must be a sell all order, selling all amount of crypto
         const result = await sellAll(symbol);
         
-        // After successful trade, update lastAutoTradingCheck to enforce a cooldown period
-        // that's longer than usual to ensure thresholds propagate properly
+        // After successful trade, update lastAutoTradingCheck
         lastAutoTradingCheck.set(symbol, Date.now());
         
-        // For a SELL operation, calculate new thresholds
-        // For sell operations, set buy threshold to 1% below current sell price
-        const newBuyThreshold = currentPrice * 0.99;
-        // For auto-sell operations, set next sell price to 1% above the current price
-        // (not zero, since this is not a manual "Sell All" operation)
-        const newSellThreshold = currentPrice * 1.01;
+        // Per requirement 3.3: After sell is confirmed, update last_transaction_price,
+        // calculate new next_buy_price, and set next_sell_price to 0
+        const newBuyThreshold = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
+        const newSellThreshold = 0; // Per requirement 3.3 - set next_sell_price to 0 after sell
         
-        // For sell operations initiated by auto-trading, let recordTrade handle threshold updates normally
+        // Ensure database values are consistent
+        await db.updateReferencePrice(symbol, {
+          nextBuyPrice: newBuyThreshold,
+          nextSellPrice: newSellThreshold,
+          lastTransactionPrice: currentPrice,
+          // Note: we don't update firstTransactionPrice here as it should only be updated on buys
+          forceUpdate: true
+        });
         
-        // Force recalculation of thresholds to ensure consistency
-        const updatedThresholds = await db.calculateTradingThresholds(symbol, currentPrice);
-        
-        // Log updated thresholds to confirm changes
-        console.log(`[UPDATED PRICES] For ${symbol}: nextBuyPrice=${updatedThresholds.nextBuyPrice.toFixed(4)}, nextSellPrice=${updatedThresholds.nextSellPrice.toFixed(4)}`);
-        
-        // Check if thresholds were updated correctly
-        if (Math.abs(updatedThresholds.nextBuyPrice - newBuyThreshold) > 0.0001 || 
-            Math.abs(updatedThresholds.nextSellPrice - newSellThreshold) > 0.0001) {
-          console.error(`[CRITICAL] Threshold update failed for ${symbol}! Expected: Buy=${newBuyThreshold}, Sell=${newSellThreshold}, Got: Buy=${updatedThresholds.nextBuyPrice}, Sell=${updatedThresholds.nextSellPrice}`);
-          
-          // Try one more time to force threshold update
-          await db.updateReferencePrice(symbol, {
-            nextBuyPrice: newBuyThreshold,
-            nextSellPrice: newSellThreshold,
-            lastTransactionPrice: currentPrice,
-            forceUpdate: true  // Add a flag to indicate this is an emergency update
-          });
-          
-          // Verify again after the force update
-          const finalVerification = await db.getReferencePrice(symbol);
-          console.log(`[FINAL VERIFICATION] ${symbol} reference prices after force update: Buy=${finalVerification.nextBuyPrice}, Sell=${finalVerification.nextSellPrice}`);
-          
-          // Manually emit an event to ensure all listeners are updated
-          binanceEvents.emit('reference_price_updated', {
-            symbol: symbol,
-            lastTransactionPrice: currentPrice,
-            nextBuyPrice: newBuyThreshold,
-            nextSellPrice: newSellThreshold
-          });
-        }
+        // Verify updates
+        const finalVerification = await db.getReferencePrice(symbol);
+        console.log(`[FINAL VERIFICATION] ${symbol} reference prices after update: Buy=${finalVerification.nextBuyPrice}, Sell=${finalVerification.nextSellPrice}`);
         
         // Standard logging
-        console.log(`Updated prices for ${symbol}: Next Buy = $${newBuyThreshold.toFixed(4)} (1% below sell price), Next Sell = $${newSellThreshold.toFixed(4)} (1% above sell price)`);
         console.log(`Auto-trading sell executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
         
         // Mark this symbol as recently traded to prevent duplicate trades
@@ -1325,13 +1323,12 @@ async function checkAutoTrading(symbol, currentPrice) {
           }
         });
         
-        // Ensure database values are consistent by doing a final force update
-        console.log(`[VERIFICATION] Ensuring database values for ${symbol} are consistent after SELL operation`);
-        await db.updateReferencePrice(symbol, {
-          nextBuyPrice: newBuyThreshold,
-          nextSellPrice: newSellThreshold,
+        // Notify UI of the updated thresholds
+        binanceEvents.emit('reference_price_updated', {
+          symbol: symbol,
           lastTransactionPrice: currentPrice,
-          forceUpdate: true
+          nextBuyPrice: newBuyThreshold,
+          nextSellPrice: newSellThreshold
         });
       } catch (sellError) {
         console.error(`Auto-trading sell execution failed for ${symbol}:`, sellError);
@@ -1347,17 +1344,9 @@ async function checkAutoTrading(symbol, currentPrice) {
   } finally {
     // ALWAYS clear the active trade execution flag, regardless of outcome
     activeTradeExecutions.delete(symbol);
-    console.log(`Released active trade execution lock for ${symbol}`);
+    // Removed lock release log
     
-    // Log if the symbol is in cooldown period
-    const lastTradeTime = recentlyTraded.get(symbol);
-    if (lastTradeTime) {
-      const timeElapsed = Date.now() - lastTradeTime;
-      const remainingTime = Math.max(0, TRADE_COOLDOWN - timeElapsed);
-      if (remainingTime > 0) {
-        console.log(`Symbol ${symbol} in trade cooldown: ${Math.ceil(remainingTime/1000)}s remaining before next trade`);
-      }
-    }
+    // Symbol cooldown period check - logs removed
   }
 }
 
@@ -1531,7 +1520,7 @@ function notifyPriceUpdate(symbol, price) {
         !tradingLocks.get(lockKey) && 
         !activeTradeExecutions.get(symbol)) {
       
-      console.log(`Auto-trading is enabled, checking conditions for ${symbol} at ${price.toFixed(4)}`);
+      // Reduced logging - don't log every check
       lastAutoTradingCheck.set(symbol, now);
       
       // Set lock before starting the check
@@ -1548,7 +1537,7 @@ function notifyPriceUpdate(symbol, price) {
             // to ensure database updates are complete
             setTimeout(() => {
               tradingLocks.delete(lockKey);
-              console.log(`Released trading lock for ${symbol}`);
+              // Removed log - don't log every lock release
             }, 5000); // 5 second cooldown before allowing another check
           });
       }, 0);
@@ -1615,11 +1604,13 @@ function getHealthStatus() {
 /**
  * Update account balances in the database
  * Fetches the latest account info from Binance and updates the database
+ * Also initializes reference prices for holdings at first run
+ * @param {boolean} isFirstRun - Whether this is the first run of the application
  * @returns {Promise<Object>} The account information
  */
-async function updateAccountBalances() {
+async function updateAccountBalances(isFirstRun = false) {
   try {
-    console.log('Fetching and updating account balances from Binance...');
+    // Account balance update - reduced log frequency
     
     // Get account information from Binance
     const accountInfo = await getAccountInfo();
@@ -1652,17 +1643,32 @@ async function updateAccountBalances() {
       }
     }
     
-    // Log balances before database update
-    console.log('Balances retrieved from Binance:', 
-      Object.fromEntries(
-        Object.entries(relevantBalances).map(([key, value]) => 
-          [key, parseFloat(value).toFixed(4)]
-        )
-      )
-    );
+    // Removed detailed balance log
     
     // Update database with the balances
     await db.updateAccountBalances(relevantBalances);
+    
+    // If this is the first run, initialize reference prices based on requirements
+    if (isFirstRun) {
+      console.log('First run detected. Initializing reference prices according to requirements...');
+      
+      // For the first time app runs, set all columns in reference_prices to 0 for all symbols
+      for (const symbol of state.supportedSymbols) {
+        console.log(`Setting all reference prices to 0 for ${symbol} (first app run)`);
+        
+        try {
+          // Set all columns to 0 as per updated requirement 1.3
+          await db.updateReferencePrice(symbol, {
+            firstTransactionPrice: 0,
+            lastTransactionPrice: 0,
+            nextBuyPrice: 0,
+            nextSellPrice: 0
+          });
+        } catch (error) {
+          console.error(`Error resetting reference prices for ${symbol}:`, error);
+        }
+      }
+    }
     
     return accountInfo;
   } catch (error) {
@@ -1727,7 +1733,7 @@ module.exports = {
   isConnected: () => state.isConnected,
   getSymbolPrice,
   getAccountInfo,
-  updateAccountBalances,
+  updateAccountBalances, // Now supports isFirstRun parameter
   scheduleBalanceUpdates,
   buyWithUsdt,
   sellAll,

@@ -80,9 +80,9 @@ const io = socketIo(server, {
   path: '/socket.io',
   transports: transports,
   allowEIO3: true, // For compatibility with older clients
-  pingTimeout: 60000, // Increase ping timeout for better connection stability
-  pingInterval: 25000, // More frequent pings to detect disconnections faster
-  connectTimeout: 30000 // Allow more time for initial connection
+  pingTimeout: 30000, // Reduced from 60000 for faster connection checks
+  pingInterval: 10000, // Reduced from 25000 for more responsive connection
+  connectTimeout: 20000 // Reduced from 30000 for faster connection initialization
 });
 
 // Application state
@@ -147,13 +147,91 @@ async function startServer() {
       if (binanceInitialized) {
         setupBinanceHandlers();
         
-        // Perform initial account balance update at startup
+        // Critical functionality: Perform initial account balance update and reference price setup
         try {
-          console.log('Performing initial account balance update...');
-          await binance.updateAccountBalances();
+          console.log('Performing initial account balance update and reference price initialization...');
+          console.log('NOTE: On first app run, all reference_prices values will be set to 0 for all symbols per requirement 1.2');
+          // Call updateAccountBalances with isFirstRun=true flag to trigger reference price setup
+          // This implements requirements 1.1 and 1.2 - read balances from Binance and initialize reference_prices to 0
+          await binance.updateAccountBalances(true);
+          console.log('Initial account balance update and reference price initialization completed successfully');
+          
+          // Verify the reference prices were set correctly for all symbols
+          console.log('Verifying reference prices are correctly set for all symbols...');
+          const accountBalances = await db.getAccountBalances();
+          const supportedSymbols = binance.getSupportedSymbols();
+          
+          for (const symbol of supportedSymbols) {
+            try {
+              const refPrices = await db.getReferencePrice(symbol);
+              const balance = accountBalances[symbol] || 0;
+              
+              console.log(`Verification for ${symbol}: 
+                Balance = ${balance.toFixed(8)}
+                First Transaction Price = ${refPrices.firstTransactionPrice}
+                Last Transaction Price = ${refPrices.lastTransactionPrice}
+                Next Buy Price = ${refPrices.nextBuyPrice}
+                Next Sell Price = ${refPrices.nextSellPrice}`);
+                
+              // Per requirement 1.2: System must set all columns on reference_prices table to 0
+              // until the user decides to click "Buy 'symbol'" button
+              // This applies to ALL symbols whether they have holdings or not
+              
+              // For all symbols, verify all prices are set to 0 at first run
+              if (refPrices.firstTransactionPrice !== 0 || 
+                  refPrices.lastTransactionPrice !== 0 || 
+                  refPrices.nextBuyPrice !== 0 || 
+                  refPrices.nextSellPrice !== 0) {
+                console.error(`ERROR: Symbol ${symbol} has reference prices not set to 0 at first run!`);
+                
+                // Force reset to zero on verification failure to ensure compliance with requirements
+                try {
+                  await db.updateReferencePrice(symbol, {
+                    firstTransactionPrice: 0,
+                    lastTransactionPrice: 0,
+                    nextBuyPrice: 0,
+                    nextSellPrice: 0
+                  });
+                  console.log(`Reset all reference prices to 0 for ${symbol} as required by 1.2`);
+                } catch (resetError) {
+                  console.error(`Failed to reset reference prices for ${symbol}:`, resetError);
+                }
+              }
+            } catch (verifyError) {
+              console.error(`Error verifying reference prices for ${symbol}:`, verifyError);
+            }
+          }
         } catch (balanceError) {
-          console.error('Error during initial account balance update:', balanceError);
-          // Continue anyway - this is not critical for startup
+          console.error('CRITICAL ERROR during initial account balance update and reference price setup:', balanceError);
+          // This is critical functionality - notify the error loudly
+          telegram.sendErrorNotification('CRITICAL ERROR initializing reference prices: ' + balanceError.message);
+        }
+        
+        // Restore auto-trading interval if auto-trading was enabled
+        try {
+          const savedSettings = await db.getAppSettings('autoTradingEnabled');
+          if (savedSettings === true) {
+            console.log('Restoring auto-trading interval from previous state');
+            // Set up interval for requirement 3.1 - check every minute
+            if (!global.autoTradingInterval) {
+              global.autoTradingInterval = setInterval(() => {
+                if (binance.getHealthStatus().autoTradingEnabled) {
+                  // Removed frequent scheduled check log
+                  performImmediateAutoTradingCheck();
+                } else {
+                  // If auto-trading was disabled, clear the interval
+                  if (global.autoTradingInterval) {
+                    clearInterval(global.autoTradingInterval);
+                    global.autoTradingInterval = null;
+                    console.log('Auto-trading interval cleared');
+                  }
+                }
+              }, 60000); // Check every minute per requirement 3.1
+              console.log('Auto-trading interval started - checking every minute');
+            }
+          }
+        } catch (settingsError) {
+          console.error('Error restoring auto-trading settings:', settingsError);
         }
         
         // Import historical trades if needed
@@ -305,40 +383,44 @@ function setupBinanceHandlers() {
  */
 async function performImmediateAutoTradingCheck() {
   try {
-    console.log('Performing immediate auto-trading check for all supported symbols...');
+    // Start of immediate check - reduced log frequency
     
     // Get all supported symbols
     const supportedSymbols = binance.getSupportedSymbols();
     
-    // Process symbols with a delay between each to prevent overwhelming the system
-    for (const symbol of supportedSymbols) {
-      try {
-        // Get current price from binance
-        const currentPrice = binance.getCurrentPrice(symbol);
-        if (!currentPrice) {
-          console.log(`No price data available for ${symbol}, skipping auto-trading check`);
-          continue;
+    // Process symbols with parallelization for faster checks
+    // Use Promise.all with a concurrency limit of 2 symbols at a time
+    const batchSize = 2;
+    for (let i = 0; i < supportedSymbols.length; i += batchSize) {
+      const batch = supportedSymbols.slice(i, i + batchSize);
+      
+      await Promise.all(batch.map(async (symbol) => {
+        try {
+          // Get current price from binance
+          const currentPrice = binance.getCurrentPrice(symbol);
+          if (!currentPrice) {
+            // Skip for unavailable price data
+            return;
+          }
+          
+          // Emit event to inform frontend that auto-trading check is happening
+          io.emit('auto-trading-check', { symbol, price: currentPrice });
+          
+          // Call checkAutoTrading directly to check if we should execute a trade
+          await binance.checkAutoTrading(symbol, currentPrice);
+          
+        } catch (symbolError) {
+          console.error(`Error checking auto-trading for ${symbol}:`, symbolError);
+          // Continue with next symbol
         }
-        
-        console.log(`Checking auto-trading conditions for ${symbol} at current price $${currentPrice.toFixed(4)}`);
-        
-        // Emit event to inform frontend that auto-trading check is happening
-        io.emit('auto-trading-check', { symbol, price: currentPrice });
-        
-        // Call checkAutoTrading directly to check if we should execute a trade
-        await binance.checkAutoTrading(symbol, currentPrice);
-        
-        // Add a LONGER delay between each symbol's check to prevent API rate limits and simultaneous operations
-        // Increased from 3 seconds to 10 seconds to ensure each operation completes fully
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        
-      } catch (symbolError) {
-        console.error(`Error checking auto-trading for ${symbol}:`, symbolError);
-        // Continue with next symbol
-      }
+      }));
+      
+      // Add a shorter delay between batches instead of between individual symbols
+      // Reduced from 10 seconds to 3 seconds between batches
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
     
-    console.log('Immediate auto-trading check completed');
+    // End of immediate check - reduced log frequency
   } catch (error) {
     console.error('Error performing immediate auto-trading check:', error);
   }
@@ -389,7 +471,10 @@ function setupSocketIO() {
           databaseBalances: dbBalances
         };
         
-        socket.emit('account-info', combinedAccountInfo);
+        // Convert any BigInt values to numbers
+        const safeAccountInfo = db.convertBigIntToNumber(combinedAccountInfo);
+        
+        socket.emit('account-info', safeAccountInfo);
       } catch (error) {
         console.error('Error fetching account info:', error);
         socket.emit('account-info', { error: error.message });
@@ -411,29 +496,26 @@ function setupSocketIO() {
           throw new Error('WebSocket connection is down. Trading is halted until reconnection.');
         }
         
+        // Check if the request specifies limit for trading history
+        const historyLimit = data.historyLimit || 10; // Default to 10 most recent trades
+        
         // Force an update of account balances from Binance to ensure fresh data
         await binance.updateAccountBalances();
         
         // Get account balances from database (now guaranteed to be fresh from Binance)
         const accountBalances = await db.getAccountBalances();
         
-        // Process each symbol
-        for (const fullSymbol of data.symbols) {
+        // Process each symbol with Promise.all for parallel processing
+        await Promise.all(data.symbols.map(async (fullSymbol) => {
           const symbol = fullSymbol.replace('USDT', '');
           
-          // Get current price from WebSocket data (not API)
-          const priceData = await binance.getSymbolPrice(fullSymbol);
-          
-          // Get trading history
-          const tradingHistory = await db.getTradingHistory(symbol);
-          
-          // Get holdings
-          const holdings = await db.getCurrentHoldings(symbol);
-          
-          // First, get the exact reference prices straight from the database
-          // This is critical to ensure we're using the actual stored values, not recalculated ones
-          const refPrices = await db.getReferencePrice(symbol);
-          console.log(`[BATCH DATA] Direct DB reference prices for ${symbol}: Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice}, Holdings=${holdings.quantity}, LastTxPrice=${refPrices.lastTransactionPrice}`);
+          // Use Promise.all to parallelize the database and API calls for each symbol
+          const [priceData, tradingHistory, holdings, refPrices] = await Promise.all([
+            binance.getSymbolPrice(fullSymbol),
+            db.getTradingHistory(symbol, historyLimit), // Limit trading history to most recent entries
+            db.getCurrentHoldings(symbol),
+            db.getReferencePrice(symbol)
+          ]);
           
           // Calculate profit/loss percentage
           const currentPrice = parseFloat(priceData.price);
@@ -448,30 +530,32 @@ function setupSocketIO() {
           // We don't want to "fix" a zero value, as it's an intentional state after "sell all" operations
           const nextSellPrice = refPrices.nextSellPrice;
           
-          // Just log zero sell prices for debugging
-          if (refPrices.nextSellPrice === 0) {
-            console.log(`[INFO] Symbol ${symbol} has nextSellPrice=0, keeping as-is per requirements`);
-          }
-          
           // Combine data - using the DIRECT reference prices from the database
+          // Convert any potential BigInt values to regular Numbers
           results[symbol] = {
             price: parseFloat(priceData.price),
-            history: tradingHistory,
+            history: tradingHistory.map(item => ({
+              ...item,
+              binance_trade_id: item.binance_trade_id ? Number(item.binance_trade_id) : null
+            })),
             holdings: parseFloat(databaseBalance).toFixed(8), // Always use database balance which is now synced with Binance, but ensure we have decimal precision
-            nextBuyPrice: refPrices.nextBuyPrice, // Use the actual stored database value
-            nextSellPrice: nextSellPrice, // Use the fixed sell price value if needed
-            profitLossPercentage: profitLossPercentage,
-            lastTransactionPrice: refPrices.lastTransactionPrice // Include last transaction price
+            nextBuyPrice: parseFloat(refPrices.nextBuyPrice), // Ensure it's a regular number
+            nextSellPrice: parseFloat(nextSellPrice), // Ensure it's a regular number
+            profitLossPercentage: parseFloat(profitLossPercentage),
+            lastTransactionPrice: parseFloat(refPrices.lastTransactionPrice) // Ensure it's a regular number
           };
-        }
+        }));
         
         // Add USDT balance to the results
         results.USDT = {
           balance: parseFloat(accountBalances['USDT'] || 0).toFixed(8)
         };
         
+        // Convert any BigInt values before sending
+        const safeResults = db.convertBigIntToNumber(results);
+        
         // Send batch results
-        socket.emit('batch-data-result', results);
+        socket.emit('batch-data-result', safeResults);
         
       } catch (error) {
         console.error('Error processing batch data request:', error);
@@ -490,8 +574,11 @@ function setupSocketIO() {
         // Execute buy operation
         const result = await binance.buyWithUsdt(data.symbol, data.amount);
         
+        // Convert any BigInt values in result to regular numbers before sending to client
+        const safeResult = db.convertBigIntToNumber(result);
+        
         // Send result back to client
-        socket.emit('buy-result', { success: true, result });
+        socket.emit('buy-result', { success: true, result: safeResult });
         
         // Explicitly update account balances to make sure database is in sync with Binance
         try {
@@ -507,7 +594,7 @@ function setupSocketIO() {
           try {
             // Ensure we have the most up-to-date reference prices by explicitly checking them
             const refPrices = await db.getReferencePrice(data.symbol);
-            console.log(`[DATA REFRESH] For ${data.symbol}: Getting final data with latest thresholds - Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice}`);
+            // Removed data refresh log
             
             // Get updated data with our consistent thresholds
             const updatedData = await getUpdateDataForSymbol(data.symbol);
@@ -524,7 +611,7 @@ function setupSocketIO() {
             
             // Send verified data to client
             socket.emit('crypto-data-update', updatedData);
-            console.log(`[SENT] Final verified data for ${data.symbol} with thresholds: Buy=${updatedData.nextBuyPrice}, Sell=${updatedData.nextSellPrice}`);
+            // Removed final verified data log
           } catch (err) {
             console.error(`[ERROR] Failed to send final crypto update for ${data.symbol}:`, err);
           }
@@ -547,8 +634,11 @@ function setupSocketIO() {
         // Execute sell operation
         const result = await binance.sellAll(data.symbol);
         
+        // Convert any BigInt values in result to regular numbers before sending to client
+        const safeResult = db.convertBigIntToNumber(result);
+        
         // Send result back to client
-        socket.emit('sell-result', { success: true, result });
+        socket.emit('sell-result', { success: true, result: safeResult });
         
         // Explicitly update account balances to make sure database is in sync with Binance
         try {
@@ -564,7 +654,7 @@ function setupSocketIO() {
           try {
             // Ensure we have the most up-to-date reference prices by explicitly checking them
             const refPrices = await db.getReferencePrice(data.symbol);
-            console.log(`[DATA REFRESH] For ${data.symbol}: Getting final data with latest thresholds - Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice}`);
+            // Removed data refresh log
             
             // Get updated data with our consistent thresholds
             const updatedData = await getUpdateDataForSymbol(data.symbol);
@@ -581,7 +671,7 @@ function setupSocketIO() {
             
             // Send verified data to client
             socket.emit('crypto-data-update', updatedData);
-            console.log(`[SENT] Final verified data for ${data.symbol} with thresholds: Buy=${updatedData.nextBuyPrice}, Sell=${updatedData.nextSellPrice}`);
+            // Removed final verified data log
           } catch (err) {
             console.error(`[ERROR] Failed to send final crypto update for ${data.symbol}:`, err);
           }
@@ -603,9 +693,35 @@ function setupSocketIO() {
           // If we get here, it was successful
           console.log(`Auto-trading ${data.enabled ? 'enabled' : 'disabled'} successfully via socket request`);
           
-          // If enabling auto-trading, immediately check all supported symbols to see if any trades should be executed
+          // If enabling auto-trading, implement requirement 3.1 - check permanently with interval of 1 minute
           if (data.enabled) {
+            // Perform immediate check first
             performImmediateAutoTradingCheck();
+            
+            // Set up interval to check every minute (requirement 3.1)
+            if (!global.autoTradingInterval) {
+              global.autoTradingInterval = setInterval(() => {
+                if (binance.getHealthStatus().autoTradingEnabled) {
+                  // Removed frequent scheduled check log
+                  performImmediateAutoTradingCheck();
+                } else {
+                  // If auto-trading is disabled, clear the interval
+                  if (global.autoTradingInterval) {
+                    clearInterval(global.autoTradingInterval);
+                    global.autoTradingInterval = null;
+                    console.log('Auto-trading interval cleared');
+                  }
+                }
+              }, 60000); // Check every minute per requirement 3.1
+              console.log('Auto-trading interval started - checking every minute');
+            }
+          } else {
+            // If disabling auto-trading, clear the interval
+            if (global.autoTradingInterval) {
+              clearInterval(global.autoTradingInterval);
+              global.autoTradingInterval = null;
+              console.log('Auto-trading interval cleared');
+            }
           }
           
           // Send detailed status response
@@ -693,8 +809,7 @@ async function getUpdateDataForSymbol(symbol) {
     // For profit/loss calculation, get holdings and other data
     const holdings = await db.getCurrentHoldings(symbol);
     
-    // Log with holdings information
-    console.log(`[GET_UPDATE_DATA] Direct DB reference prices for ${symbol}: Buy=${refPrices.nextBuyPrice}, Sell=${refPrices.nextSellPrice}, Holdings=${holdings.quantity}, LastTxPrice=${refPrices.lastTransactionPrice}`);
+    // Removed detailed holdings log
     
     // Calculate profit/loss percentage
     const currentPrice = parseFloat(priceData.price);
@@ -706,24 +821,25 @@ async function getUpdateDataForSymbol(symbol) {
     // We don't want to "fix" a zero value, as it's an intentional state after "sell all" operations
     const nextSellPrice = refPrices.nextSellPrice;
     
-    // Just log zero sell prices for debugging
-    if (refPrices.nextSellPrice === 0) {
-      console.log(`[INFO] Symbol ${symbol} has nextSellPrice=0, keeping as-is per requirements`);
-    }
+    // Removed zero sell price log
     
     // Get the balance from the database (will be the same as Binance's balance)
     const databaseBalance = (accountBalances && accountBalances[symbol]) || 0;
     
     // Combine data - using the DIRECT reference prices from the database instead of recalculated ones
+    // Convert any potential BigInt values to regular Numbers
     return {
       symbol,
       price: parseFloat(priceData.price),
-      history: tradingHistory,
+      history: tradingHistory.map(item => ({
+        ...item,
+        binance_trade_id: item.binance_trade_id ? Number(item.binance_trade_id) : null
+      })),
       holdings: parseFloat(databaseBalance).toFixed(8), // Always use the database balance which is now synced with Binance, with proper decimal precision
-      nextBuyPrice: refPrices.nextBuyPrice, // Use the actual stored database value
-      nextSellPrice: nextSellPrice, // Use the fixed sell price value if needed
-      profitLossPercentage: profitLossPercentage,
-      lastTransactionPrice: refPrices.lastTransactionPrice // Include last transaction price
+      nextBuyPrice: parseFloat(refPrices.nextBuyPrice), // Ensure it's a regular number
+      nextSellPrice: parseFloat(nextSellPrice), // Ensure it's a regular number
+      profitLossPercentage: parseFloat(profitLossPercentage),
+      lastTransactionPrice: parseFloat(refPrices.lastTransactionPrice) // Ensure it's a regular number
     };
   } catch (error) {
     console.error(`Error getting updated data for ${symbol}:`, error);
@@ -748,7 +864,10 @@ function sendSystemStatus(socket) {
     autoTradingEnabled: healthStatus.autoTradingEnabled // Use actual auto-trading state
   };
   
-  socket.emit('system-status', statusData);
+  // Convert any BigInt values to numbers
+  const safeStatusData = db.convertBigIntToNumber(statusData);
+  
+  socket.emit('system-status', safeStatusData);
 }
 
 /**
@@ -789,6 +908,13 @@ async function shutdown() {
         'autoTradingEnabled': autoTradingWasEnabled,
         'shutdownTime': new Date().toISOString()
       });
+    }
+    
+    // Clear auto-trading interval if exists
+    if (global.autoTradingInterval) {
+      clearInterval(global.autoTradingInterval);
+      global.autoTradingInterval = null;
+      console.log('Auto-trading interval cleared during shutdown');
     }
   } catch (error) {
     console.error('Error saving app state during shutdown:', error);

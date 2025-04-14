@@ -9,8 +9,9 @@ import * as Connections from './conns.js';
 // Dashboard configuration
 const DASHBOARD_CONFIG = {
   // Refresh intervals in milliseconds
-  AUTO_REFRESH_INTERVAL: 60000,     // 1 minute
-  STAGGERED_LOAD_DELAY: 200,        // 200ms between loading each card's data
+  AUTO_REFRESH_INTERVAL: 30000,     // 30 seconds (reduced from 60000)
+  STAGGERED_LOAD_DELAY: 100,        // 100ms between loading each card's data (reduced from 200)
+  HISTORY_ITEMS_LIMIT: 10,          // Limit number of history items to load initially
   
   // Element selectors
   SELECTORS: {
@@ -91,9 +92,11 @@ function initializeSocketConnection() {
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
   console.log('Connecting to backend WebSocket at:', backendUrl);
   
-  // Create the Socket.IO connection
+  // Create the Socket.IO connection with optimized parameters
   dashboardState.socket = io(backendUrl, {
-    reconnectionDelayMax: 10000,
+    reconnectionDelayMax: 5000,     // Reduced from 10000 for faster reconnection
+    reconnectionAttempts: 10,       // Limit reconnection attempts
+    timeout: 10000,                 // Connection timeout in ms
     transports: ['websocket', 'polling'] // Add polling as fallback for better compatibility
   });
   
@@ -526,12 +529,15 @@ function loadInitialData() {
       `${crypto.symbol.toUpperCase()}USDT`
     );
     
-    // Request batch data (more efficient than individual requests)
-    dashboardState.socket.emit('batch-get-data', { symbols });
+    // Request batch data with history limit for faster initial load
+    dashboardState.socket.emit('batch-get-data', { 
+      symbols,
+      historyLimit: DASHBOARD_CONFIG.HISTORY_ITEMS_LIMIT // Limit history items
+    });
     
     // Request account info for USDT balance
     requestAccountInfo();
-  }, 1000);
+  }, 500); // Reduced from 1000ms
 }
 
 /**
@@ -546,7 +552,11 @@ function loadAllData() {
     `${crypto.symbol.toUpperCase()}USDT`
   );
   
-  dashboardState.socket.emit('batch-get-data', { symbols });
+  // Include history limit like we do for initial load
+  dashboardState.socket.emit('batch-get-data', { 
+    symbols,
+    historyLimit: DASHBOARD_CONFIG.HISTORY_ITEMS_LIMIT
+  });
   
   // Also refresh account info
   requestAccountInfo();
