@@ -331,11 +331,11 @@ async function initializeWebSocket() {
     
     console.log(`Connecting to Binance WebSocket (combined stream)...`);
     
-    // Create a new WebSocket connection
+    // Create a new WebSocket connection with optimized parameters
     const socket = new WebSocket(combinedStreamUrl, {
       perMessageDeflate: false, // Disable compression for better performance
-      handshakeTimeout: 10000,  // 10 second handshake timeout
-      timeout: 30000            // 30 second connection timeout
+      handshakeTimeout: 5000,   // Reduced from 10000 for faster connection
+      timeout: 15000            // Reduced from 30000 for faster connection
     });
     
     // Set connection state
@@ -349,7 +349,7 @@ async function initializeWebSocket() {
       const connectionTimeout = setTimeout(() => {
         reject(new Error('WebSocket connection timeout'));
         socket.terminate();
-      }, 20000); // 20 second connection timeout
+      }, 10000); // Reduced from 20000 for faster connection
       
       // Handle WebSocket connection open
       socket.on('open', () => {
@@ -474,10 +474,10 @@ function handleWebSocketMessage(data) {
           // Notify price update to listeners
           notifyPriceUpdate(symbol, price);
           
-          // Only log price updates once per 60 seconds per symbol (reduced frequency)
+          // Only log price updates once per 5 minutes per symbol (greatly reduced frequency)
           const now = Date.now();
           const lastLogTime = state.lastPriceLogTime[symbol] || 0;
-          if (now - lastLogTime >= 60000) { // 60 seconds in milliseconds
+          if (now - lastLogTime >= 300000) { // 5 minutes in milliseconds
             // Always show cryptocurrency prices with 4 decimal places for consistency
             console.log(`WebSocket price update for ${symbol}: $${price.toFixed(4)}`);
             state.lastPriceLogTime[symbol] = now;
@@ -1139,7 +1139,7 @@ async function checkAutoTrading(symbol, currentPrice) {
   
   // Check if there's already an active trading operation for this symbol
   if (activeTradeExecutions.get(symbol)) {
-    console.log(`[DUPLICATE PREVENTION] Auto-trading check skipped: There's already an active trade execution for ${symbol}`);
+    // Removed log for duplicate prevention
     return;
   }
   
@@ -1150,10 +1150,10 @@ async function checkAutoTrading(symbol, currentPrice) {
     const remainingCooldown = TRADE_COOLDOWN - timeElapsed;
     
     if (timeElapsed < TRADE_COOLDOWN) {
-      console.log(`[COOLDOWN PREVENTION] Auto-trading check skipped: ${symbol} was traded in the last ${Math.round(timeElapsed/1000)} seconds. ${Math.round(remainingCooldown/1000)} seconds of cooldown remaining.`);
+      // Removed cooldown prevention log
       return;
     } else {
-      console.log(`[COOLDOWN EXPIRED] ${symbol} cooldown period has ended. Auto-trading checks now active.`);
+      // Removed cooldown expired log
       // Clear the symbol from recently traded map since cooldown expired
       recentlyTraded.delete(symbol);
     }
@@ -1163,29 +1163,26 @@ async function checkAutoTrading(symbol, currentPrice) {
     // Set the active trade execution flag BEFORE any checks to prevent race conditions
     activeTradeExecutions.set(symbol, true);
     
-    // Add more detailed log to track auto-trading executions
-    console.log(`Performing auto-trading check for ${symbol} at price $${currentPrice.toFixed(4)}`);
+    // Removed detailed execution log
     
     // Emit event for auto-trading check
     binanceEvents.emit('auto_trading_check', { symbol, price: currentPrice });
     
     // Get FRESH reference prices and thresholds directly from database
     // This is critical to avoid stale threshold values
-    console.log(`[AUTO-TRADE CHECK] Getting fresh thresholds for ${symbol} at ${currentPrice}`);
+    // Removed log about getting thresholds
     
     // Force database to provide the most up-to-date values by adding a small delay
     // This helps ensure we don't read cached/stale values
     await new Promise(resolve => setTimeout(resolve, 500));
     
     const refPrices = await db.getReferencePrice(symbol);
-    console.log(`[DB REFERENCE] For ${symbol}: Last transaction price=${refPrices.lastTransactionPrice}`);
+    // Removed DB reference log
     
     // Get current holdings
     const holdings = await db.getCurrentHoldings(symbol);
     
-    // Log price comparison for debugging
-    console.log(`Auto-trading check for ${symbol}: Current Price = $${currentPrice.toFixed(4)}, ` + 
-                `Next Buy = $${refPrices.nextBuyPrice.toFixed(4)}, Next Sell = $${refPrices.nextSellPrice.toFixed(4)}`);
+    // Removed price comparison log
     
     // Check if we should buy (price at or below next_buy_price) - Requirement 3.2
     if (currentPrice <= refPrices.nextBuyPrice && refPrices.nextBuyPrice > 0) {
@@ -1347,17 +1344,9 @@ async function checkAutoTrading(symbol, currentPrice) {
   } finally {
     // ALWAYS clear the active trade execution flag, regardless of outcome
     activeTradeExecutions.delete(symbol);
-    console.log(`Released active trade execution lock for ${symbol}`);
+    // Removed lock release log
     
-    // Log if the symbol is in cooldown period
-    const lastTradeTime = recentlyTraded.get(symbol);
-    if (lastTradeTime) {
-      const timeElapsed = Date.now() - lastTradeTime;
-      const remainingTime = Math.max(0, TRADE_COOLDOWN - timeElapsed);
-      if (remainingTime > 0) {
-        console.log(`Symbol ${symbol} in trade cooldown: ${Math.ceil(remainingTime/1000)}s remaining before next trade`);
-      }
-    }
+    // Symbol cooldown period check - logs removed
   }
 }
 
@@ -1531,7 +1520,7 @@ function notifyPriceUpdate(symbol, price) {
         !tradingLocks.get(lockKey) && 
         !activeTradeExecutions.get(symbol)) {
       
-      console.log(`Auto-trading is enabled, checking conditions for ${symbol} at ${price.toFixed(4)}`);
+      // Reduced logging - don't log every check
       lastAutoTradingCheck.set(symbol, now);
       
       // Set lock before starting the check
@@ -1548,7 +1537,7 @@ function notifyPriceUpdate(symbol, price) {
             // to ensure database updates are complete
             setTimeout(() => {
               tradingLocks.delete(lockKey);
-              console.log(`Released trading lock for ${symbol}`);
+              // Removed log - don't log every lock release
             }, 5000); // 5 second cooldown before allowing another check
           });
       }, 0);
@@ -1621,7 +1610,7 @@ function getHealthStatus() {
  */
 async function updateAccountBalances(isFirstRun = false) {
   try {
-    console.log('Fetching and updating account balances from Binance...');
+    // Account balance update - reduced log frequency
     
     // Get account information from Binance
     const accountInfo = await getAccountInfo();
@@ -1654,14 +1643,7 @@ async function updateAccountBalances(isFirstRun = false) {
       }
     }
     
-    // Log balances before database update
-    console.log('Balances retrieved from Binance:', 
-      Object.fromEntries(
-        Object.entries(relevantBalances).map(([key, value]) => 
-          [key, parseFloat(value).toFixed(4)]
-        )
-      )
-    );
+    // Removed detailed balance log
     
     // Update database with the balances
     await db.updateAccountBalances(relevantBalances);

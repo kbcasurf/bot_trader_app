@@ -1,21 +1,53 @@
 # Automated Cryptocurrency Trading Bot
 
-An automated trading bot that executes cryptocurrency trades on the Binance platform according to predefined strategies.
-
+A fully automated cryptocurrency trading bot that executes trades on the Binance platform according to configurable threshold-based strategies, with real-time monitoring and notifications.
 
 ## Project Overview
 
-This trading bot monitors price movements from Binance Price Stream WebSocket and automatically executes buy/sell orders based on percentage-based rules, while keeping users informed via Telegram notifications.
+This trading bot monitors cryptocurrency price movements in real-time through Binance's WebSocket API and automatically executes buy and sell orders based on configurable percentage-based thresholds, implementing a "buy the dip, sell the rise" strategy.
 
+## Key Features
 
-## Features
+- **Automated Trading Strategy**: 
+  - Makes initial purchase when instructed by the user
+  - Sells when price increases by a configurable percentage (default 1%)
+  - Buys more when price drops by a configurable percentage (default 1%)
+  - Continues the cycle automatically until disabled
 
-- Automated trading with "buy the dip, sell the rise" strategy
-- Real-time price monitoring via Binance WebSocket
-- Telegram notifications for trade events
-- User-friendly dashboard for configuration and monitoring
-- Containerized architecture using Docker
+- **Real-time Price Monitoring**: 
+  - Connects to Binance WebSocket for live price updates
+  - Supports multiple cryptocurrencies (BTC, SOL, XRP, PENDLE, DOGE, NEAR)
 
+- **User Interface**:
+  - Web-based dashboard showing current holdings, prices, and profit/loss
+  - Individual cards for each supported cryptocurrency
+  - Control buttons for manual buying and selling
+  - Auto-trading toggle with activity indicator
+
+- **Notifications**:
+  - Telegram integration for trade notifications and system alerts
+
+- **Database Integration**:
+  - Records all trades and maintains transaction history
+  - Stores reference prices for trading algorithms
+  - Tracks account balances and holdings
+
+## Technology Stack
+
+- **Frontend**: HTML, CSS, JavaScript with Vite
+- **Backend**: Node.js, Express
+- **Database**: MariaDB
+- **Real-time Communication**: Socket.IO
+- **APIs**: Binance API (WebSocket and REST), Telegram Bot API
+- **Containerization**: Docker, Docker Compose
+
+## Architecture
+
+The application follows a microservices architecture:
+
+1. **Frontend Service**: Web UI served via Nginx
+2. **Backend Service**: Core trading logic and API integrations
+3. **Database Service**: MariaDB for data persistence
 
 ## Setup Instructions
 
@@ -25,11 +57,10 @@ This trading bot monitors price movements from Binance Price Stream WebSocket an
 - Binance account with API keys
 - Telegram bot token and chat ID
 
-
 ### Configuration
 
 1. Clone this repository
-2. Create a `.env` file in the root directory by copying from the provided `.env.example`:
+2. Create a `.env` file in the root directory by copying from the provided example:
 ```
 # Database Configuration
 DB_USER=trading_bot_user
@@ -69,7 +100,7 @@ SOCKET_UPGRADE=true
 COMPOSE_BAKE=true
 ```
 
-### Running the Application Locally
+### Running the Application
 
 ```bash
 # Start all services
@@ -84,31 +115,24 @@ docker-compose down
 
 ### Accessing the Dashboard
 
-Open your browser and navigate to `http://localhost`
-
+Open your browser and navigate to `http://localhost` or your configured external host
 
 ## Trading Strategy
-# Testing first in 1% range. Buy 1% less and sell 1% more than updated price
-The bot implements a simple but effective "buy the dip, sell the rise" strategy:
 
-1. Initial purchase is made when the user clicks "First Purchase"
-2. The bot sells when price increases by 5% from the initial purchase
-3. The bot buys more when price drops by 5% from the last purchase
-4. The cycle continues until the user manually stops it or uses the "Sell All" button
+The bot implements a percentage-based trading strategy:
 
-
-## Technology Stack
-
-- Frontend: HTML, CSS, JavaScript with Vite
-- Backend: Node.js, Express
-- Database: MariaDB
-- Containerization: Docker
-- APIs: Binance API, Telegram Bot API
-
+1. Initial purchase is made when the user clicks "First Purchase" for a cryptocurrency
+2. Reference prices are set based on the initial purchase:
+   - After a buy, next_buy_price is set to purchase price - buy threshold
+   - After a buy, next_sell_price is set to purchase price + sell threshold
+3. Automated trading rules:
+   - If price falls to or below next_buy_price, the bot buys more
+   - If price rises to or above next_sell_price, the bot sells all holdings
+   - After each transaction, reference prices are recalculated
 
 ## Development
 
-To run the services individually for development:
+For development purposes, you can run services individually:
 
 ### Frontend
 ```bash
@@ -123,6 +147,14 @@ cd backend
 npm install
 npm run dev
 ```
+
+## Recent Improvements
+
+Recent updates include:
+- Production environment optimizations
+- Threshold configuration options
+- Algorithm refinements
+- Transaction price calculation fixes
 
 ## License
 
