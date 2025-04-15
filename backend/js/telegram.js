@@ -92,6 +92,12 @@ function initialize() {
  */
 async function sendMessage(message) {
   if (!isInitialized || !bot || !isConfigured) {
+    // Don't try to initialize during shutdown
+    if (process.env.NODE_APP_INSTANCE === 'shutting_down') {
+      console.debug('Skipping Telegram message during shutdown');
+      return false;
+    }
+    
     // This is a more informative error that will only be logged once per run
     if (!global.telegramWarningLogged) {
       console.error('TELEGRAM NOTIFICATION ERROR: Bot not initialized or configured properly. Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in your .env file.');
@@ -244,6 +250,10 @@ function stop() {
   if (bot) {
     bot.stop('Bot stopping due to application shutdown');
     console.log('Telegram bot stopped');
+    // Reset initialization state so we don't reinitialize during shutdown
+    isInitialized = false;
+    isConfigured = false;
+    bot = null;
   }
 }
 

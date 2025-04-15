@@ -203,9 +203,11 @@ async function importHistoricalTrades(force = false) {
     
     console.log(`Historical trades import complete. Imported ${importStats.totalImported} trades across ${importStats.symbolsProcessed} symbols.`);
     
-    // After import, update account balances
+    // After import, update account balances with isFirstRun=true to maintain requirement 1.2
+    // This ensures reference prices remain at 0 even after importing trades
     try {
-      await updateAccountBalances();
+      await updateAccountBalances(true);
+      console.log('Account balances updated after historical import while maintaining zero reference prices');
     } catch (error) {
       console.error('Error updating account balances after historical import:', error);
     }
@@ -930,6 +932,40 @@ async function placeMarketOrder(orderData) {
     const thresholdVerification = await db.getReferencePrice(baseCurrency);
     console.log(`[VERIFICATION] After trade for ${baseCurrency}: firstTransactionPrice=${thresholdVerification.firstTransactionPrice}, lastTransactionPrice=${thresholdVerification.lastTransactionPrice}, nextBuyPrice=${thresholdVerification.nextBuyPrice}, nextSellPrice=${thresholdVerification.nextSellPrice}`);
     
+    // EXTRA VERIFICATION: For sell operations, ensure first_transaction_price and next_sell_price are set to 0
+    if (side.toLowerCase() === 'sell') {
+      // If verification shows non-zero values after a sell, fix them directly
+      if (thresholdVerification.firstTransactionPrice !== 0 || thresholdVerification.nextSellPrice !== 0) {
+        console.warn(`[CRITICAL FIX] Sell operation didn't reset values for ${baseCurrency}. Fixing directly.`);
+        
+        // Direct database connection for maximum reliability
+        const conn = await db.getConnection();
+        try {
+          await conn.beginTransaction();
+          
+          // Calculate next_buy_price based on the current price (same formula as in auto-trading)
+          const nextBuyPrice = price * (1 - BUY_THRESHOLD_PERCENT);
+          
+          // Force update to ensure values are set correctly
+          await conn.query(`
+            UPDATE reference_prices 
+            SET next_buy_price = ?,
+                next_sell_price = 0,
+                first_transaction_price = 0
+            WHERE symbol = ?
+          `, [nextBuyPrice, baseCurrency]);
+          
+          await conn.commit();
+          console.log(`[DIRECT FIX] Successfully reset first_transaction_price and next_sell_price to 0 for ${baseCurrency}`);
+        } catch (error) {
+          await conn.rollback();
+          console.error(`Error in direct reference price fix for ${baseCurrency}:`, error);
+        } finally {
+          conn.release();
+        }
+      }
+    }
+    
     // Step 6: Update account balances in database after trade
     try {
       await updateAccountBalances();
@@ -1204,32 +1240,53 @@ async function checkAutoTrading(symbol, currentPrice) {
           // After successful trade, update lastAutoTradingCheck to enforce a cooldown period
           lastAutoTradingCheck.set(symbol, Date.now());
           
+          // FIXED: Use actual executed price from the result instead of the trigger price
+          // This ensures consistent price recording between trade execution and threshold calculation
+          const executedPrice = parseFloat(result.fills[0].price);
+          console.log(`Using actual execution price for ${symbol}USDT: $${executedPrice.toFixed(4)} (from trade execution)`);
+          
           // Per requirement 3.2: After buy order is confirmed, update last_transaction_price
           // and calculate new next_buy_price using threshold percentage and last_transaction_price
-          const newBuyThreshold = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
+          const newBuyThreshold = executedPrice * (1 - BUY_THRESHOLD_PERCENT);
           
-          // Calculate next sell price based on the first_transaction_price (which is the same as current price for a first buy)
-          // Per requirement 2.1: We need to calculate next_sell_price using first_transaction_price
-          const newSellThreshold = currentPrice * (1 + SELL_THRESHOLD_PERCENT);
+          // Get current reference prices to check if this is the first transaction
+          const currentRefPrices = await db.getReferencePrice(symbol);
           
-          console.log(`[UPDATED PRICES] For ${symbol}: nextBuyPrice=${newBuyThreshold.toFixed(4)}, nextSellPrice=${newSellThreshold.toFixed(4)}`);
-          
-          // Ensure database values are consistent
-          // Per requirement 2.1: We need to set first_transaction_price as well
-          await db.updateReferencePrice(symbol, {
+          // Prepare update data - ONLY update next_buy_price and last_transaction_price
+          // Per requirement: The next_sell_price can not be modified during buy operations
+          const updateData = {
             nextBuyPrice: newBuyThreshold,
-            nextSellPrice: newSellThreshold,
-            lastTransactionPrice: currentPrice,
-            firstTransactionPrice: currentPrice, // Always set first_transaction_price to current price for buys
+            lastTransactionPrice: executedPrice,
             forceUpdate: true
-          });
+          };
+          
+          // IMPORTANT: A buy is treated as a "first buy" in two cases:
+          // 1. It's the very first buy for this symbol (first_transaction_price is 0)
+          // 2. It's the first buy after a "sell all" operation (as sell sets first_transaction_price to 0)
+          if (currentRefPrices.firstTransactionPrice === 0) {
+            updateData.firstTransactionPrice = executedPrice;
+            
+            // Only calculate next_sell_price on first transaction or first buy after sell
+            // Based on requirement 2.1, next_sell_price uses first_transaction_price as reference
+            const newSellThreshold = executedPrice * (1 + SELL_THRESHOLD_PERCENT);
+            updateData.nextSellPrice = newSellThreshold;
+            
+            console.log(`[FIRST BUY] Setting first_transaction_price=${executedPrice} and next_sell_price=${newSellThreshold}`);
+          } else {
+            console.log(`[SUBSEQUENT BUY] Not modifying next_sell_price=${currentRefPrices.nextSellPrice} (preserving profit target)`);
+          }
+          
+          console.log(`[UPDATED PRICES] For ${symbol}: nextBuyPrice=${newBuyThreshold.toFixed(4)}, lastTransactionPrice=${executedPrice}`);
+          
+          // Update only the specified fields in the database
+          await db.updateReferencePrice(symbol, updateData);
           
           // Verify updates
           const finalVerification = await db.getReferencePrice(symbol);
           console.log(`[FINAL VERIFICATION] ${symbol} reference prices after update: Buy=${finalVerification.nextBuyPrice}, Sell=${finalVerification.nextSellPrice}`);
           
           // Standard logging
-          console.log(`Auto-trading buy executed: ${symbol} at $${currentPrice.toFixed(4)}, order ID: ${result.orderId}`);
+          console.log(`Auto-trading buy executed: ${symbol} at $${executedPrice.toFixed(4)}, order ID: ${result.orderId}`);
           
           // Mark this symbol as recently traded to prevent duplicate trades
           recentlyTraded.set(symbol, Date.now());
@@ -1237,26 +1294,29 @@ async function checkAutoTrading(symbol, currentPrice) {
           // Log that we've marked this symbol as recently traded
           console.log(`[COOLDOWN ACTIVATED] ${symbol} marked as recently traded. No trades for ${TRADE_COOLDOWN/1000} seconds`);
           
+          // Get the updated reference prices for accurate event emission
+          const updatedRefPrices = await db.getReferencePrice(symbol);
+          
           // Emit auto-trading event with threshold info
           binanceEvents.emit('auto_trading_executed', { 
             symbol, 
             action: 'buy', 
-            price: currentPrice,
+            price: executedPrice,
             amount: AUTO_TRADE_INVESTMENT_AMOUNT,
             orderId: result.orderId,
             newThresholds: {
               nextBuyPrice: newBuyThreshold,
-              nextSellPrice: newSellThreshold
+              nextSellPrice: updatedRefPrices.nextSellPrice // Use the actual value from DB
             }
           });
           
           // Notify UI of the updated thresholds
           binanceEvents.emit('reference_price_updated', {
             symbol: symbol,
-            firstTransactionPrice: currentPrice, // Include first_transaction_price
-            lastTransactionPrice: currentPrice,
+            firstTransactionPrice: updatedRefPrices.firstTransactionPrice, // Use actual value from DB
+            lastTransactionPrice: executedPrice,
             nextBuyPrice: newBuyThreshold,
-            nextSellPrice: newSellThreshold
+            nextSellPrice: updatedRefPrices.nextSellPrice // Use the actual value from DB
           });
         } catch (buyError) {
           console.error(`Auto-trading buy execution failed for ${symbol}:`, buyError);
@@ -1284,18 +1344,47 @@ async function checkAutoTrading(symbol, currentPrice) {
         lastAutoTradingCheck.set(symbol, Date.now());
         
         // Per requirement 3.3: After sell is confirmed, update last_transaction_price,
-        // calculate new next_buy_price, and set next_sell_price to 0
+        // calculate new next_buy_price, and set next_sell_price and first_transaction_price to 0
         const newBuyThreshold = currentPrice * (1 - BUY_THRESHOLD_PERCENT);
         const newSellThreshold = 0; // Per requirement 3.3 - set next_sell_price to 0 after sell
         
-        // Ensure database values are consistent
-        await db.updateReferencePrice(symbol, {
-          nextBuyPrice: newBuyThreshold,
-          nextSellPrice: newSellThreshold,
-          lastTransactionPrice: currentPrice,
-          // Note: we don't update firstTransactionPrice here as it should only be updated on buys
-          forceUpdate: true
-        });
+        // IMPORTANT: Setting first_transaction_price to 0 after a sell operation
+        // ensures that the next buy will be treated as a "first buy",
+        // which will properly set next_sell_price based on that transaction price
+        
+        // Ensure database values are consistent - use direct query for maximum reliability
+        // This approach ensures that the update is atomic and isn't affected by race conditions
+        const conn = await db.getConnection();
+        try {
+          await conn.beginTransaction();
+          
+          // Update with direct SQL for maximum reliability
+          await conn.query(`
+            UPDATE reference_prices 
+            SET next_buy_price = ?,
+                next_sell_price = 0,
+                last_transaction_price = ?,
+                first_transaction_price = 0
+            WHERE symbol = ?
+          `, [newBuyThreshold, currentPrice, symbol]);
+          
+          await conn.commit();
+          console.log(`[DIRECT UPDATE] Successfully reset first_transaction_price and next_sell_price to 0 for ${symbol}`);
+        } catch (error) {
+          await conn.rollback();
+          console.error(`Error in direct reference price update for ${symbol}:`, error);
+          
+          // Fallback to normal update if direct update fails
+          await db.updateReferencePrice(symbol, {
+            nextBuyPrice: newBuyThreshold,
+            nextSellPrice: newSellThreshold,
+            lastTransactionPrice: currentPrice,
+            firstTransactionPrice: 0,
+            forceUpdate: true
+          });
+        } finally {
+          conn.release();
+        }
         
         // Verify updates
         const finalVerification = await db.getReferencePrice(symbol);
@@ -1326,6 +1415,7 @@ async function checkAutoTrading(symbol, currentPrice) {
         // Notify UI of the updated thresholds
         binanceEvents.emit('reference_price_updated', {
           symbol: symbol,
+          firstTransactionPrice: 0, // UPDATED: Reset first_transaction_price to 0 after sell
           lastTransactionPrice: currentPrice,
           nextBuyPrice: newBuyThreshold,
           nextSellPrice: newSellThreshold
