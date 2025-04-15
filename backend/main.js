@@ -151,6 +151,28 @@ async function startServer() {
         try {
           console.log('Performing initial account balance update and reference price initialization...');
           console.log('NOTE: On first app run, all reference_prices values will be set to 0 for all symbols per requirement 1.2');
+          
+          // First check if we need to create the reference_prices table or ensure it exists
+          try {
+            console.log('Ensuring reference_prices table is ready...');
+            // Use a basic query to check if table exists, will create it if needed
+            await db.query(`
+              CREATE TABLE IF NOT EXISTS reference_prices (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                symbol VARCHAR(20) NOT NULL UNIQUE,
+                first_transaction_price DECIMAL(20, 8) NOT NULL DEFAULT 0,
+                last_transaction_price DECIMAL(20, 8) NOT NULL DEFAULT 0,
+                next_buy_price DECIMAL(20, 8) NOT NULL DEFAULT 0,
+                next_sell_price DECIMAL(20, 8) NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_symbol (symbol)
+              )
+            `);
+            console.log('Reference_prices table is ready');
+          } catch (tableError) {
+            console.error('Error ensuring reference_prices table exists:', tableError);
+          }
+          
           // Call updateAccountBalances with isFirstRun=true flag to trigger reference price setup
           // This implements requirements 1.1 and 1.2 - read balances from Binance and initialize reference_prices to 0
           await binance.updateAccountBalances(true);
@@ -163,6 +185,14 @@ async function startServer() {
           
           for (const symbol of supportedSymbols) {
             try {
+              // Make sure each symbol exists in the reference_prices table with zero values
+              await db.query(`
+                INSERT IGNORE INTO reference_prices 
+                (symbol, first_transaction_price, last_transaction_price, next_buy_price, next_sell_price)
+                VALUES (?, 0, 0, 0, 0)
+              `, [symbol]);
+              
+              // Now get reference prices to verify
               const refPrices = await db.getReferencePrice(symbol);
               const balance = accountBalances[symbol] || 0;
               
@@ -186,12 +216,16 @@ async function startServer() {
                 
                 // Force reset to zero on verification failure to ensure compliance with requirements
                 try {
-                  await db.updateReferencePrice(symbol, {
-                    firstTransactionPrice: 0,
-                    lastTransactionPrice: 0,
-                    nextBuyPrice: 0,
-                    nextSellPrice: 0
-                  });
+                  // Force update with direct SQL to ensure it works
+                  await db.query(`
+                    UPDATE reference_prices 
+                    SET first_transaction_price = 0,
+                        last_transaction_price = 0,
+                        next_buy_price = 0,
+                        next_sell_price = 0
+                    WHERE symbol = ?
+                  `, [symbol]);
+                  
                   console.log(`Reset all reference prices to 0 for ${symbol} as required by 1.2`);
                 } catch (resetError) {
                   console.error(`Failed to reset reference prices for ${symbol}:`, resetError);
@@ -241,6 +275,31 @@ async function startServer() {
           if (importStats.totalImported > 0) {
             console.log(`Successfully imported ${importStats.totalImported} historical trades for ${importStats.symbolsProcessed} symbols`);
             telegram.sendMessage(`Imported ${importStats.totalImported} historical trades for ${importStats.symbolsProcessed} symbols`);
+            
+            // Verify again that reference prices are set to 0 for all symbols as per requirement 1.2
+            // This ensures that even after importing historical trades, reference prices remain at 0
+            console.log('Re-verifying reference prices are at 0 for all symbols after trade import...');
+            const supportedSymbols = binance.getSupportedSymbols();
+            
+            for (const symbol of supportedSymbols) {
+              const refPrices = await db.getReferencePrice(symbol);
+              // Force reset to zero after import to ensure compliance with requirements
+              if (refPrices.firstTransactionPrice !== 0 || 
+                  refPrices.lastTransactionPrice !== 0 || 
+                  refPrices.nextBuyPrice !== 0 || 
+                  refPrices.nextSellPrice !== 0) {
+                
+                console.log(`Resetting reference prices to 0 for ${symbol} after historical import`);
+                await db.query(`
+                  UPDATE reference_prices 
+                  SET first_transaction_price = 0,
+                      last_transaction_price = 0,
+                      next_buy_price = 0,
+                      next_sell_price = 0
+                  WHERE symbol = ?
+                `, [symbol]);
+              }
+            }
           } else {
             console.log('No new historical trades to import');
           }
@@ -328,15 +387,47 @@ function setupBinanceHandlers() {
     // Force update account balances and send complete fresh data after auto-trade
     setTimeout(async () => {
       try {
-        // Update account balances
-        await binance.updateAccountBalances();
-        console.log('Account balances updated after auto-trading execution');
+        // Update account balances without resetting reference prices
+        await db.getAccountBalances(); // Use existing balances, don't call binance.updateAccountBalances()
+        console.log('Getting account balances after auto-trading execution');
         
         // HIGH PRIORITY: Update data for the traded symbol first with highest urgency
         const tradedSymbol = tradeData.symbol;
         try {
           console.log(`[PRIORITY UPDATE] Getting fresh data for ${tradedSymbol} after trade`);
-          const tradedSymbolData = await getUpdateDataForSymbol(tradedSymbol);
+          
+          // Get data for the traded symbol WITHOUT using getUpdateDataForSymbol
+          // to avoid calling updateAccountBalances again
+          const priceData = await binance.getSymbolPrice(`${tradedSymbol}USDT`);
+          const tradingHistory = await db.getTradingHistory(tradedSymbol);
+          const refPrices = await db.getReferencePrice(tradedSymbol);
+          const balances = await db.getAccountBalances();
+          const holdings = await db.getCurrentHoldings(tradedSymbol);
+          
+          // Calculate profit/loss percentage
+          const currentPrice = parseFloat(priceData.price);
+          const profitLossPercentage = holdings.averageBuyPrice > 0 
+            ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100
+            : 0;
+          
+          // Get the balance from the database
+          const databaseBalance = (balances && balances[tradedSymbol]) || 0;
+          
+          // Create update data manually without triggering account balance updates
+          const tradedSymbolData = {
+            symbol: tradedSymbol,
+            price: parseFloat(priceData.price),
+            history: tradingHistory.map(item => ({
+              ...item,
+              binance_trade_id: item.binance_trade_id ? Number(item.binance_trade_id) : null
+            })),
+            holdings: parseFloat(databaseBalance).toFixed(8),
+            nextBuyPrice: parseFloat(refPrices.nextBuyPrice),
+            nextSellPrice: parseFloat(refPrices.nextSellPrice),
+            profitLossPercentage: parseFloat(profitLossPercentage),
+            lastTransactionPrice: parseFloat(refPrices.lastTransactionPrice)
+          };
+          
           io.emit('crypto-data-update', tradedSymbolData);
           
           // Log what was sent to the frontend
@@ -345,7 +436,10 @@ function setupBinanceHandlers() {
           console.error(`Error getting priority update for ${tradedSymbol}:`, error);
         }
         
-        // Then update the rest of the symbols
+        // Update the balances for display only, without affecting reference prices for other symbols
+        const accountBalances = await db.getAccountBalances();
+        
+        // Then update the rest of the symbols (without triggering updateAccountBalances)
         const symbols = binance.getSupportedSymbols()
           .filter(s => s !== tradedSymbol) // Skip the symbol we just updated
           .map(symbol => `${symbol}USDT`);
@@ -354,8 +448,35 @@ function setupBinanceHandlers() {
           const symbol = fullSymbol.replace('USDT', '');
           
           try {
-            // Get updated data specifically for this symbol
-            const updatedData = await getUpdateDataForSymbol(symbol);
+            // Get updated data WITHOUT triggering updateAccountBalances
+            const priceData = await binance.getSymbolPrice(`${symbol}USDT`);
+            const tradingHistory = await db.getTradingHistory(symbol);
+            const refPrices = await db.getReferencePrice(symbol);
+            const holdings = await db.getCurrentHoldings(symbol);
+            
+            // Calculate profit/loss percentage
+            const currentPrice = parseFloat(priceData.price);
+            const profitLossPercentage = holdings.averageBuyPrice > 0 
+              ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100
+              : 0;
+            
+            // Get the balance from the database
+            const databaseBalance = (accountBalances && accountBalances[symbol]) || 0;
+            
+            // Create update data manually without triggering account balance updates
+            const updatedData = {
+              symbol,
+              price: parseFloat(priceData.price),
+              history: tradingHistory.map(item => ({
+                ...item,
+                binance_trade_id: item.binance_trade_id ? Number(item.binance_trade_id) : null
+              })),
+              holdings: parseFloat(databaseBalance).toFixed(8),
+              nextBuyPrice: parseFloat(refPrices.nextBuyPrice),
+              nextSellPrice: parseFloat(refPrices.nextSellPrice),
+              profitLossPercentage: parseFloat(profitLossPercentage),
+              lastTransactionPrice: parseFloat(refPrices.lastTransactionPrice)
+            };
             
             // Broadcast the fresh data to all clients
             io.emit('crypto-data-update', updatedData);
@@ -594,10 +715,37 @@ function setupSocketIO() {
           try {
             // Ensure we have the most up-to-date reference prices by explicitly checking them
             const refPrices = await db.getReferencePrice(data.symbol);
-            // Removed data refresh log
             
-            // Get updated data with our consistent thresholds
-            const updatedData = await getUpdateDataForSymbol(data.symbol);
+            // Get updated data WITHOUT triggering updateAccountBalances which would reset other symbols
+            // We need to manually build the updatedData object similar to getUpdateDataForSymbol but without calling updateAccountBalances
+            const accountBalances = await db.getAccountBalances();
+            const priceData = await binance.getSymbolPrice(`${data.symbol}USDT`);
+            const tradingHistory = await db.getTradingHistory(data.symbol);
+            const holdings = await db.getCurrentHoldings(data.symbol);
+            
+            // Calculate profit/loss percentage
+            const currentPrice = parseFloat(priceData.price);
+            const profitLossPercentage = holdings.averageBuyPrice > 0 
+              ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100
+              : 0;
+            
+            // Use the database values for balance
+            const databaseBalance = (accountBalances && accountBalances[data.symbol]) || 0;
+            
+            // Create update data manually
+            const updatedData = {
+              symbol: data.symbol,
+              price: parseFloat(priceData.price),
+              history: tradingHistory.map(item => ({
+                ...item,
+                binance_trade_id: item.binance_trade_id ? Number(item.binance_trade_id) : null
+              })),
+              holdings: parseFloat(databaseBalance).toFixed(8),
+              nextBuyPrice: parseFloat(refPrices.nextBuyPrice),
+              nextSellPrice: parseFloat(refPrices.nextSellPrice),
+              profitLossPercentage: parseFloat(profitLossPercentage),
+              lastTransactionPrice: parseFloat(refPrices.lastTransactionPrice)
+            };
             
             // Double-check the data before sending to client
             if (updatedData.nextBuyPrice !== refPrices.nextBuyPrice || 
@@ -654,10 +802,37 @@ function setupSocketIO() {
           try {
             // Ensure we have the most up-to-date reference prices by explicitly checking them
             const refPrices = await db.getReferencePrice(data.symbol);
-            // Removed data refresh log
             
-            // Get updated data with our consistent thresholds
-            const updatedData = await getUpdateDataForSymbol(data.symbol);
+            // Get updated data WITHOUT triggering updateAccountBalances which would reset other symbols
+            // We need to manually build the updatedData object similar to getUpdateDataForSymbol but without calling updateAccountBalances
+            const accountBalances = await db.getAccountBalances();
+            const priceData = await binance.getSymbolPrice(`${data.symbol}USDT`);
+            const tradingHistory = await db.getTradingHistory(data.symbol);
+            const holdings = await db.getCurrentHoldings(data.symbol);
+            
+            // Calculate profit/loss percentage
+            const currentPrice = parseFloat(priceData.price);
+            const profitLossPercentage = holdings.averageBuyPrice > 0 
+              ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100
+              : 0;
+            
+            // Use the database values for balance
+            const databaseBalance = (accountBalances && accountBalances[data.symbol]) || 0;
+            
+            // Create update data manually
+            const updatedData = {
+              symbol: data.symbol,
+              price: parseFloat(priceData.price),
+              history: tradingHistory.map(item => ({
+                ...item,
+                binance_trade_id: item.binance_trade_id ? Number(item.binance_trade_id) : null
+              })),
+              holdings: parseFloat(databaseBalance).toFixed(8),
+              nextBuyPrice: parseFloat(refPrices.nextBuyPrice),
+              nextSellPrice: parseFloat(refPrices.nextSellPrice),
+              profitLossPercentage: parseFloat(profitLossPercentage),
+              lastTransactionPrice: parseFloat(refPrices.lastTransactionPrice)
+            };
             
             // Double-check the data before sending to client
             if (updatedData.nextBuyPrice !== refPrices.nextBuyPrice || 
@@ -790,8 +965,8 @@ async function getUpdateDataForSymbol(symbol) {
       throw new Error('WebSocket connection is down. Trading is halted until reconnection.');
     }
     
-    // Force an update of account balances from Binance to ensure fresh data
-    await binance.updateAccountBalances();
+    // Get account balances without calling updateAccountBalances() to avoid resetting reference prices
+    // We'll rely on the account balances that were already updated after the trade
     
     // Get current price from WebSocket (not API)
     const priceData = await binance.getSymbolPrice(`${symbol}USDT`);
@@ -897,6 +1072,9 @@ function setupApiRoutes() {
 async function shutdown() {
   console.log('Server shutting down...');
   
+  // Set environment flag to indicate we're shutting down
+  process.env.NODE_APP_INSTANCE = 'shutting_down';
+  
   // Save state before shutdown
   try {
     // Persist auto-trading state before disabling
@@ -929,14 +1107,17 @@ async function shutdown() {
   // Close database connections
   db.close();
   
-  // Stop Telegram bot
-  telegram.stop();
-  
-  // Send shutdown notification
-  telegram.sendMessage('Server shutting down cleanly. Auto-trading state has been persisted and will be restored on next startup.').finally(() => {
+  try {
+    // Send shutdown notification before stopping the bot
+    await telegram.sendMessage('Server shutting down cleanly. Auto-trading state has been persisted and will be restored on next startup.');
+  } catch (error) {
+    console.error('Error sending shutdown notification:', error);
+  } finally {
+    // Stop Telegram bot after sending the message
+    telegram.stop();
     console.log('Shutdown complete');
     process.exit(0);
-  });
+  }
 }
 
 // Handle process signals for graceful shutdown

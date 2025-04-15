@@ -285,27 +285,46 @@ async function recordTrade(tradeData) {
       
       // Handle different scenarios based on action type
       if (action === 'buy') {
-        // If this is a buy operation (For requirement 2.1)
+        // Check if this is the first buy operation by looking at the existing data
+        // IMPORTANT: A buy is treated as a "first buy" in these cases:
+        // 1. It's the very first buy for this symbol, or
+        // 2. It's the first buy after a "sell all" operation (first_transaction_price is reset to 0 on sell)
+        // 3. It's the first manually initiated buy (historical trades should not update reference prices at first run)
+        let isFirstBuy = false;
         
-        // Set first_transaction_price to the current transaction price
-        // Per requirement 2.1: When Buy button is clicked, its price is added to DB as first_transaction_price
-        updateFields.push('first_transaction_price = ?');
-        updateValues.push(price);
-        console.log(`BUY: Setting first transaction price for ${symbol} to ${price}`);
+        if (refResult.length === 0) {
+          // No existing record, this is definitely the first buy
+          isFirstBuy = true;
+        } else {
+          // Check if first_transaction_price is 0, indicating first buy or buy after sell all
+          const firstTransactionPrice = parseFloat(refResult[0].first_transaction_price || '0');
+          isFirstBuy = (firstTransactionPrice === 0);
+        }
         
         // Calculate next buy price based on last_transaction_price (current price)
-        // Per requirement 2.1: next_buy_price must use last_transaction_price as reference
+        // Per requirement 3.2: next_buy_price must use last_transaction_price as reference
         nextBuyPrice = price * (1 - BUY_THRESHOLD_PERCENT);
         updateFields.push('next_buy_price = ?');
         updateValues.push(nextBuyPrice);
         console.log(`BUY: Setting next buy price for ${symbol} to ${nextBuyPrice} (${BUY_THRESHOLD_PERCENT * 100}% below last transaction price: ${price})`);
         
-        // Calculate next sell price based on first_transaction_price
-        // Per requirement 2.1: next_sell_price must use first_transaction_price as reference
-        nextSellPrice = price * (1 + SELL_THRESHOLD_PERCENT);
-        updateFields.push('next_sell_price = ?');
-        updateValues.push(nextSellPrice);
-        console.log(`BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above first transaction price: ${price})`);
+        // Only update first_transaction_price and next_sell_price if this is the first buy
+        if (isFirstBuy) {
+          // Set first_transaction_price to the current transaction price
+          // Per requirement 2.1: When Buy button is clicked, its price is added to DB as first_transaction_price
+          updateFields.push('first_transaction_price = ?');
+          updateValues.push(price);
+          console.log(`FIRST BUY: Setting first transaction price for ${symbol} to ${price}`);
+          
+          // Calculate next sell price based on first_transaction_price
+          // Per requirement 2.1: next_sell_price must use first_transaction_price as reference
+          nextSellPrice = price * (1 + SELL_THRESHOLD_PERCENT);
+          updateFields.push('next_sell_price = ?');
+          updateValues.push(nextSellPrice);
+          console.log(`FIRST BUY: Setting next sell price for ${symbol} to ${nextSellPrice} (${SELL_THRESHOLD_PERCENT * 100}% above first transaction price: ${price})`);
+        } else {
+          console.log(`SUBSEQUENT BUY: Not changing first_transaction_price or next_sell_price for ${symbol} to preserve profit targets`);
+        }
       } 
       else if (action === 'sell') {
         // If this is a sell operation (For requirement 2.2)
@@ -321,6 +340,14 @@ async function recordTrade(tradeData) {
         updateFields.push('next_sell_price = ?');
         updateValues.push(nextSellPrice);
         console.log(`SELL OPERATION: Setting next sell price for ${symbol} to 0`);
+        
+        // IMPORTANT: Reset first_transaction_price to 0 for ALL sell operations
+        // This ensures the next buy after a sell will be treated as a "first buy"
+        // allowing it to set new next_sell_price and first_transaction_price values
+        // Per updated requirements 2.2 and 3.3
+        updateFields.push('first_transaction_price = ?');
+        updateValues.push(0);
+        console.log(`SELL OPERATION: Setting first transaction price for ${symbol} to 0 (next buy will be treated as first buy)`);
       }
       
       // Check if the record exists first
@@ -403,10 +430,21 @@ async function recordTrade(tradeData) {
         
         // Attempt to fix the values with a direct update - include first_transaction_price for buy operations
         if (action === 'buy') {
-          await conn.query({
-            sql: `UPDATE reference_prices SET first_transaction_price = ?, next_buy_price = ?, next_sell_price = ? WHERE symbol = ?`,
-            values: [price, nextBuyPrice, nextSellPrice, symbol]
-          });
+          // For buy operations, ONLY update the next_sell_price if this is the first buy
+          // (first_transaction_price is 0 or this is a new entry)
+          if (savedFirstPrice === 0) {
+            // First buy - update all values including next_sell_price
+            await conn.query({
+              sql: `UPDATE reference_prices SET first_transaction_price = ?, next_buy_price = ?, next_sell_price = ? WHERE symbol = ?`,
+              values: [price, nextBuyPrice, nextSellPrice, symbol]
+            });
+          } else {
+            // Subsequent buy - preserve existing next_sell_price
+            await conn.query({
+              sql: `UPDATE reference_prices SET first_transaction_price = ?, next_buy_price = ? WHERE symbol = ?`,
+              values: [savedFirstPrice, nextBuyPrice, symbol]
+            });
+          }
         } else {
           await conn.query({
             sql: `UPDATE reference_prices SET next_buy_price = ?, next_sell_price = ? WHERE symbol = ?`,
@@ -787,7 +825,7 @@ async function calculateTradingThresholds(symbol, currentPrice) {
     
     // Default values for nextBuyPrice and nextSellPrice
     let nextBuyPrice = 0;
-    let nextSellPrice = refPrices.nextSellPrice; // Preserve existing sell price if it exists
+    let nextSellPrice = refPrices.nextSellPrice; // Always preserve existing sell price
     
     // If we have a last transaction price, use it to calculate next buy price
     // This implements requirement 3.2 - buy order based on next_buy_price
@@ -799,37 +837,46 @@ async function calculateTradingThresholds(symbol, currentPrice) {
     }
     
     // Handle next sell price calculation according to requirements
-    if (currentBalance > 0) {
-      // Per requirement 2.1: Always calculate nextSellPrice using first_transaction_price
-      if (refPrices.firstTransactionPrice > 0) {
-        // ALWAYS use first_transaction_price as the base for nextSellPrice calculation
-        nextSellPrice = refPrices.firstTransactionPrice * (1 + SELL_THRESHOLD_PERCENT);
-        console.log(`[THRESHOLD] Setting sell price for ${symbol} based on first_transaction_price: ${refPrices.firstTransactionPrice} -> ${nextSellPrice}`);
-      } else {
-        // If first_transaction_price is not set (which shouldn't happen with our fix), log an error
-        console.error(`[ERROR] Missing first_transaction_price for ${symbol} with holdings ${currentBalance}. Cannot calculate proper sell price.`);
-        // Set next_sell_price to 0 to prevent incorrect selling
-        nextSellPrice = 0;
-      }
-    } else {
+    // Per requirement 3.2: The next_sell_price can not be modified after first buy
+    // Only update sell price if:
+    // 1. We have holdings AND
+    // 2. first_transaction_price is 0 (no first transaction recorded yet) AND
+    // 3. Current price is valid
+    if (currentBalance > 0 && refPrices.firstTransactionPrice === 0 && currentPrice > 0) {
+      // Only for first buy - calculate sell price based on current price
+      nextSellPrice = currentPrice * (1 + SELL_THRESHOLD_PERCENT);
+      console.log(`[THRESHOLD] Setting initial sell price for ${symbol} based on current price: ${currentPrice} -> ${nextSellPrice}`);
+    } else if (currentBalance <= 0) {
       // If balance is 0 or negative, set nextSellPrice to 0 as per requirements
       // This implements the behavior after a sell operation
       nextSellPrice = 0;
       console.log(`[THRESHOLD] Setting sell price to 0 for ${symbol} (no holdings)`);
+    } else {
+      // If we already have holdings and first_transaction_price is set,
+      // don't modify the next_sell_price - keep existing value
+      console.log(`[THRESHOLD] Preserving existing sell price for ${symbol}: ${nextSellPrice}`);
     }
     
     // Log values for debugging
     console.log(`[calculateTradingThresholds] For ${symbol}: Current nextSellPrice=${refPrices.nextSellPrice}, balance=${currentBalance}, calculated nextSellPrice=${nextSellPrice}`);
     
-    // Update reference price values in the database, but only update nextSellPrice
-    // if it's different from what's already in the database to avoid unnecessary overwrites
+    // Update reference price values in the database
     const updateData = {
       nextBuyPrice: nextBuyPrice
     };
     
-    // Only include nextSellPrice in update if it changed
-    if (nextSellPrice !== refPrices.nextSellPrice) {
+    // Only include nextSellPrice in the update if:
+    // 1. We're setting it to 0 (after a sell), OR
+    // 2. We're setting the initial value (first_transaction_price is 0)
+    if (nextSellPrice === 0 || refPrices.firstTransactionPrice === 0) {
       updateData.nextSellPrice = nextSellPrice;
+      
+      // CRITICAL FIX: If we're setting nextSellPrice to 0 (which happens after a sell),
+      // we MUST also reset firstTransactionPrice to 0 to maintain consistency
+      if (nextSellPrice === 0 && currentBalance <= 0) {
+        console.log(`[CONSISTENCY FIX] Also resetting firstTransactionPrice to 0 for ${symbol} after a sell operation`);
+        updateData.firstTransactionPrice = 0;
+      }
     }
     
     await updateReferencePrice(symbol, updateData);
@@ -1112,6 +1159,7 @@ module.exports = {
   saveAppSettings,
   getAppSettings,
   query,  // Export the query function for direct database access when needed
+  getConnection, // Export the getConnection function needed for direct DB operations
   convertBigIntToNumber, // Export the BigInt converter
   close
 };
