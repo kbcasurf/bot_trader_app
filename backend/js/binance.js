@@ -1151,8 +1151,10 @@ const TRADE_COOLDOWN = 180000; // 180 seconds (3 minutes) to ensure thresholds a
  * This is called when price updates are received
  * @param {string} symbol - The cryptocurrency symbol
  * @param {number} currentPrice - The current price
+ * @param {Object} cachedRefPrices - Optional pre-fetched reference prices to avoid DB query
+ * @param {number} cachedBalance - Optional pre-fetched balance to avoid DB query
  */
-async function checkAutoTrading(symbol, currentPrice) {
+async function checkAutoTrading(symbol, currentPrice, cachedRefPrices = null, cachedBalance = null) {
   // Early return if auto-trading is not enabled or trading conditions aren't met
   if (!state.autoTradingEnabled) {
     return;
@@ -1204,19 +1206,30 @@ async function checkAutoTrading(symbol, currentPrice) {
     // Emit event for auto-trading check
     binanceEvents.emit('auto_trading_check', { symbol, price: currentPrice });
     
-    // Get FRESH reference prices and thresholds directly from database
-    // This is critical to avoid stale threshold values
-    // Removed log about getting thresholds
+    // Use cached reference prices if provided, otherwise get from database
+    // This reduces database queries when checking multiple symbols
+    let refPrices;
+    if (cachedRefPrices) {
+      refPrices = cachedRefPrices;
+    } else {
+      // Force database to provide the most up-to-date values by adding a small delay
+      // This helps ensure we don't read cached/stale values
+      await new Promise(resolve => setTimeout(resolve, 500));
+      refPrices = await db.getReferencePrice(symbol);
+    }
     
-    // Force database to provide the most up-to-date values by adding a small delay
-    // This helps ensure we don't read cached/stale values
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    const refPrices = await db.getReferencePrice(symbol);
-    // Removed DB reference log
-    
-    // Get current holdings
-    const holdings = await db.getCurrentHoldings(symbol);
+    // Get current holdings - use cached balance if provided
+    let holdings;
+    if (cachedBalance !== null) {
+      // Create holdings object from cached balance
+      holdings = {
+        symbol,
+        quantity: cachedBalance,
+        averageBuyPrice: 0  // Default value, will be calculated if needed
+      };
+    } else {
+      holdings = await db.getCurrentHoldings(symbol);
+    }
     
     // Removed price comparison log
     

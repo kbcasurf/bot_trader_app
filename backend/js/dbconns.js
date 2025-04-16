@@ -19,11 +19,11 @@ const dbConfig = {
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  connectionLimit: 10,
+  connectionLimit: 20,       // Increased from 10 to 20 to handle high concurrency
   acquireTimeout: 30000,     // Longer timeout for acquiring connections (30s)
   connectTimeout: 20000,     // Longer connection timeout (20s)
   idleTimeout: 60000,        // How long connections can remain idle (60s)
-  maxIdle: 5,                // Max idle connections to keep in pool
+  maxIdle: 10,               // Increased from 5 to 10 idle connections to keep in pool
   trace: process.env.NODE_ENV, // Stack trace for debugging in non-production
   multipleStatements: false, // Security: disable multiple statements
   dateStrings: true,         // Return dates as strings for consistency
@@ -236,9 +236,10 @@ async function recordTrade(tradeData) {
   
   try {
     // Start a transaction with a higher isolation level to prevent interference
-    const conn = await getConnection();
-    
+    let conn = null;
     try {
+      conn = await getConnection();
+      
       // Use SERIALIZABLE to ensure transaction isolation
       await conn.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
       await conn.beginTransaction();
@@ -492,12 +493,24 @@ async function recordTrade(tradeData) {
       };
     } catch (txError) {
       // Rollback on error
-      await conn.rollback();
+      if (conn) {
+        try {
+          await conn.rollback();
+        } catch (rollbackError) {
+          console.error('Error during rollback in recordTrade:', rollbackError);
+        }
+      }
       console.error('Transaction error in recordTrade:', txError);
       throw txError;
     } finally {
-      // Release the connection
-      conn.release();
+      // Release the connection if it exists
+      if (conn) {
+        try {
+          conn.release();
+        } catch (releaseError) {
+          console.error('Error releasing connection in recordTrade:', releaseError);
+        }
+      }
     }
   } catch (error) {
     console.error('Error recording trade:', error);
@@ -665,6 +678,40 @@ async function getReferencePrice(symbol) {
 }
 
 /**
+ * Get all reference prices in a single query
+ * @returns {Promise<Object>} Map of reference prices by symbol
+ */
+async function getAllReferencePrices() {
+  try {
+    const sql = `
+      SELECT symbol, first_transaction_price, last_transaction_price, 
+             next_buy_price, next_sell_price, updated_at
+      FROM reference_prices
+    `;
+    
+    const result = await query(sql);
+    
+    // Convert to a map of reference prices by symbol
+    const refPricesMap = {};
+    for (const row of result) {
+      refPricesMap[row.symbol] = {
+        symbol: row.symbol,
+        firstTransactionPrice: parseFloat(row.first_transaction_price),
+        lastTransactionPrice: parseFloat(row.last_transaction_price),
+        nextBuyPrice: parseFloat(row.next_buy_price),
+        nextSellPrice: parseFloat(row.next_sell_price),
+        updatedAt: row.updated_at
+      };
+    }
+    
+    return refPricesMap;
+  } catch (error) {
+    console.error('Error getting all reference prices:', error);
+    throw error;
+  }
+}
+
+/**
  * Update reference prices for a cryptocurrency
  * @param {string} symbol - The cryptocurrency symbol
  * @param {Object} priceData - The price data to update
@@ -724,9 +771,10 @@ async function updateReferencePrice(symbol, priceData) {
     values.push(symbol);
     
     // Get a dedicated connection for this critical operation
-    const conn = await getConnection();
-    
+    let conn = null;
     try {
+      conn = await getConnection();
+      
       // Begin transaction for consistency
       await conn.beginTransaction();
       
@@ -792,12 +840,24 @@ async function updateReferencePrice(symbol, priceData) {
       return true;
     } catch (error) {
       // Rollback transaction on error
-      await conn.rollback();
+      if (conn) {
+        try {
+          await conn.rollback();
+        } catch (rollbackError) {
+          console.error(`Rollback error for ${symbol}:`, rollbackError);
+        }
+      }
       console.error(`Database error updating reference prices for ${symbol}:`, error);
       throw error;
     } finally {
-      // Always release the connection
-      conn.release();
+      // Always release the connection if it exists
+      if (conn) {
+        try {
+          conn.release();
+        } catch (releaseError) {
+          console.error(`Error releasing connection for ${symbol}:`, releaseError);
+        }
+      }
     }
   } catch (error) {
     console.error(`Error updating reference price for ${symbol}:`, error);
@@ -1155,6 +1215,7 @@ module.exports = {
   updateAccountBalances,
   getAccountBalances,
   getReferencePrice,
+  getAllReferencePrices, // Added new function
   updateReferencePrice,
   saveAppSettings,
   getAppSettings,
