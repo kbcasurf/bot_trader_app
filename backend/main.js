@@ -509,8 +509,13 @@ async function performImmediateAutoTradingCheck() {
     // Get all supported symbols
     const supportedSymbols = binance.getSupportedSymbols();
     
-    // Process symbols with parallelization for faster checks
-    // Use Promise.all with a concurrency limit of 2 symbols at a time
+    // Get all reference prices and account balances in a single batch to reduce DB connections
+    const [allRefPrices, accountBalances] = await Promise.all([
+      db.getAllReferencePrices(),
+      db.getAccountBalances()
+    ]);
+    
+    // Process symbols in smaller batches to avoid overwhelming connections
     const batchSize = 2;
     for (let i = 0; i < supportedSymbols.length; i += batchSize) {
       const batch = supportedSymbols.slice(i, i + batchSize);
@@ -527,8 +532,17 @@ async function performImmediateAutoTradingCheck() {
           // Emit event to inform frontend that auto-trading check is happening
           io.emit('auto-trading-check', { symbol, price: currentPrice });
           
-          // Call checkAutoTrading directly to check if we should execute a trade
-          await binance.checkAutoTrading(symbol, currentPrice);
+          // Get reference price data for this symbol from our cached data
+          const refPrices = allRefPrices[symbol];
+          const balance = accountBalances[symbol] || 0;
+          
+          // Call checkAutoTrading with the cached data to avoid DB queries
+          if (refPrices) {
+            await binance.checkAutoTrading(symbol, currentPrice, refPrices, balance);
+          } else {
+            // Fallback to regular method if we don't have cached data
+            await binance.checkAutoTrading(symbol, currentPrice);
+          }
           
         } catch (symbolError) {
           console.error(`Error checking auto-trading for ${symbol}:`, symbolError);
@@ -536,8 +550,7 @@ async function performImmediateAutoTradingCheck() {
         }
       }));
       
-      // Add a shorter delay between batches instead of between individual symbols
-      // Reduced from 10 seconds to 3 seconds between batches
+      // Add a shorter delay between batches to allow connections to be released
       await new Promise(resolve => setTimeout(resolve, 3000));
     }
     
@@ -623,49 +636,84 @@ function setupSocketIO() {
         // Force an update of account balances from Binance to ensure fresh data
         await binance.updateAccountBalances();
         
-        // Get account balances from database (now guaranteed to be fresh from Binance)
-        const accountBalances = await db.getAccountBalances();
+        // Get all data needed for all symbols in a single batch to reduce connection usage
+        // This is more efficient than querying for each symbol individually
+        const [accountBalances, allReferencePrices] = await Promise.all([
+          db.getAccountBalances(),
+          db.getAllReferencePrices()
+        ]);
         
-        // Process each symbol with Promise.all for parallel processing
-        await Promise.all(data.symbols.map(async (fullSymbol) => {
+        // Collect all trading history in one batch
+        const tradingHistories = {};
+        const symbols = data.symbols.map(fullSymbol => fullSymbol.replace('USDT', ''));
+        
+        // Get trading history for all symbols in a single batch
+        const tradingHistoryPromises = symbols.map(symbol => 
+          db.getTradingHistory(symbol, historyLimit)
+            .then(history => { tradingHistories[symbol] = history; })
+            .catch(err => { 
+              console.error(`Error fetching trading history for ${symbol}:`, err);
+              tradingHistories[symbol] = [];
+            })
+        );
+        await Promise.all(tradingHistoryPromises);
+        
+        // Get current holdings for all symbols in a single batch
+        const holdings = {};
+        const holdingsPromises = symbols.map(symbol => 
+          db.getCurrentHoldings(symbol)
+            .then(holding => { holdings[symbol] = holding; })
+            .catch(err => {
+              console.error(`Error fetching holdings for ${symbol}:`, err);
+              holdings[symbol] = { averageBuyPrice: 0, quantity: 0 };
+            })
+        );
+        await Promise.all(holdingsPromises);
+        
+        // Get prices for all symbols
+        const pricePromises = data.symbols.map(fullSymbol => {
           const symbol = fullSymbol.replace('USDT', '');
-          
-          // Use Promise.all to parallelize the database and API calls for each symbol
-          const [priceData, tradingHistory, holdings, refPrices] = await Promise.all([
-            binance.getSymbolPrice(fullSymbol),
-            db.getTradingHistory(symbol, historyLimit), // Limit trading history to most recent entries
-            db.getCurrentHoldings(symbol),
-            db.getReferencePrice(symbol)
-          ]);
-          
-          // Calculate profit/loss percentage
-          const currentPrice = parseFloat(priceData.price);
-          const profitLossPercentage = holdings.averageBuyPrice > 0 
-            ? ((currentPrice - holdings.averageBuyPrice) / holdings.averageBuyPrice) * 100
-            : 0;
-          
-          // Get the balance from the database (prefer this over calculated holdings)
-          const databaseBalance = accountBalances[symbol] || 0;
-          
-          // Use the nextSellPrice value exactly as it is in the database
-          // We don't want to "fix" a zero value, as it's an intentional state after "sell all" operations
-          const nextSellPrice = refPrices.nextSellPrice;
-          
-          // Combine data - using the DIRECT reference prices from the database
-          // Convert any potential BigInt values to regular Numbers
-          results[symbol] = {
-            price: parseFloat(priceData.price),
-            history: tradingHistory.map(item => ({
-              ...item,
-              binance_trade_id: item.binance_trade_id ? Number(item.binance_trade_id) : null
-            })),
-            holdings: parseFloat(databaseBalance).toFixed(8), // Always use database balance which is now synced with Binance, but ensure we have decimal precision
-            nextBuyPrice: parseFloat(refPrices.nextBuyPrice), // Ensure it's a regular number
-            nextSellPrice: parseFloat(nextSellPrice), // Ensure it's a regular number
-            profitLossPercentage: parseFloat(profitLossPercentage),
-            lastTransactionPrice: parseFloat(refPrices.lastTransactionPrice) // Ensure it's a regular number
-          };
-        }));
+          return binance.getSymbolPrice(fullSymbol)
+            .then(priceData => {
+              // Calculate profit/loss percentage
+              const currentPrice = parseFloat(priceData.price);
+              const holding = holdings[symbol] || { averageBuyPrice: 0 };
+              const profitLossPercentage = holding.averageBuyPrice > 0 
+                ? ((currentPrice - holding.averageBuyPrice) / holding.averageBuyPrice) * 100
+                : 0;
+              
+              // Get the balance from the database
+              const databaseBalance = accountBalances[symbol] || 0;
+              
+              // Get reference prices
+              const refPrices = allReferencePrices[symbol] || { 
+                firstTransactionPrice: 0, 
+                lastTransactionPrice: 0, 
+                nextBuyPrice: 0, 
+                nextSellPrice: 0 
+              };
+              
+              // Combine data
+              results[symbol] = {
+                price: parseFloat(priceData.price),
+                history: tradingHistories[symbol] ? tradingHistories[symbol].map(item => ({
+                  ...item,
+                  binance_trade_id: item.binance_trade_id ? Number(item.binance_trade_id) : null
+                })) : [],
+                holdings: parseFloat(databaseBalance).toFixed(8),
+                nextBuyPrice: parseFloat(refPrices.nextBuyPrice),
+                nextSellPrice: parseFloat(refPrices.nextSellPrice),
+                profitLossPercentage: parseFloat(profitLossPercentage),
+                lastTransactionPrice: parseFloat(refPrices.lastTransactionPrice)
+              };
+            })
+            .catch(err => {
+              console.error(`Error fetching price for ${symbol}:`, err);
+              results[symbol] = { error: err.message };
+            });
+        });
+        
+        await Promise.all(pricePromises);
         
         // Add USDT balance to the results
         results.USDT = {

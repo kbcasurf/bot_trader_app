@@ -41,7 +41,7 @@ services:
       - ./.env:/app/.env:ro
     environment:
       # Add connection configuration
-      - DB_CONNECTION_LIMIT=10
+      - DB_CONNECTION_LIMIT=20
       - DB_CONNECT_TIMEOUT=20000
       - API_TIMEOUT_MS=10000
       # WebSocket configuration
@@ -67,7 +67,7 @@ services:
     # Tuned MariaDB configuration for better performance and stability
     command: >
       --innodb-buffer-pool-size=128M
-      --max-connections=100
+      --max-connections=150
       --connect-timeout=20
       --wait-timeout=600
       --max-allowed-packet=16M
